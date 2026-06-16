@@ -1,0 +1,350 @@
+2026-06-12 20:21:18,643 [INFO] ############################################################
+2026-06-12 20:21:18,644 [INFO] CARGA DIARIA 2026-06-12T20:21:18 | períodos: ['2026-06']
+2026-06-12 20:21:18,644 [INFO] ============================================================
+2026-06-12 20:21:18,644 [INFO] Carga API Obuma · Gran Natural · 2026-06 
+2026-06-12 20:21:18,644 [INFO] ============================================================
+2026-06-12 20:21:18,962 [INFO] Conexión Supabase OK
+2026-06-12 20:21:20,202 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id%2C%20nombre_canonico "HTTP/2 200 OK"
+2026-06-12 20:21:20,294 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id&nombre_canonico=eq.Sin%20asignar "HTTP/2 200 OK"
+2026-06-12 20:21:20,295 [INFO] Vendedores en dim_vendedor: 22 | fallback 'Sin asignar' id=26
+2026-06-12 20:21:20,295 [INFO]   [API] Gran Natural 2026-06 (2026-06-01 → 2026-06-30)
+2026-06-12 20:21:20,296 [INFO]   [API] Descargando líneas de venta…
+2026-06-12 20:21:24,721 [INFO]     ventas.listItems pág 1 (+1000 filas; acum 1000/1584)
+2026-06-12 20:21:26,455 [INFO]     ventas.listItems pág 2 (+584 filas; acum 1584/1584)
+2026-06-12 20:21:26,456 [INFO]   [API] Descargando cabeceras…
+2026-06-12 20:21:28,473 [INFO]     ventas.list pág 1 (+538 filas; acum 538/538)
+2026-06-12 20:21:28,474 [INFO]   [API] Descargando dimensiones (clientes, productos, empleados)…
+2026-06-12 20:21:30,375 [INFO]     clientes.list pág 1 (+1000 filas; acum 1000/4268)
+2026-06-12 20:21:32,266 [INFO]     clientes.list pág 2 (+1000 filas; acum 2000/4268)
+2026-06-12 20:21:34,209 [INFO]     clientes.list pág 3 (+1000 filas; acum 3000/4268)
+2026-06-12 20:21:36,234 [INFO]     clientes.list pág 4 (+1000 filas; acum 4000/4268)
+2026-06-12 20:21:37,780 [INFO]     clientes.list pág 5 (+268 filas; acum 4268/4268)
+2026-06-12 20:21:39,450 [INFO]     productos.list pág 1 (+321 filas; acum 321/321)
+2026-06-12 20:21:40,742 [INFO]     empleados.list pág 1 (+44 filas; acum 44/44)
+2026-06-12 20:21:41,598 [INFO]     productosCategorias.list pág 1 (+8 filas; acum 8/8)
+2026-06-12 20:21:41,759 [INFO]   [API] dim_cliente=218 | dim_producto=35 | fact_ventas=806 | neto=21973877
+2026-06-12 20:21:41,798 [INFO]   Máquinas Obuma: 16 líneas FL → 16 movimientos únicos (descartadas 0 sin rut/doc) | nuevas=0 cambios=6 retiros=10
+2026-06-12 20:21:41,951 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_despachos?select=documento%2Cestado&sociedad_id=eq.2&fecha_ruta=gte.2026-06-01&fecha_ruta=lte.2026-06-30&offset=0&limit=1000 "HTTP/2 200 OK"
+2026-06-12 20:21:41,963 [INFO]   Estado máquinas tras cruce con despachos: entregadas=0 | rechazadas=0 | gestionadas=16
+2026-06-12 20:21:42,049 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/maquina_vendedor_override?select=sociedad_id%2Cdocumento%2Cvendedor_id&offset=0&limit=10000 "HTTP/2 200 OK"
+2026-06-12 20:21:42,050 [INFO] 
+-- Upserts a Supabase --
+2026-06-12 20:21:42,201 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_cliente?on_conflict=rut&columns=%22rut%22%2C%22region%22%2C%22sociedad_id%22%2C%22es_maquina%22%2C%22razon_social%22 "HTTP/2 200 OK"
+2026-06-12 20:21:42,205 [INFO]   [dim_cliente] lote 1/1 → 218 filas OK (total acum. 218)
+2026-06-12 20:21:42,298 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_producto?on_conflict=codigo&columns=%22nombre%22%2C%22categoria%22%2C%22subcategoria%22%2C%22fabricante%22%2C%22unidad_medida%22%2C%22codigo%22 "HTTP/2 200 OK"
+2026-06-12 20:21:42,299 [INFO]   [dim_producto] lote 1/1 → 35 filas OK (total acum. 35)
+2026-06-12 20:21:42,534 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_ventas?on_conflict=sociedad_id%2Ctipo_dcto%2Cn_dcto%2Cproducto_codigo%2Clinea&columns=%22cantidad%22%2C%22neto%22%2C%22costo%22%2C%22sociedad_id%22%2C%22margen%22%2C%22producto_codigo%22%2C%22tipo_dcto%22%2C%22total%22%2C%22vendedor_id%22%2C%22linea%22%2C%22n_dcto%22%2C%22sucursal%22%2C%22fecha%22%2C%22cliente_rut%22 "HTTP/2 200 OK"
+2026-06-12 20:21:42,542 [INFO]   [fact_ventas] lote 1/2 → 500 filas OK (total acum. 500)
+2026-06-12 20:21:42,695 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_ventas?on_conflict=sociedad_id%2Ctipo_dcto%2Cn_dcto%2Cproducto_codigo%2Clinea&columns=%22cantidad%22%2C%22neto%22%2C%22costo%22%2C%22sociedad_id%22%2C%22margen%22%2C%22producto_codigo%22%2C%22tipo_dcto%22%2C%22total%22%2C%22vendedor_id%22%2C%22linea%22%2C%22n_dcto%22%2C%22sucursal%22%2C%22fecha%22%2C%22cliente_rut%22 "HTTP/2 200 OK"
+2026-06-12 20:21:42,698 [INFO]   [fact_ventas] lote 2/2 → 306 filas OK (total acum. 806)
+2026-06-12 20:21:42,803 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_maquinas?on_conflict=sociedad_id%2Cdocumento%2Ccliente_rut%2Ctipo_mov&columns=%22sociedad_id%22%2C%22estado%22%2C%22vendedor_id%22%2C%22documento%22%2C%22tipo_mov%22%2C%22fecha%22%2C%22cliente_rut%22 "HTTP/2 200 OK"
+2026-06-12 20:21:42,806 [INFO]   [fact_maquinas] lote 1/1 → 16 filas OK (total acum. 16)
+2026-06-12 20:21:42,806 [INFO] 
+============================================================
+2026-06-12 20:21:42,807 [INFO] Carga API completada en 24.2 s | stats: {'obuma_api_filas': 806, 'obuma_api_facturas': 724, 'obuma_api_notas_credito': 82, 'obuma_api_rut_invalidos': 0, 'obuma_api_lineas_descartadas_no_dte': 778, 'obuma_api_neto_total': 21973877.0}
+2026-06-12 20:21:42,808 [INFO] ============================================================
+2026-06-12 20:21:42,809 [INFO] ============================================================
+2026-06-12 20:21:42,809 [INFO] Carga API Autoventa · Pedidos GN · 2026-06 
+2026-06-12 20:21:42,810 [INFO] ============================================================
+2026-06-12 20:21:43,267 [INFO] Conexión Supabase OK
+2026-06-12 20:21:43,811 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id%2C%20nombre_canonico "HTTP/2 200 OK"
+2026-06-12 20:21:43,903 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id&nombre_canonico=eq.Sin%20asignar "HTTP/2 200 OK"
+2026-06-12 20:21:43,904 [INFO] Vendedores en dim_vendedor: 22 | fallback 'Sin asignar' id=26
+2026-06-12 20:21:43,904 [INFO]   [AV-API] Pedidos Gran Natural 2026-06
+2026-06-12 20:21:46,951 [INFO]   [AV-API] mapa clientes=992
+2026-06-12 20:22:29,507 [INFO]   [AV-API] facturas/NC del mes: 251
+2026-06-12 20:22:29,556 [INFO]   [AV-API] fact_pedidos=759 | pedidos=251 | sin_dte=35 | neto=34824084 | nc=0
+2026-06-12 20:22:29,561 [INFO] 
+-- Upserts a Supabase --
+2026-06-12 20:22:30,041 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_cliente?on_conflict=rut&columns=%22rut%22%2C%22sociedad_id%22%2C%22es_maquina%22%2C%22tipo%22%2C%22razon_social%22 "HTTP/2 200 OK"
+2026-06-12 20:22:30,045 [INFO]   [dim_cliente] lote 1/1 → 205 filas OK (total acum. 205)
+2026-06-12 20:22:30,293 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_pedidos?on_conflict=sociedad_id%2Cn_pedido%2Cproducto_codigo%2Clinea&columns=%22neto%22%2C%22sociedad_id%22%2C%22num_documento%22%2C%22producto_codigo%22%2C%22vendedor_id%22%2C%22n_pedido%22%2C%22linea%22%2C%22doc_venta%22%2C%22fecha%22%2C%22cliente_rut%22%2C%22neto_nc%22 "HTTP/2 200 OK"
+2026-06-12 20:22:30,303 [INFO]   [fact_pedidos] lote 1/2 → 500 filas OK (total acum. 500)
+2026-06-12 20:22:30,421 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_pedidos?on_conflict=sociedad_id%2Cn_pedido%2Cproducto_codigo%2Clinea&columns=%22neto%22%2C%22sociedad_id%22%2C%22num_documento%22%2C%22producto_codigo%22%2C%22vendedor_id%22%2C%22n_pedido%22%2C%22linea%22%2C%22doc_venta%22%2C%22fecha%22%2C%22cliente_rut%22%2C%22neto_nc%22 "HTTP/2 200 OK"
+2026-06-12 20:22:30,425 [INFO]   [fact_pedidos] lote 2/2 → 259 filas OK (total acum. 759)
+2026-06-12 20:22:30,426 [INFO] 
+============================================================
+2026-06-12 20:22:30,427 [INFO] Carga API Autoventa completada en 47.6 s | stats: {'av_api_filas': 759, 'av_api_pedidos': 251, 'av_api_facturadas': 724, 'av_api_sin_dte': 35, 'av_api_neto': 34824084.0082, 'av_api_neto_nc': 0.0}
+2026-06-12 20:22:30,427 [INFO] ============================================================
+2026-06-12 20:22:30,427 [INFO] CARGA DIARIA terminada | errores: 0
+2026-06-12 20:22:30,428 [INFO] ############################################################
+2026-06-12 20:24:05,868 [INFO] ############################################################
+2026-06-12 20:24:05,871 [INFO] CARGA DIARIA 2026-06-12T20:24:05 | períodos: ['2026-06']
+2026-06-12 20:24:05,873 [INFO] ============================================================
+2026-06-12 20:24:05,874 [INFO] Carga API Obuma · Gran Natural · 2026-06 
+2026-06-12 20:24:05,874 [INFO] ============================================================
+2026-06-12 20:24:06,448 [INFO] Conexión Supabase OK
+2026-06-12 20:24:07,587 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id%2C%20nombre_canonico "HTTP/2 200 OK"
+2026-06-12 20:24:07,677 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id&nombre_canonico=eq.Sin%20asignar "HTTP/2 200 OK"
+2026-06-12 20:24:07,678 [INFO] Vendedores en dim_vendedor: 22 | fallback 'Sin asignar' id=26
+2026-06-12 20:24:07,678 [INFO]   [API] Gran Natural 2026-06 (2026-06-01 → 2026-06-30)
+2026-06-12 20:24:07,678 [INFO]   [API] Descargando líneas de venta…
+2026-06-12 20:24:09,452 [INFO]     ventas.listItems pág 1 (+1000 filas; acum 1000/1584)
+2026-06-12 20:24:11,181 [INFO]     ventas.listItems pág 2 (+584 filas; acum 1584/1584)
+2026-06-12 20:24:11,181 [INFO]   [API] Descargando cabeceras…
+2026-06-12 20:24:13,156 [INFO]     ventas.list pág 1 (+538 filas; acum 538/538)
+2026-06-12 20:24:13,156 [INFO]   [API] Descargando dimensiones (clientes, productos, empleados)…
+2026-06-12 20:24:15,047 [INFO]     clientes.list pág 1 (+1000 filas; acum 1000/4268)
+2026-06-12 20:24:16,930 [INFO]     clientes.list pág 2 (+1000 filas; acum 2000/4268)
+2026-06-12 20:24:18,839 [INFO]     clientes.list pág 3 (+1000 filas; acum 3000/4268)
+2026-06-12 20:24:20,861 [INFO]     clientes.list pág 4 (+1000 filas; acum 4000/4268)
+2026-06-12 20:24:22,391 [INFO]     clientes.list pág 5 (+268 filas; acum 4268/4268)
+2026-06-12 20:24:24,087 [INFO]     productos.list pág 1 (+321 filas; acum 321/321)
+2026-06-12 20:24:25,395 [INFO]     empleados.list pág 1 (+44 filas; acum 44/44)
+2026-06-12 20:24:26,245 [INFO]     productosCategorias.list pág 1 (+8 filas; acum 8/8)
+2026-06-12 20:24:26,586 [INFO]   [API] dim_cliente=218 | dim_producto=35 | fact_ventas=806 | neto=21973877
+2026-06-12 20:24:26,641 [INFO]   Máquinas Obuma: 16 líneas FL → 16 movimientos únicos (descartadas 0 sin rut/doc) | nuevas=0 cambios=6 retiros=10
+2026-06-12 20:24:26,802 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_despachos?select=documento%2Cestado&sociedad_id=eq.2&fecha_ruta=gte.2026-06-01&fecha_ruta=lte.2026-06-30&offset=0&limit=1000 "HTTP/2 200 OK"
+2026-06-12 20:24:26,829 [INFO]   Estado máquinas tras cruce con despachos: entregadas=0 | rechazadas=0 | gestionadas=16
+2026-06-12 20:24:26,926 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/maquina_vendedor_override?select=sociedad_id%2Cdocumento%2Cvendedor_id&offset=0&limit=10000 "HTTP/2 200 OK"
+2026-06-12 20:24:26,928 [INFO] 
+-- Upserts a Supabase --
+2026-06-12 20:24:27,082 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_cliente?on_conflict=rut&columns=%22es_maquina%22%2C%22razon_social%22%2C%22sociedad_id%22%2C%22rut%22%2C%22region%22 "HTTP/2 200 OK"
+2026-06-12 20:24:27,089 [INFO]   [dim_cliente] lote 1/1 → 218 filas OK (total acum. 218)
+2026-06-12 20:24:27,203 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_producto?on_conflict=codigo&columns=%22categoria%22%2C%22codigo%22%2C%22fabricante%22%2C%22unidad_medida%22%2C%22subcategoria%22%2C%22nombre%22 "HTTP/2 200 OK"
+2026-06-12 20:24:27,207 [INFO]   [dim_producto] lote 1/1 → 35 filas OK (total acum. 35)
+2026-06-12 20:24:27,510 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_ventas?on_conflict=sociedad_id%2Ctipo_dcto%2Cn_dcto%2Cproducto_codigo%2Clinea&columns=%22cliente_rut%22%2C%22vendedor_id%22%2C%22fecha%22%2C%22sucursal%22%2C%22n_dcto%22%2C%22linea%22%2C%22total%22%2C%22margen%22%2C%22cantidad%22%2C%22tipo_dcto%22%2C%22sociedad_id%22%2C%22costo%22%2C%22producto_codigo%22%2C%22neto%22 "HTTP/2 200 OK"
+2026-06-12 20:24:27,517 [INFO]   [fact_ventas] lote 1/2 → 500 filas OK (total acum. 500)
+2026-06-12 20:24:27,677 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_ventas?on_conflict=sociedad_id%2Ctipo_dcto%2Cn_dcto%2Cproducto_codigo%2Clinea&columns=%22cliente_rut%22%2C%22vendedor_id%22%2C%22fecha%22%2C%22sucursal%22%2C%22n_dcto%22%2C%22linea%22%2C%22total%22%2C%22margen%22%2C%22cantidad%22%2C%22tipo_dcto%22%2C%22sociedad_id%22%2C%22costo%22%2C%22producto_codigo%22%2C%22neto%22 "HTTP/2 200 OK"
+2026-06-12 20:24:27,683 [INFO]   [fact_ventas] lote 2/2 → 306 filas OK (total acum. 806)
+2026-06-12 20:24:27,796 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_maquinas?on_conflict=sociedad_id%2Cdocumento%2Ccliente_rut%2Ctipo_mov&columns=%22cliente_rut%22%2C%22vendedor_id%22%2C%22fecha%22%2C%22tipo_mov%22%2C%22documento%22%2C%22estado%22%2C%22sociedad_id%22 "HTTP/2 200 OK"
+2026-06-12 20:24:27,798 [INFO]   [fact_maquinas] lote 1/1 → 16 filas OK (total acum. 16)
+2026-06-12 20:24:27,798 [INFO] 
+============================================================
+2026-06-12 20:24:27,811 [INFO] Carga API completada en 21.9 s | stats: {'obuma_api_filas': 806, 'obuma_api_facturas': 724, 'obuma_api_notas_credito': 82, 'obuma_api_rut_invalidos': 0, 'obuma_api_lineas_descartadas_no_dte': 778, 'obuma_api_neto_total': 21973877.0}
+2026-06-12 20:24:27,811 [INFO] ============================================================
+2026-06-12 20:24:27,811 [INFO] ============================================================
+2026-06-12 20:24:27,811 [INFO] Carga API Autoventa · Pedidos GN · 2026-06 
+2026-06-12 20:24:27,812 [INFO] ============================================================
+2026-06-12 20:24:28,531 [INFO] Conexión Supabase OK
+2026-06-12 20:24:29,280 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id%2C%20nombre_canonico "HTTP/2 200 OK"
+2026-06-12 20:24:29,362 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id&nombre_canonico=eq.Sin%20asignar "HTTP/2 200 OK"
+2026-06-12 20:24:29,364 [INFO] Vendedores en dim_vendedor: 22 | fallback 'Sin asignar' id=26
+2026-06-12 20:24:29,364 [INFO]   [AV-API] Pedidos Gran Natural 2026-06
+2026-06-12 20:24:32,319 [INFO]   [AV-API] mapa clientes=992
+2026-06-12 20:25:14,943 [INFO]   [AV-API] facturas/NC del mes: 251
+2026-06-12 20:25:15,008 [INFO]   [AV-API] fact_pedidos=759 | pedidos=251 | sin_dte=35 | neto=34824084 | nc=0
+2026-06-12 20:25:15,011 [INFO] 
+-- Upserts a Supabase --
+2026-06-12 20:25:15,236 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_cliente?on_conflict=rut&columns=%22es_maquina%22%2C%22tipo%22%2C%22razon_social%22%2C%22sociedad_id%22%2C%22rut%22 "HTTP/2 200 OK"
+2026-06-12 20:25:15,240 [INFO]   [dim_cliente] lote 1/1 → 205 filas OK (total acum. 205)
+2026-06-12 20:25:15,442 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_pedidos?on_conflict=sociedad_id%2Cn_pedido%2Cproducto_codigo%2Clinea&columns=%22cliente_rut%22%2C%22vendedor_id%22%2C%22fecha%22%2C%22doc_venta%22%2C%22n_pedido%22%2C%22neto_nc%22%2C%22linea%22%2C%22sociedad_id%22%2C%22num_documento%22%2C%22producto_codigo%22%2C%22neto%22 "HTTP/2 200 OK"
+2026-06-12 20:25:15,451 [INFO]   [fact_pedidos] lote 1/2 → 500 filas OK (total acum. 500)
+2026-06-12 20:25:15,570 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_pedidos?on_conflict=sociedad_id%2Cn_pedido%2Cproducto_codigo%2Clinea&columns=%22cliente_rut%22%2C%22vendedor_id%22%2C%22fecha%22%2C%22doc_venta%22%2C%22n_pedido%22%2C%22neto_nc%22%2C%22linea%22%2C%22sociedad_id%22%2C%22num_documento%22%2C%22producto_codigo%22%2C%22neto%22 "HTTP/2 200 OK"
+2026-06-12 20:25:15,573 [INFO]   [fact_pedidos] lote 2/2 → 259 filas OK (total acum. 759)
+2026-06-12 20:25:15,574 [INFO] 
+============================================================
+2026-06-12 20:25:15,574 [INFO] Carga API Autoventa completada en 47.8 s | stats: {'av_api_filas': 759, 'av_api_pedidos': 251, 'av_api_facturadas': 724, 'av_api_sin_dte': 35, 'av_api_neto': 34824084.0082, 'av_api_neto_nc': 0.0}
+2026-06-12 20:25:15,575 [INFO] ============================================================
+2026-06-12 20:25:15,576 [INFO] CARGA DIARIA terminada | errores: 0
+2026-06-12 20:25:15,577 [INFO] ############################################################
+2026-06-13 11:25:48,722 [INFO] ############################################################
+2026-06-13 11:25:48,723 [INFO] CARGA DIARIA 2026-06-13T11:25:48 | períodos: ['2026-06']
+2026-06-13 11:25:48,724 [INFO] ============================================================
+2026-06-13 11:25:48,725 [INFO] Carga API Obuma · Gran Natural · 2026-06 
+2026-06-13 11:25:48,725 [INFO] ============================================================
+2026-06-13 11:25:49,086 [INFO] Conexión Supabase OK
+2026-06-13 11:25:50,608 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id%2C%20nombre_canonico "HTTP/2 200 OK"
+2026-06-13 11:25:50,730 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id&nombre_canonico=eq.Sin%20asignar "HTTP/2 200 OK"
+2026-06-13 11:25:50,731 [INFO] Vendedores en dim_vendedor: 22 | fallback 'Sin asignar' id=26
+2026-06-13 11:25:50,732 [INFO]   [API] Gran Natural 2026-06 (2026-06-01 → 2026-06-30)
+2026-06-13 11:25:50,733 [INFO]   [API] Descargando líneas de venta…
+2026-06-13 11:25:52,703 [INFO]     ventas.listItems pág 1 (+1000 filas; acum 1000/1584)
+2026-06-13 11:25:54,413 [INFO]     ventas.listItems pág 2 (+584 filas; acum 1584/1584)
+2026-06-13 11:25:54,414 [INFO]   [API] Descargando cabeceras…
+2026-06-13 11:25:56,341 [INFO]     ventas.list pág 1 (+538 filas; acum 538/538)
+2026-06-13 11:25:56,341 [INFO]   [API] Descargando dimensiones (clientes, productos, empleados)…
+2026-06-13 11:25:58,229 [INFO]     clientes.list pág 1 (+1000 filas; acum 1000/4268)
+2026-06-13 11:26:00,124 [INFO]     clientes.list pág 2 (+1000 filas; acum 2000/4268)
+2026-06-13 11:26:02,035 [INFO]     clientes.list pág 3 (+1000 filas; acum 3000/4268)
+2026-06-13 11:26:04,092 [INFO]     clientes.list pág 4 (+1000 filas; acum 4000/4268)
+2026-06-13 11:26:05,664 [INFO]     clientes.list pág 5 (+268 filas; acum 4268/4268)
+2026-06-13 11:26:07,312 [INFO]     productos.list pág 1 (+321 filas; acum 321/321)
+2026-06-13 11:26:08,591 [INFO]     empleados.list pág 1 (+44 filas; acum 44/44)
+2026-06-13 11:26:09,473 [INFO]     productosCategorias.list pág 1 (+8 filas; acum 8/8)
+2026-06-13 11:26:09,663 [INFO]   [API] dim_cliente=218 | dim_producto=35 | fact_ventas=806 | neto=21973877
+2026-06-13 11:26:09,686 [INFO]   Máquinas Obuma: 16 líneas FL → 16 movimientos únicos (descartadas 0 sin rut/doc) | nuevas=0 cambios=6 retiros=10
+2026-06-13 11:26:09,983 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_despachos?select=documento%2Cestado&sociedad_id=eq.2&fecha_ruta=gte.2026-06-01&fecha_ruta=lte.2026-06-30&offset=0&limit=1000 "HTTP/2 200 OK"
+2026-06-13 11:26:09,998 [INFO]   Estado máquinas tras cruce con despachos: entregadas=0 | rechazadas=0 | gestionadas=16
+2026-06-13 11:26:10,095 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/maquina_vendedor_override?select=sociedad_id%2Cdocumento%2Cvendedor_id&offset=0&limit=10000 "HTTP/2 200 OK"
+2026-06-13 11:26:10,097 [INFO] 
+-- Upserts a Supabase --
+2026-06-13 11:26:10,320 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_cliente?on_conflict=rut&columns=%22sociedad_id%22%2C%22es_maquina%22%2C%22region%22%2C%22razon_social%22%2C%22rut%22 "HTTP/2 200 OK"
+2026-06-13 11:26:10,324 [INFO]   [dim_cliente] lote 1/1 → 218 filas OK (total acum. 218)
+2026-06-13 11:26:10,437 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_producto?on_conflict=codigo&columns=%22categoria%22%2C%22fabricante%22%2C%22codigo%22%2C%22nombre%22%2C%22subcategoria%22%2C%22unidad_medida%22 "HTTP/2 200 OK"
+2026-06-13 11:26:10,438 [INFO]   [dim_producto] lote 1/1 → 35 filas OK (total acum. 35)
+2026-06-13 11:26:10,802 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_ventas?on_conflict=sociedad_id%2Ctipo_dcto%2Cn_dcto%2Cproducto_codigo%2Clinea&columns=%22costo%22%2C%22sociedad_id%22%2C%22sucursal%22%2C%22vendedor_id%22%2C%22cliente_rut%22%2C%22neto%22%2C%22fecha%22%2C%22n_dcto%22%2C%22linea%22%2C%22tipo_dcto%22%2C%22producto_codigo%22%2C%22total%22%2C%22cantidad%22%2C%22margen%22 "HTTP/2 200 OK"
+2026-06-13 11:26:10,809 [INFO]   [fact_ventas] lote 1/2 → 500 filas OK (total acum. 500)
+2026-06-13 11:26:10,981 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_ventas?on_conflict=sociedad_id%2Ctipo_dcto%2Cn_dcto%2Cproducto_codigo%2Clinea&columns=%22costo%22%2C%22sociedad_id%22%2C%22sucursal%22%2C%22vendedor_id%22%2C%22cliente_rut%22%2C%22neto%22%2C%22fecha%22%2C%22n_dcto%22%2C%22linea%22%2C%22tipo_dcto%22%2C%22producto_codigo%22%2C%22total%22%2C%22cantidad%22%2C%22margen%22 "HTTP/2 200 OK"
+2026-06-13 11:26:10,986 [INFO]   [fact_ventas] lote 2/2 → 306 filas OK (total acum. 806)
+2026-06-13 11:26:11,089 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_maquinas?on_conflict=sociedad_id%2Cdocumento%2Ccliente_rut%2Ctipo_mov&columns=%22sociedad_id%22%2C%22estado%22%2C%22vendedor_id%22%2C%22documento%22%2C%22cliente_rut%22%2C%22fecha%22%2C%22tipo_mov%22 "HTTP/2 200 OK"
+2026-06-13 11:26:11,091 [INFO]   [fact_maquinas] lote 1/1 → 16 filas OK (total acum. 16)
+2026-06-13 11:26:11,092 [INFO] 
+============================================================
+2026-06-13 11:26:11,093 [INFO] Carga API completada en 22.4 s | stats: {'obuma_api_filas': 806, 'obuma_api_facturas': 724, 'obuma_api_notas_credito': 82, 'obuma_api_rut_invalidos': 0, 'obuma_api_lineas_descartadas_no_dte': 778, 'obuma_api_neto_total': 21973877.0}
+2026-06-13 11:26:11,093 [INFO] ============================================================
+2026-06-13 11:26:11,094 [INFO] ============================================================
+2026-06-13 11:26:11,094 [INFO] Carga API Autoventa · Pedidos GN · 2026-06 
+2026-06-13 11:26:11,095 [INFO] ============================================================
+2026-06-13 11:26:11,375 [INFO] Conexión Supabase OK
+2026-06-13 11:26:11,801 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id%2C%20nombre_canonico "HTTP/2 200 OK"
+2026-06-13 11:26:11,891 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id&nombre_canonico=eq.Sin%20asignar "HTTP/2 200 OK"
+2026-06-13 11:26:11,892 [INFO] Vendedores en dim_vendedor: 22 | fallback 'Sin asignar' id=26
+2026-06-13 11:26:11,893 [INFO]   [AV-API] Pedidos Gran Natural 2026-06
+2026-06-13 11:26:14,870 [INFO]   [AV-API] mapa clientes=992
+2026-06-13 11:26:59,299 [INFO]   [AV-API] facturas/NC del mes: 251
+2026-06-13 11:26:59,322 [INFO]   [AV-API] fact_pedidos=759 | pedidos=251 | sin_dte=35 | neto=34824084 | nc=0
+2026-06-13 11:26:59,325 [INFO] 
+-- Upserts a Supabase --
+2026-06-13 11:26:59,539 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_cliente?on_conflict=rut&columns=%22sociedad_id%22%2C%22es_maquina%22%2C%22tipo%22%2C%22razon_social%22%2C%22rut%22 "HTTP/2 200 OK"
+2026-06-13 11:26:59,542 [INFO]   [dim_cliente] lote 1/1 → 205 filas OK (total acum. 205)
+2026-06-13 11:26:59,806 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_pedidos?on_conflict=sociedad_id%2Cn_pedido%2Cproducto_codigo%2Clinea&columns=%22doc_venta%22%2C%22sociedad_id%22%2C%22vendedor_id%22%2C%22cliente_rut%22%2C%22neto_nc%22%2C%22num_documento%22%2C%22fecha%22%2C%22producto_codigo%22%2C%22linea%22%2C%22n_pedido%22%2C%22neto%22 "HTTP/2 200 OK"
+2026-06-13 11:26:59,812 [INFO]   [fact_pedidos] lote 1/2 → 500 filas OK (total acum. 500)
+2026-06-13 11:26:59,942 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_pedidos?on_conflict=sociedad_id%2Cn_pedido%2Cproducto_codigo%2Clinea&columns=%22doc_venta%22%2C%22sociedad_id%22%2C%22vendedor_id%22%2C%22cliente_rut%22%2C%22neto_nc%22%2C%22num_documento%22%2C%22fecha%22%2C%22producto_codigo%22%2C%22linea%22%2C%22n_pedido%22%2C%22neto%22 "HTTP/2 200 OK"
+2026-06-13 11:26:59,946 [INFO]   [fact_pedidos] lote 2/2 → 259 filas OK (total acum. 759)
+2026-06-13 11:26:59,947 [INFO] 
+============================================================
+2026-06-13 11:26:59,948 [INFO] Carga API Autoventa completada en 48.9 s | stats: {'av_api_filas': 759, 'av_api_pedidos': 251, 'av_api_facturadas': 724, 'av_api_sin_dte': 35, 'av_api_neto': 34824084.0082, 'av_api_neto_nc': 0.0}
+2026-06-13 11:26:59,948 [INFO] ============================================================
+2026-06-13 11:26:59,949 [INFO] CARGA DIARIA terminada | errores: 0
+2026-06-13 11:26:59,949 [INFO] ############################################################
+2026-06-14 13:38:31,848 [INFO] ############################################################
+2026-06-14 13:38:31,866 [INFO] CARGA DIARIA 2026-06-14T13:38:31 | períodos: ['2026-06']
+2026-06-14 13:38:31,869 [INFO] ============================================================
+2026-06-14 13:38:31,870 [INFO] Carga API Obuma · Gran Natural · 2026-06 
+2026-06-14 13:38:31,871 [INFO] ============================================================
+2026-06-14 13:38:33,670 [INFO] Conexión Supabase OK
+2026-06-14 13:38:36,817 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id%2C%20nombre_canonico "HTTP/2 200 OK"
+2026-06-14 13:38:36,983 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id&nombre_canonico=eq.Sin%20asignar "HTTP/2 200 OK"
+2026-06-14 13:38:36,988 [INFO] Vendedores en dim_vendedor: 22 | fallback 'Sin asignar' id=26
+2026-06-14 13:38:36,990 [INFO]   [API] Gran Natural 2026-06 (2026-06-01 → 2026-06-30)
+2026-06-14 13:38:36,991 [INFO]   [API] Descargando líneas de venta…
+2026-06-14 13:38:38,968 [INFO]     ventas.listItems pág 1 (+1000 filas; acum 1000/1584)
+2026-06-14 13:38:40,699 [INFO]     ventas.listItems pág 2 (+584 filas; acum 1584/1584)
+2026-06-14 13:38:40,700 [INFO]   [API] Descargando cabeceras…
+2026-06-14 13:38:42,725 [INFO]     ventas.list pág 1 (+538 filas; acum 538/538)
+2026-06-14 13:38:42,726 [INFO]   [API] Descargando dimensiones (clientes, productos, empleados)…
+2026-06-14 13:38:44,666 [INFO]     clientes.list pág 1 (+1000 filas; acum 1000/4268)
+2026-06-14 13:38:46,733 [INFO]     clientes.list pág 2 (+1000 filas; acum 2000/4268)
+2026-06-14 13:38:48,826 [INFO]     clientes.list pág 3 (+1000 filas; acum 3000/4268)
+2026-06-14 13:38:50,923 [INFO]     clientes.list pág 4 (+1000 filas; acum 4000/4268)
+2026-06-14 13:38:52,633 [INFO]     clientes.list pág 5 (+268 filas; acum 4268/4268)
+2026-06-14 13:38:54,302 [INFO]     productos.list pág 1 (+321 filas; acum 321/321)
+2026-06-14 13:38:55,589 [INFO]     empleados.list pág 1 (+44 filas; acum 44/44)
+2026-06-14 13:38:56,443 [INFO]     productosCategorias.list pág 1 (+8 filas; acum 8/8)
+2026-06-14 13:38:56,974 [INFO]   [API] dim_cliente=218 | dim_producto=35 | fact_ventas=806 | neto=21973877
+2026-06-14 13:38:57,062 [INFO]   Máquinas Obuma: 16 líneas FL → 16 movimientos únicos (descartadas 0 sin rut/doc) | nuevas=0 cambios=6 retiros=10
+2026-06-14 13:38:57,267 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_despachos?select=documento%2Cestado&sociedad_id=eq.2&fecha_ruta=gte.2026-06-01&fecha_ruta=lte.2026-06-30&offset=0&limit=1000 "HTTP/2 200 OK"
+2026-06-14 13:38:57,318 [INFO]   Estado máquinas tras cruce con despachos: entregadas=0 | rechazadas=0 | gestionadas=16
+2026-06-14 13:38:57,417 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/maquina_vendedor_override?select=sociedad_id%2Cdocumento%2Cvendedor_id&offset=0&limit=10000 "HTTP/2 200 OK"
+2026-06-14 13:38:57,422 [INFO] 
+-- Upserts a Supabase --
+2026-06-14 13:38:57,804 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_cliente?on_conflict=rut&columns=%22sociedad_id%22%2C%22rut%22%2C%22es_maquina%22%2C%22region%22%2C%22razon_social%22 "HTTP/2 200 OK"
+2026-06-14 13:38:57,808 [INFO]   [dim_cliente] lote 1/1 → 218 filas OK (total acum. 218)
+2026-06-14 13:38:57,926 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_producto?on_conflict=codigo&columns=%22subcategoria%22%2C%22unidad_medida%22%2C%22categoria%22%2C%22fabricante%22%2C%22nombre%22%2C%22codigo%22 "HTTP/2 200 OK"
+2026-06-14 13:38:57,930 [INFO]   [dim_producto] lote 1/1 → 35 filas OK (total acum. 35)
+2026-06-14 13:38:58,363 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_ventas?on_conflict=sociedad_id%2Ctipo_dcto%2Cn_dcto%2Cproducto_codigo%2Clinea&columns=%22tipo_dcto%22%2C%22fecha%22%2C%22sociedad_id%22%2C%22costo%22%2C%22margen%22%2C%22vendedor_id%22%2C%22sucursal%22%2C%22total%22%2C%22linea%22%2C%22neto%22%2C%22cliente_rut%22%2C%22n_dcto%22%2C%22cantidad%22%2C%22producto_codigo%22 "HTTP/2 200 OK"
+2026-06-14 13:38:58,379 [INFO]   [fact_ventas] lote 1/2 → 500 filas OK (total acum. 500)
+2026-06-14 13:38:58,546 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_ventas?on_conflict=sociedad_id%2Ctipo_dcto%2Cn_dcto%2Cproducto_codigo%2Clinea&columns=%22tipo_dcto%22%2C%22fecha%22%2C%22sociedad_id%22%2C%22costo%22%2C%22margen%22%2C%22vendedor_id%22%2C%22sucursal%22%2C%22total%22%2C%22linea%22%2C%22neto%22%2C%22cliente_rut%22%2C%22n_dcto%22%2C%22cantidad%22%2C%22producto_codigo%22 "HTTP/2 200 OK"
+2026-06-14 13:38:58,557 [INFO]   [fact_ventas] lote 2/2 → 306 filas OK (total acum. 806)
+2026-06-14 13:38:58,708 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_maquinas?on_conflict=sociedad_id%2Cdocumento%2Ccliente_rut%2Ctipo_mov&columns=%22sociedad_id%22%2C%22estado%22%2C%22vendedor_id%22%2C%22documento%22%2C%22fecha%22%2C%22cliente_rut%22%2C%22tipo_mov%22 "HTTP/2 200 OK"
+2026-06-14 13:38:58,711 [INFO]   [fact_maquinas] lote 1/1 → 16 filas OK (total acum. 16)
+2026-06-14 13:38:58,712 [INFO] 
+============================================================
+2026-06-14 13:38:58,715 [INFO] Carga API completada en 26.8 s | stats: {'obuma_api_filas': 806, 'obuma_api_facturas': 724, 'obuma_api_notas_credito': 82, 'obuma_api_rut_invalidos': 0, 'obuma_api_lineas_descartadas_no_dte': 778, 'obuma_api_neto_total': 21973877.0}
+2026-06-14 13:38:58,716 [INFO] ============================================================
+2026-06-14 13:38:58,717 [INFO] ============================================================
+2026-06-14 13:38:58,718 [INFO] Carga API Autoventa · Pedidos GN · 2026-06 
+2026-06-14 13:38:58,718 [INFO] ============================================================
+2026-06-14 13:39:00,151 [INFO] Conexión Supabase OK
+2026-06-14 13:39:01,587 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id%2C%20nombre_canonico "HTTP/2 200 OK"
+2026-06-14 13:39:01,673 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id&nombre_canonico=eq.Sin%20asignar "HTTP/2 200 OK"
+2026-06-14 13:39:01,676 [INFO] Vendedores en dim_vendedor: 22 | fallback 'Sin asignar' id=26
+2026-06-14 13:39:01,677 [INFO]   [AV-API] Pedidos Gran Natural 2026-06
+2026-06-14 13:39:04,728 [INFO]   [AV-API] mapa clientes=992
+2026-06-14 13:39:47,953 [INFO]   [AV-API] facturas/NC del mes: 251
+2026-06-14 13:39:48,137 [INFO]   [AV-API] fact_pedidos=759 | pedidos=251 | sin_dte=35 | neto=34824084 | nc=0
+2026-06-14 13:39:48,143 [INFO] 
+-- Upserts a Supabase --
+2026-06-14 13:39:48,548 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_cliente?on_conflict=rut&columns=%22sociedad_id%22%2C%22rut%22%2C%22es_maquina%22%2C%22razon_social%22%2C%22tipo%22 "HTTP/2 200 OK"
+2026-06-14 13:39:48,555 [INFO]   [dim_cliente] lote 1/1 → 205 filas OK (total acum. 205)
+2026-06-14 13:39:48,900 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_pedidos?on_conflict=sociedad_id%2Cn_pedido%2Cproducto_codigo%2Clinea&columns=%22linea%22%2C%22sociedad_id%22%2C%22num_documento%22%2C%22n_pedido%22%2C%22vendedor_id%22%2C%22doc_venta%22%2C%22fecha%22%2C%22neto%22%2C%22neto_nc%22%2C%22cliente_rut%22%2C%22producto_codigo%22 "HTTP/2 200 OK"
+2026-06-14 13:39:48,926 [INFO]   [fact_pedidos] lote 1/2 → 500 filas OK (total acum. 500)
+2026-06-14 13:39:49,067 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_pedidos?on_conflict=sociedad_id%2Cn_pedido%2Cproducto_codigo%2Clinea&columns=%22linea%22%2C%22sociedad_id%22%2C%22num_documento%22%2C%22n_pedido%22%2C%22vendedor_id%22%2C%22doc_venta%22%2C%22fecha%22%2C%22neto%22%2C%22neto_nc%22%2C%22cliente_rut%22%2C%22producto_codigo%22 "HTTP/2 200 OK"
+2026-06-14 13:39:49,073 [INFO]   [fact_pedidos] lote 2/2 → 259 filas OK (total acum. 759)
+2026-06-14 13:39:49,075 [INFO] 
+============================================================
+2026-06-14 13:39:49,076 [INFO] Carga API Autoventa completada en 50.4 s | stats: {'av_api_filas': 759, 'av_api_pedidos': 251, 'av_api_facturadas': 724, 'av_api_sin_dte': 35, 'av_api_neto': 34824084.0082, 'av_api_neto_nc': 0.0}
+2026-06-14 13:39:49,076 [INFO] ============================================================
+2026-06-14 13:39:49,077 [INFO] CARGA DIARIA terminada | errores: 0
+2026-06-14 13:39:49,077 [INFO] ############################################################
+2026-06-15 09:13:23,030 [INFO] ############################################################
+2026-06-15 09:13:23,031 [INFO] CARGA DIARIA 2026-06-15T09:13:23 | períodos: ['2026-06']
+2026-06-15 09:13:23,032 [INFO] ============================================================
+2026-06-15 09:13:23,032 [INFO] Carga API Obuma · Gran Natural · 2026-06 
+2026-06-15 09:13:23,033 [INFO] ============================================================
+2026-06-15 09:13:23,380 [INFO] Conexión Supabase OK
+2026-06-15 09:13:24,945 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id%2C%20nombre_canonico "HTTP/2 200 OK"
+2026-06-15 09:13:25,048 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id&nombre_canonico=eq.Sin%20asignar "HTTP/2 200 OK"
+2026-06-15 09:13:25,049 [INFO] Vendedores en dim_vendedor: 22 | fallback 'Sin asignar' id=26
+2026-06-15 09:13:25,050 [INFO]   [API] Gran Natural 2026-06 (2026-06-01 → 2026-06-30)
+2026-06-15 09:13:25,051 [INFO]   [API] Descargando líneas de venta…
+2026-06-15 09:13:27,222 [INFO]     ventas.listItems pág 1 (+1000 filas; acum 1000/1584)
+2026-06-15 09:13:28,662 [INFO]     ventas.listItems pág 2 (+584 filas; acum 1584/1584)
+2026-06-15 09:13:28,663 [INFO]   [API] Descargando cabeceras…
+2026-06-15 09:13:30,372 [INFO]     ventas.list pág 1 (+538 filas; acum 538/538)
+2026-06-15 09:13:30,373 [INFO]   [API] Descargando dimensiones (clientes, productos, empleados)…
+2026-06-15 09:13:32,364 [INFO]     clientes.list pág 1 (+1000 filas; acum 1000/4268)
+2026-06-15 09:13:34,130 [INFO]     clientes.list pág 2 (+1000 filas; acum 2000/4268)
+2026-06-15 09:13:35,944 [INFO]     clientes.list pág 3 (+1000 filas; acum 3000/4268)
+2026-06-15 09:13:37,739 [INFO]     clientes.list pág 4 (+1000 filas; acum 4000/4268)
+2026-06-15 09:13:39,081 [INFO]     clientes.list pág 5 (+268 filas; acum 4268/4268)
+2026-06-15 09:13:40,455 [INFO]     productos.list pág 1 (+321 filas; acum 321/321)
+2026-06-15 09:13:41,486 [INFO]     empleados.list pág 1 (+44 filas; acum 44/44)
+2026-06-15 09:13:42,155 [INFO]     productosCategorias.list pág 1 (+8 filas; acum 8/8)
+2026-06-15 09:13:42,428 [INFO]   [API] dim_cliente=218 | dim_producto=35 | fact_ventas=806 | neto=21973877
+2026-06-15 09:13:42,452 [INFO]   Máquinas Obuma: 16 líneas FL → 16 movimientos únicos (descartadas 0 sin rut/doc) | nuevas=0 cambios=6 retiros=10
+2026-06-15 09:13:42,918 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_despachos?select=documento%2Cestado&sociedad_id=eq.2&fecha_ruta=gte.2026-06-01&fecha_ruta=lte.2026-06-30&offset=0&limit=1000 "HTTP/2 200 OK"
+2026-06-15 09:13:42,952 [INFO]   Estado máquinas tras cruce con despachos: entregadas=0 | rechazadas=0 | gestionadas=16
+2026-06-15 09:13:43,050 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/maquina_vendedor_override?select=sociedad_id%2Cdocumento%2Cvendedor_id&offset=0&limit=10000 "HTTP/2 200 OK"
+2026-06-15 09:13:43,052 [INFO] 
+-- Upserts a Supabase --
+2026-06-15 09:13:43,271 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_cliente?on_conflict=rut&columns=%22sociedad_id%22%2C%22rut%22%2C%22razon_social%22%2C%22region%22%2C%22es_maquina%22 "HTTP/2 200 OK"
+2026-06-15 09:13:43,274 [INFO]   [dim_cliente] lote 1/1 → 218 filas OK (total acum. 218)
+2026-06-15 09:13:43,383 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_producto?on_conflict=codigo&columns=%22subcategoria%22%2C%22codigo%22%2C%22categoria%22%2C%22nombre%22%2C%22unidad_medida%22%2C%22fabricante%22 "HTTP/2 200 OK"
+2026-06-15 09:13:43,385 [INFO]   [dim_producto] lote 1/1 → 35 filas OK (total acum. 35)
+2026-06-15 09:13:43,802 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_ventas?on_conflict=sociedad_id%2Ctipo_dcto%2Cn_dcto%2Cproducto_codigo%2Clinea&columns=%22sociedad_id%22%2C%22tipo_dcto%22%2C%22total%22%2C%22linea%22%2C%22neto%22%2C%22n_dcto%22%2C%22cliente_rut%22%2C%22cantidad%22%2C%22fecha%22%2C%22margen%22%2C%22vendedor_id%22%2C%22sucursal%22%2C%22costo%22%2C%22producto_codigo%22 "HTTP/2 200 OK"
+2026-06-15 09:13:43,815 [INFO]   [fact_ventas] lote 1/2 → 500 filas OK (total acum. 500)
+2026-06-15 09:13:44,001 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_ventas?on_conflict=sociedad_id%2Ctipo_dcto%2Cn_dcto%2Cproducto_codigo%2Clinea&columns=%22sociedad_id%22%2C%22tipo_dcto%22%2C%22total%22%2C%22linea%22%2C%22neto%22%2C%22n_dcto%22%2C%22cliente_rut%22%2C%22cantidad%22%2C%22fecha%22%2C%22margen%22%2C%22vendedor_id%22%2C%22sucursal%22%2C%22costo%22%2C%22producto_codigo%22 "HTTP/2 200 OK"
+2026-06-15 09:13:44,006 [INFO]   [fact_ventas] lote 2/2 → 306 filas OK (total acum. 806)
+2026-06-15 09:13:44,131 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_maquinas?on_conflict=sociedad_id%2Cdocumento%2Ccliente_rut%2Ctipo_mov&columns=%22sociedad_id%22%2C%22tipo_mov%22%2C%22documento%22%2C%22estado%22%2C%22cliente_rut%22%2C%22fecha%22%2C%22vendedor_id%22 "HTTP/2 200 OK"
+2026-06-15 09:13:44,133 [INFO]   [fact_maquinas] lote 1/1 → 16 filas OK (total acum. 16)
+2026-06-15 09:13:44,134 [INFO] 
+============================================================
+2026-06-15 09:13:44,135 [INFO] Carga API completada en 21.1 s | stats: {'obuma_api_filas': 806, 'obuma_api_facturas': 724, 'obuma_api_notas_credito': 82, 'obuma_api_rut_invalidos': 0, 'obuma_api_lineas_descartadas_no_dte': 778, 'obuma_api_neto_total': 21973877.0}
+2026-06-15 09:13:44,135 [INFO] ============================================================
+2026-06-15 09:13:44,136 [INFO] ============================================================
+2026-06-15 09:13:44,136 [INFO] Carga API Autoventa · Pedidos GN · 2026-06 
+2026-06-15 09:13:44,136 [INFO] ============================================================
+2026-06-15 09:13:44,641 [INFO] Conexión Supabase OK
+2026-06-15 09:13:45,302 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id%2C%20nombre_canonico "HTTP/2 200 OK"
+2026-06-15 09:13:45,389 [INFO] HTTP Request: GET https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_vendedor?select=id&nombre_canonico=eq.Sin%20asignar "HTTP/2 200 OK"
+2026-06-15 09:13:45,391 [INFO] Vendedores en dim_vendedor: 22 | fallback 'Sin asignar' id=26
+2026-06-15 09:13:45,392 [INFO]   [AV-API] Pedidos Gran Natural 2026-06
+2026-06-15 09:13:48,897 [INFO]   [AV-API] mapa clientes=992
+2026-06-15 09:14:29,650 [INFO]   [AV-API] facturas/NC del mes: 251
+2026-06-15 09:14:29,709 [INFO]   [AV-API] fact_pedidos=759 | pedidos=251 | sin_dte=35 | neto=34824084 | nc=0
+2026-06-15 09:14:29,714 [INFO] 
+-- Upserts a Supabase --
+2026-06-15 09:14:30,051 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/dim_cliente?on_conflict=rut&columns=%22sociedad_id%22%2C%22rut%22%2C%22razon_social%22%2C%22tipo%22%2C%22es_maquina%22 "HTTP/2 200 OK"
+2026-06-15 09:14:30,054 [INFO]   [dim_cliente] lote 1/1 → 205 filas OK (total acum. 205)
+2026-06-15 09:14:30,332 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_pedidos?on_conflict=sociedad_id%2Cn_pedido%2Cproducto_codigo%2Clinea&columns=%22sociedad_id%22%2C%22linea%22%2C%22n_pedido%22%2C%22neto%22%2C%22num_documento%22%2C%22doc_venta%22%2C%22cliente_rut%22%2C%22fecha%22%2C%22neto_nc%22%2C%22vendedor_id%22%2C%22producto_codigo%22 "HTTP/2 200 OK"
+2026-06-15 09:14:30,338 [INFO]   [fact_pedidos] lote 1/2 → 500 filas OK (total acum. 500)
+2026-06-15 09:14:30,474 [INFO] HTTP Request: POST https://kfxdtjkendmaguzckxqs.supabase.co/rest/v1/fact_pedidos?on_conflict=sociedad_id%2Cn_pedido%2Cproducto_codigo%2Clinea&columns=%22sociedad_id%22%2C%22linea%22%2C%22n_pedido%22%2C%22neto%22%2C%22num_documento%22%2C%22doc_venta%22%2C%22cliente_rut%22%2C%22fecha%22%2C%22neto_nc%22%2C%22vendedor_id%22%2C%22producto_codigo%22 "HTTP/2 200 OK"
+2026-06-15 09:14:30,478 [INFO]   [fact_pedidos] lote 2/2 → 259 filas OK (total acum. 759)
+2026-06-15 09:14:30,479 [INFO] 
+============================================================
+2026-06-15 09:14:30,480 [INFO] Carga API Autoventa completada en 46.3 s | stats: {'av_api_filas': 759, 'av_api_pedidos': 251, 'av_api_facturadas': 724, 'av_api_sin_dte': 35, 'av_api_neto': 34824084.0082, 'av_api_neto_nc': 0.0}
+2026-06-15 09:14:30,480 [INFO] ============================================================
+2026-06-15 09:14:30,481 [INFO] CARGA DIARIA terminada | errores: 0
+2026-06-15 09:14:30,481 [INFO] ############################################################

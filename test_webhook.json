@@ -1,0 +1,1 @@
+﻿{"evento":"documento.emitido","sociedad":"Gran Natural SPA","documento":{"tipo":"FACTURA ELECTRONICA","numero":"TEST-001","fecha":"04-06-2026","sucursal":"TEST","vendedor":"Sin asignar","cliente_rut":"12.345.678-9","cliente_razon_social":"Cliente Test","items":[{"codigo":"TEST-PROD","nombre":"Producto Test","cantidad":1,"subtotal_neto":1000,"total":1190}]}}

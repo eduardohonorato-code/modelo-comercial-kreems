@@ -1,0 +1,14 @@
+# ETL
+pandas>=2.2
+openpyxl>=3.1          # leer .xlsx
+lxml>=5.0              # leer .xls HTML (exportaciones Obuma)
+python-dotenv>=1.0
+supabase==2.7.4        # versión probada con Python 3.14; >=2.30 requiere C++ Build Tools
+
+# App
+streamlit>=1.35
+plotly>=5.22
+reportlab>=4.0         # export PDF de comisiones (Anexo Cierre de Ventas)
+
+# Utilidades
+python-dateutil>=2.9

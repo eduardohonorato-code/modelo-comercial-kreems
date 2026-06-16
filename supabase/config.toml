@@ -1,0 +1,15 @@
+# Supabase CLI config — proyecto Kreems.
+# Reemplaza <project-ref> con el ID real (lo ves en Settings → General en supabase.com).
+# No subas este archivo con el project_id real si el repo es público.
+
+[api]
+port = 54321
+
+[db]
+port = 54322
+
+[studio]
+port = 54323
+
+[functions.obuma-webhook]
+verify_jwt = false        # Obuma no envía JWT; la autenticación es vía OBUMA_WEBHOOK_SECRET
