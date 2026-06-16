@@ -14,8 +14,8 @@ from app.data import (
 
 # ─── Paleta & constantes ──────────────────────────────────────────────────────
 _C = {
-    "azul":   "#1B3A6B",
-    "chart":  "#1E88E5",
+    "azul":   "#C01E6E",   # magenta profundo de marca
+    "chart":  "#E62984",   # magenta de marca
     "verde":  "#1A7F4B",
     "amrl":   "#D4881E",
     "rojo":   "#C0392B",
@@ -24,8 +24,8 @@ _C = {
     "slate":  "#64748B",
 }
 _PALETA = [
-    "#1E88E5", "#26A69A", "#1A7F4B", "#D4881E", "#C0392B",
-    "#7C3AED", "#0288D1", "#F57C00", "#64748B", "#BE185D",
+    "#E62984", "#1E88E5", "#26A69A", "#D4881E", "#7C3AED",
+    "#0288D1", "#1A7F4B", "#F57C00", "#64748B", "#9E175A",
 ]
 _H = 330
 
@@ -435,14 +435,14 @@ def _s02_geografico(df: pd.DataFrame, df_prev: pd.DataFrame, f_ini, f_fin):
                 x=xlabels,
                 y=pivot.index.tolist(),
                 colorscale=[
-                    [0.0,  "#DBEAFE"],
-                    [0.35, "#60A5FA"],
-                    [0.70, "#2563EB"],
-                    [1.0,  "#1E3A8A"],
+                    [0.0,  "#FDEAF3"],
+                    [0.35, "#F49ABF"],
+                    [0.70, "#E62984"],
+                    [1.0,  "#9E175A"],
                 ],
                 text=[[fmt_clp(v) for v in row] for row in pivot.values],
                 texttemplate="%{text}",
-                textfont=dict(size=8, color="#1B3A6B"),
+                textfont=dict(size=8, color="#5A1133"),
                 hovertemplate="Región: %{y}<br>Mes: %{x}<br>Venta: %{text}<extra></extra>",
                 showscale=True,
             ))

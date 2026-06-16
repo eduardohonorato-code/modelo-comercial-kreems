@@ -25,17 +25,18 @@ from app.data import (
     get_ultima_factura,
     get_ventas_diarias,
 )
-from app.styles import color_pct, fmt_clp, fmt_num, fmt_pct
+from app.styles import color_pct, fmt_clp, fmt_num, fmt_pct, logo_img
 
 
 # ── Paleta (idéntica a CSS variables) ─────────────────────────────────────────
-_AZUL      = "#1B3A6B"
+_AZUL      = "#C01E6E"   # magenta profundo de marca (texto/línea principal)
+_ROSA      = "#E62984"   # magenta de marca (acento)
 _VERDE     = "#1A7F4B"
 _ROJO      = "#C0392B"
 _AMARILLO  = "#D4881E"
 _GRIS      = "#6B7280"
 _GRIS_LIGHT= "#E5E7EB"
-_BG        = "#F5F7FA"
+_BG        = "#FBF7FA"
 
 def _color_semaforo(pct) -> str:
     if pct is None:
@@ -82,10 +83,11 @@ def _preparar_df(df: pd.DataFrame) -> pd.DataFrame:
 
 def _render_header(anio: int, mes: int, ultima_factura: str):
     nombre_mes = MESES[mes]
+    logo = logo_img("brand-logo-on-dark", alt="Kreems") or "🍦"
     st.markdown(f"""
     <div class="dash-header">
       <div class="dash-header-left">
-        <span class="dash-header-logo">🍦</span>
+        <span class="dash-header-logo">{logo}</span>
         <div>
           <div class="dash-header-title">Dashboard Comercial</div>
           <div class="dash-header-sub">{nombre_mes} {anio}</div>

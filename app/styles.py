@@ -1,4 +1,32 @@
 """CSS global de la app — mobile-first."""
+import base64
+import functools
+from pathlib import Path
+
+LOGO_PATH = Path(__file__).resolve().parent / "assets" / "kreems_logo.png"
+
+
+@functools.lru_cache(maxsize=1)
+def logo_data_uri() -> str:
+    """Devuelve el logo Kreems como data-URI base64 (para embeber en HTML).
+
+    Cacheado: el PNG se lee una sola vez por proceso. Si el archivo no
+    existe, devuelve cadena vacía y quien lo use debe degradar a texto.
+    """
+    try:
+        data = LOGO_PATH.read_bytes()
+        return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+    except Exception:
+        return ""
+
+
+def logo_img(css_class: str = "brand-logo", alt: str = "Kreems") -> str:
+    """Etiqueta <img> con el logo embebido. Cadena vacía si no hay logo."""
+    uri = logo_data_uri()
+    if not uri:
+        return ""
+    return f'<img class="{css_class}" src="{uri}" alt="{alt}">'
+
 
 CSS = """
 <style>
@@ -6,17 +34,28 @@ CSS = """
 
 /* ── Variables ── */
 :root {
-  --azul:      #1B3A6B;
-  --azul-light:#2A5298;
+  /* Marca Kreems */
+  --rosa:       #E62984;   /* magenta de marca (acento, valores KPI, activo) */
+  --rosa-deep:  #C01E6E;   /* magenta profundo (fondos con texto blanco, títulos) */
+  --rosa-dark:  #9E175A;   /* aún más profundo (gradientes) */
+  --rosa-50:    #FDEAF3;   /* tinte muy claro (hover, filas, insight) */
+  --rosa-100:   #FBDCEC;   /* tinte claro (hover profundo, total row) */
+  --rosa-grad:  linear-gradient(135deg, #E62984 0%, #B81E6B 100%);
+
+  /* Alias retro-compatibles: el código existente usa var(--azul) como acento */
+  --azul:       var(--rosa-deep);
+  --azul-light: var(--rosa);
+
   --verde:     #1A7F4B;
   --rojo:      #C0392B;
   --amarillo:  #D4881E;
   --gris:      #6B7280;
   --gris-light:#E5E7EB;
   --bg-card:   #FFFFFF;
-  --bg-page:   #F5F7FA;
-  --bg-zebra:  #FAFBFF;
-  --sombra:    0 2px 8px rgba(0,0,0,.07);
+  --bg-page:   #FBF7FA;
+  --bg-zebra:  #FEFAFC;
+  --sombra:    0 2px 8px rgba(34,12,24,.08);
+  --sombra-hover: 0 8px 24px rgba(192,30,110,.16);
 }
 
 /* ── Tipografía base ── */
@@ -48,16 +87,17 @@ h2 { font-size: 1.25rem !important; font-weight: 700 !important;
 .sidebar-brand {
   display: flex;
   align-items: center;
-  gap: .5rem;
-  padding: .25rem 0 .75rem;
+  justify-content: center;
+  padding: .35rem 0 .85rem;
 }
-.sidebar-brand .brand-icon { font-size: 1.5rem; line-height: 1; }
-.sidebar-brand .brand-name {
-  font-size: 1.15rem;
-  font-weight: 700;
-  color: var(--azul);
-  letter-spacing: -.01em;
+.sidebar-brand img.brand-logo {
+  width: 132px;
+  max-width: 80%;
+  height: auto;
+  display: block;
 }
+/* Logo embebido en cabeceras de fondo rosado → versión sobre oscuro */
+.brand-logo-on-dark { filter: brightness(0) invert(1); }
 
 /* ── Sidebar nav: etiqueta de sección ── */
 .nav-section-label {
@@ -85,16 +125,16 @@ h2 { font-size: 1.25rem !important; font-weight: 700 !important;
   margin-bottom: 2px !important;
 }
 [data-testid="stSidebar"] [data-testid="baseButton-secondary"]:hover {
-  background: #F0F4FF !important;
-  color: var(--azul) !important;
+  background: var(--rosa-50) !important;
+  color: var(--rosa-deep) !important;
 }
 
 /* ── Sidebar nav: botón activo (primary) ── */
 [data-testid="stSidebar"] [data-testid="baseButton-primary"] {
-  background: #EEF2FF !important;
+  background: var(--rosa-50) !important;
   border: none !important;
-  border-left: 3px solid var(--azul) !important;
-  color: var(--azul) !important;
+  border-left: 3px solid var(--rosa) !important;
+  color: var(--rosa-deep) !important;
   font-weight: 700 !important;
   font-size: .875rem !important;
   text-align: left !important;
@@ -105,7 +145,7 @@ h2 { font-size: 1.25rem !important; font-weight: 700 !important;
   margin-bottom: 2px !important;
 }
 [data-testid="stSidebar"] [data-testid="baseButton-primary"]:hover {
-  background: #E0E7FF !important;
+  background: var(--rosa-100) !important;
 }
 
 /* ── Sidebar: info de usuario con avatar ── */
@@ -119,7 +159,7 @@ h2 { font-size: 1.25rem !important; font-weight: 700 !important;
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: var(--azul);
+  background: var(--rosa-grad);
   color: white;
   display: flex;
   align-items: center;
@@ -142,18 +182,25 @@ h2 { font-size: 1.25rem !important; font-weight: 700 !important;
 /* ── Inicio: acceso rápido ── */
 .acceso-card {
   background: white;
-  border-radius: 12px;
-  padding: 1.2rem 1rem 1rem;
+  border-radius: 14px;
+  padding: 1.25rem 1.1rem 1.05rem;
   box-shadow: var(--sombra);
-  border-top: 4px solid var(--azul);
+  border-top: 4px solid var(--rosa);
   height: 100%;
   margin-bottom: .5rem;
+  transition: transform .16s ease, box-shadow .16s ease;
 }
-.acceso-card-icon { font-size: 1.6rem; margin-bottom: .4rem; line-height: 1; }
+.acceso-card:hover { transform: translateY(-3px); box-shadow: var(--sombra-hover); }
+.acceso-card-icon {
+  font-size: 1.55rem; margin-bottom: .5rem; line-height: 1;
+  width: 44px; height: 44px; border-radius: 11px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--rosa-50);
+}
 .acceso-card-title {
   font-size: .95rem;
   font-weight: 700;
-  color: var(--azul);
+  color: var(--rosa-deep);
   margin-bottom: .3rem;
 }
 .acceso-card-desc { font-size: .78rem; color: var(--gris); line-height: 1.4; }
@@ -190,15 +237,18 @@ h2 { font-size: 1.25rem !important; font-weight: 700 !important;
 }
 .kpi-card {
   background: var(--bg-card);
-  border-radius: 10px;
+  border-radius: 12px;
   box-shadow: var(--sombra);
-  padding: .85rem 1rem .8rem;
+  padding: .9rem 1rem .85rem;
   text-align: center;
-  border-top: 3px solid transparent;
+  border-top: 3px solid var(--gris-light);
+  transition: transform .15s ease, box-shadow .15s ease;
 }
+.kpi-card:hover { transform: translateY(-2px); box-shadow: var(--sombra-hover); }
 /* Variante destacada: % Cumplimiento */
 .kpi-card.destacado {
-  border-top-color: var(--azul);
+  border-top: 3px solid var(--rosa);
+  background: linear-gradient(180deg, var(--rosa-50) 0%, #FFFFFF 60%);
   grid-column: span 2;
 }
 @media (max-width: 480px) {
@@ -324,15 +374,15 @@ table.kreems td:first-child {
 table.kreems tbody tr:nth-child(even) td        { background: var(--bg-zebra); }
 table.kreems tbody tr:nth-child(even) td:first-child { background: var(--bg-zebra); }
 /* Hover (sobreescribe zebra) */
-table.kreems tbody tr:hover td { background: #EEF2FF; }
-table.kreems tbody tr:hover td:first-child { background: #EEF2FF; }
+table.kreems tbody tr:hover td { background: var(--rosa-50); }
+table.kreems tbody tr:hover td:first-child { background: var(--rosa-50); }
 /* Fila TOTAL */
 table.kreems tr.total-row td {
-  background: #E8EDFB !important;
+  background: var(--rosa-100) !important;
   font-weight: 700;
-  border-top: 2px solid var(--azul);
+  border-top: 2px solid var(--rosa);
 }
-table.kreems tr.total-row td:first-child { background: #E8EDFB !important; }
+table.kreems tr.total-row td:first-child { background: var(--rosa-100) !important; }
 
 .verde-bg   { color: var(--verde);    font-weight: 700; }
 .rojo-bg    { color: var(--rojo);     font-weight: 700; }
@@ -351,8 +401,8 @@ table.kreems tr.total-row td:first-child { background: #E8EDFB !important; }
 
 /* ── Nota explicativa (embudo Pedidos → Fact-NC) ── */
 .nota-embudo {
-  background: #F0F4FF;
-  border-left: 4px solid var(--azul);
+  background: var(--rosa-50);
+  border-left: 4px solid var(--rosa);
   border-radius: 8px;
   padding: .75rem 1rem .75rem 1.1rem;
   margin: .4rem 0 1rem;
@@ -374,24 +424,30 @@ table.kreems tr.total-row td:first-child { background: #E8EDFB !important; }
   box-shadow: 0 4px 24px rgba(0,0,0,.1);
 }
 .login-logo { text-align: center; margin-bottom: 1.5rem; }
-.login-logo h1 { color: var(--azul); font-size: 1.6rem; margin: 0; font-weight: 700; }
-.login-logo p  { color: var(--gris); font-size: .85rem; margin: .3rem 0 0; }
+.login-logo img { width: 168px; max-width: 70%; height: auto; margin: 0 auto .25rem; display: block; }
+.login-logo h1 { color: var(--rosa-deep); font-size: 1.6rem; margin: 0; font-weight: 700; }
+.login-logo p  { color: var(--gris); font-size: .85rem; margin: .35rem 0 0; }
+.login-card { border-top: 4px solid var(--rosa); }
 
 /* ── Dashboard header (S1) ── */
 .dash-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--azul);
+  background: var(--rosa-grad);
   color: white;
-  border-radius: 12px;
-  padding: .85rem 1.25rem;
+  border-radius: 14px;
+  padding: .95rem 1.35rem;
   margin-bottom: 1.1rem;
   flex-wrap: wrap;
   gap: .5rem;
+  box-shadow: 0 6px 20px rgba(192,30,110,.22);
 }
-.dash-header-left  { display: flex; align-items: center; gap: .75rem; }
+.dash-header-left  { display: flex; align-items: center; gap: .85rem; }
 .dash-header-logo  { font-size: 1.7rem; line-height: 1; flex-shrink: 0; }
+.dash-header-logo img {
+  height: 30px; width: auto; display: block;
+}
 .dash-header-title { font-size: 1.05rem; font-weight: 700; line-height: 1.2; letter-spacing: -.01em; }
 .dash-header-sub   { font-size: .75rem; opacity: .78; margin-top: .1rem; }
 .dash-header-right { display: flex; align-items: center; }
@@ -466,10 +522,11 @@ table.kreems tr.total-row td:first-child { background: #E8EDFB !important; }
 
 /* ── Insight bullets (S5) ── */
 .insight-card {
-  background: #EEF2FF;
-  border-radius: 10px;
-  padding: .85rem 1rem;
+  background: var(--rosa-50);
+  border-radius: 12px;
+  padding: .9rem 1.05rem;
   height: 100%;
+  border: 1px solid var(--rosa-100);
 }
 .insight-title { font-size: .72rem; font-weight: 700; color: var(--azul);
                  text-transform: uppercase; letter-spacing: .05em; margin-bottom: .55rem; }
@@ -482,7 +539,7 @@ table.kreems tr.total-row td:first-child { background: #E8EDFB !important; }
 .proy-table td { padding: .42rem .5rem; border-bottom: 1px solid var(--gris-light); }
 .proy-table td:last-child { text-align: right; font-weight: 600; }
 .proy-table tr:last-child td { border-bottom: none; font-weight: 700; }
-.proy-row-header td { background: #F0F4FF; font-weight: 700;
+.proy-row-header td { background: var(--rosa-50); font-weight: 700;
                       color: var(--azul); font-size: .7rem;
                       text-transform: uppercase; letter-spacing: .04em; }
 

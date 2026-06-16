@@ -10,16 +10,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import streamlit as st
 
+from app.styles import LOGO_PATH
+
 st.set_page_config(
     page_title="Kreems · Seguimiento Comercial",
-    page_icon="🍦",
+    page_icon=str(LOGO_PATH) if LOGO_PATH.exists() else "🍦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 from app.auth import (login, logout, is_authenticated, es_gerencia,
                       get_rol, MESES, get_client_auth, cambiar_password)
-from app.styles import CSS
+from app.styles import CSS, logo_img
 from app.pages import vendedor, gerencia, analisis, carga, inicio, admin, comisiones
 
 st.markdown(CSS, unsafe_allow_html=True)
@@ -27,11 +29,12 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 # ── LOGIN ──────────────────────────────────────────────────────────────────────
 def pantalla_login():
-    st.markdown("""
+    logo = logo_img("", alt="Kreems") or "<h1>🍦 Kreems</h1>"
+    st.markdown(f"""
     <div class="login-wrap">
       <div class="login-card">
         <div class="login-logo">
-          <h1>🍦 Kreems</h1>
+          {logo}
           <p>Sistema de Seguimiento Comercial</p>
         </div>
     """, unsafe_allow_html=True)
@@ -63,10 +66,11 @@ def pantalla_login():
 def sidebar():
     with st.sidebar:
         # ── Marca ──
-        st.markdown("""
+        brand = logo_img("brand-logo", alt="Kreems") or \
+            '<span class="brand-name">🍦 Kreems</span>'
+        st.markdown(f"""
         <div class="sidebar-brand">
-          <span class="brand-icon">🍦</span>
-          <span class="brand-name">Kreems</span>
+          {brand}
         </div>
         """, unsafe_allow_html=True)
         st.divider()

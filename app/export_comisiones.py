@@ -109,7 +109,7 @@ def comisiones_a_pdf(df: pd.DataFrame, anio: int, mes: int,
     styles = getSampleStyleSheet()
     h_title = ParagraphStyle("t", parent=styles["Title"], fontSize=15, spaceAfter=2)
     h_sub = ParagraphStyle("s", parent=styles["Normal"], fontSize=10,
-                           alignment=1, textColor=colors.HexColor("#1B3A6B"), spaceAfter=8)
+                           alignment=1, textColor=colors.HexColor("#C01E6E"), spaceAfter=8)
     normal = styles["Normal"]
     small = ParagraphStyle("sm", parent=styles["Normal"], fontSize=8)
 
@@ -200,7 +200,7 @@ def _anexo_vendedor(r, anio, mes, detalle, h_title, h_sub, normal, small):
     ], [100 * mm, 65 * mm])
     tot.setStyle(TableStyle([
         ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#1B3A6B")),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#C01E6E")),
         ("TEXTCOLOR", (0, -1), (-1, -1), colors.white),
         ("FONTNAME", (0, 4), (-1, 4), "Helvetica-Bold"),
         ("FONTNAME", (0, 6), (-1, 6), "Helvetica-Bold"),
@@ -228,7 +228,7 @@ def _anexo_vendedor(r, anio, mes, detalle, h_title, h_sub, normal, small):
                        repeatRows=1)
             dt.setStyle(TableStyle([
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D0D0D0")),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1B3A6B")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#C01E6E")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("FONTSIZE", (0, 0), (-1, -1), 7),
                 ("ALIGN", (4, 1), (4, -1), "RIGHT"),

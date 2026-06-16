@@ -166,7 +166,7 @@ def _barra_cumplimiento(r, mes_activo: bool):
     if mes_activo:
         fig.add_trace(go.Bar(
             x=[pct_p * 100], y=["Proyección cierre"],
-            orientation="h", marker_color="#1B3A6B",
+            orientation="h", marker_color="#C01E6E",
             text=[f"{pct_p*100:.1f}%"], textposition="inside", name="Proyección",
         ))
     fig.add_vline(x=100, line_dash="dash", line_color="gray", annotation_text="Meta")
@@ -196,7 +196,7 @@ def _gauge(pct_c):
                 {"range": [100, 150], "color": "#E8F5E9"},
             ],
             "threshold": {
-                "line": {"color": "#1B3A6B", "width": 3},
+                "line": {"color": "#C01E6E", "width": 3},
                 "thickness": 0.75, "value": 100,
             },
         },
