@@ -444,9 +444,17 @@ table.kreems tr.total-row td:first-child { background: var(--rosa-100) !importan
   box-shadow: 0 6px 20px rgba(192,30,110,.22);
 }
 .dash-header-left  { display: flex; align-items: center; gap: .85rem; }
-.dash-header-logo  { font-size: 1.7rem; line-height: 1; flex-shrink: 0; }
+.dash-header-logo  {
+  flex-shrink: 0;
+  background: #fff;
+  border-radius: 10px;
+  padding: .4rem .65rem;
+  display: inline-flex;
+  align-items: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,.14);
+}
 .dash-header-logo img {
-  height: 30px; width: auto; display: block;
+  height: 26px; width: auto; display: block;
 }
 .dash-header-title { font-size: 1.05rem; font-weight: 700; line-height: 1.2; letter-spacing: -.01em; }
 .dash-header-sub   { font-size: .75rem; opacity: .78; margin-top: .1rem; }

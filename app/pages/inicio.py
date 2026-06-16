@@ -83,7 +83,7 @@ def _preparar_df(df: pd.DataFrame) -> pd.DataFrame:
 
 def _render_header(anio: int, mes: int, ultima_factura: str):
     nombre_mes = MESES[mes]
-    logo = logo_img("brand-logo-on-dark", alt="Kreems") or "🍦"
+    logo = logo_img("brand-logo", alt="Kreems") or "🍦"
     st.markdown(f"""
     <div class="dash-header">
       <div class="dash-header-left">
