@@ -31,12 +31,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from etl.db import get_client
-from etl.config import DATA_DIR, FILE_MATCH
+from etl.config import DATA_DIR, FILE_MATCH, MENSUAL_DIR, FUENTES
 from etl.cleaners import construir_mapeo_vendedor
 from etl.upsert import upsert_tabla
 from etl.maquinas import (derivar_maquinas_obuma, aplicar_estado_despachos,
                           aplicar_override_vendedor)
-from etl.loaders.obuma import cargar_obuma_multi, archivo_cubre_periodo
+from etl.loaders.obuma import cargar_obuma_multi
 from etl.loaders.autoventa import cargar_autoventa
 
 # -- Logging ------------------------------------------------------------------
@@ -78,13 +78,50 @@ def _candidatos(clave: str) -> list[Path]:
     return out
 
 
+def _buscar_mensual(clave: str, periodo: tuple) -> Path | None:
+    """
+    Esquema vigente: data/mensual/<fuente>/<...AAAA-MM...>.<ext>.
+    Una carpeta por fuente; el archivo del mes se reconoce por el token AAAA-MM
+    en el nombre (tolera separador '-' o '_'). Devuelve None si la fuente no
+    tiene archivo para ese período (se omite esa fuente, sin error).
+    """
+    anio, mes = periodo
+    carpeta = MENSUAL_DIR / FUENTES[clave]["carpeta"]
+    ext = FUENTES[clave]["ext"]
+    if not carpeta.is_dir():
+        logger.info("  [%s] sin carpeta %s — fuente omitida.", clave, carpeta.name)
+        return None
+    tokens = (f"{anio:04d}-{mes:02d}", f"{anio:04d}_{mes:02d}")
+    candidatos = [
+        p for p in carpeta.iterdir()
+        if p.is_file() and p.suffix.lower() == ext
+        and any(t in p.stem for t in tokens)
+    ]
+    if not candidatos:
+        logger.info("  [%s] sin archivo de %d-%02d en %s/ — fuente omitida.",
+                    clave, anio, mes, carpeta.name)
+        return None
+    if len(candidatos) > 1:
+        logger.error("[%s] varios archivos para %d-%02d en %s/: %s. "
+                     "Deja solo uno. Abortando.",
+                     clave, anio, mes, carpeta.name, [c.name for c in candidatos])
+        sys.exit(1)
+    logger.info("  [%s] usando (mensual): %s/%s",
+                clave, carpeta.name, candidatos[0].name)
+    return candidatos[0]
+
+
 def _encontrar_archivo(clave: str, periodo: tuple | None = None) -> Path | None:
     """
-    Elige el archivo de una fuente. Si hay varios candidatos:
-      · fuentes Obuma con --periodo → elige el que contiene ese mes/año (y aborta
-        si ninguno o varios lo contienen: hay que dejar uno solo en la carpeta).
-      · resto → el más reciente por fecha de archivo, advirtiendo de la ambigüedad.
+    Localiza el archivo de una fuente.
+      · Con --periodo → esquema organizado data/mensual/<fuente>/ (sin ambigüedad);
+        solo carga lo que esté presente para ese mes.
+      · Sin --periodo → fallback legacy a la carpeta plana data/muestras (match por
+        palabra clave; el más reciente si hay varios).
     """
+    if periodo is not None:
+        return _buscar_mensual(clave, periodo)
+
     candidatos = _candidatos(clave)
     if not candidatos:
         logger.warning("No se encontró ningún archivo para '%s' (regla: %s)",
@@ -96,22 +133,6 @@ def _encontrar_archivo(clave: str, periodo: tuple | None = None) -> Path | None:
 
     logger.warning("Varios archivos coinciden con '%s': %s",
                    clave, [c.name for c in candidatos])
-
-    if periodo is not None and clave.startswith("obuma"):
-        anio, mes = periodo
-        cubren = [c for c in candidatos if archivo_cubre_periodo(c, anio, mes)]
-        if len(cubren) == 1:
-            logger.info("  [%s] elegido por período %d-%02d: %s",
-                        clave, anio, mes, cubren[0].name)
-            return cubren[0]
-        if not cubren:
-            logger.error("Ningún archivo de '%s' tiene datos de %d-%02d. Abortando.",
-                         clave, anio, mes)
-            sys.exit(1)
-        logger.error("Varios archivos de '%s' contienen %d-%02d (%s). "
-                     "Deja solo uno en la carpeta. Abortando.",
-                     clave, anio, mes, [c.name for c in cubren])
-        sys.exit(1)
 
     ruta = max(candidatos, key=lambda p: p.stat().st_mtime)
     logger.warning("  [%s] sin --periodo: usando el más reciente por fecha de "

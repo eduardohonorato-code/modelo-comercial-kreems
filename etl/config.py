@@ -10,12 +10,31 @@ from pathlib import Path
 
 # Raíz del proyecto (dos niveles arriba de este archivo)
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data" / "muestras"
+DATA_DIR = ROOT / "data" / "muestras"   # legacy: carpeta plana (fallback sin --periodo)
 
-# ── Reconocimiento de archivos por palabra clave ────────────────────────────
-# En vez de un patrón glob exacto (que dependía de escribir "ACUÑA" con ñ), se
-# busca por palabras clave sobre el nombre NORMALIZADO (sin acentos, mayúsculas).
-# Así "acuna", "Acuña" o "ACUÑA" se reconocen igual.
+# ── Estructura mensual organizada (esquema vigente) ─────────────────────────
+# Una carpeta por fuente bajo data/mensual/. El archivo de cada mes se identifica
+# por el período AAAA-MM en el nombre. Convención de nombre: "<fuente>_AAAA-MM".
+#   data/mensual/
+#     acuna/         acuna_2026-06.xls
+#     gran_natural/  gran_natural_2026-06.xls
+#     pedidos/       pedidos_2026-06.csv
+#     despachos/     despachos_2026-06.xlsx
+#     objetivos/     objetivos_2026-06.xlsx
+# El reconocimiento es: carpeta (fuente) + token AAAA-MM en el nombre + extensión.
+# Tolerante a separador '-' o '_' en el token (2026-06 == 2026_06).
+MENSUAL_DIR = ROOT / "data" / "mensual"
+FUENTES = {
+    "obuma_acuna":         {"carpeta": "acuna",        "ext": ".xls"},
+    "obuma_grannatural":   {"carpeta": "gran_natural", "ext": ".xls"},
+    "autoventa_pedidos":   {"carpeta": "pedidos",      "ext": ".csv"},
+    "autoventa_despachos": {"carpeta": "despachos",    "ext": ".xlsx"},
+    "objetivos":           {"carpeta": "objetivos",    "ext": ".xlsx"},  # opcional (editable en app)
+}
+
+# ── Reconocimiento legacy por palabra clave (solo carpeta plana data/muestras) ─
+# Se mantiene como fallback cuando run_etl se corre SIN --periodo. Con --periodo
+# se usa el esquema mensual de arriba (sin ambigüedad).
 #   · ext:     extensión esperada (en minúscula).
 #   · incluye: TODAS estas palabras deben estar en el nombre.
 #   · excluye: NINGUNA de estas palabras puede estar (evita confundir sociedades).
