@@ -1,67 +1,41 @@
 """
-Organizador de descargas — Kreems.
+Organizador de descargas — Kreems (carpetas-bandeja).
 
-Toma los Excel/CSV que descargaste (por defecto desde tu carpeta Descargas) y los
-ARCHIVA en la estructura mensual con el nombre parametrizado:
+Los exports de Obuma/Autoventa se descargan con nombres aleatorios y SIN el nombre
+de la empresa, así que no se pueden clasificar por el nombre. En vez de eso, se usa
+una bandeja rotulada por fuente: tú sueltas cada descarga (con el nombre que tenga)
+en su carpeta, y este script la archiva con el nombre canónico del período.
 
-    data/mensual/<fuente>/<fuente>_AAAA-MM.<ext>
+    inbox/                          data/mensual/
+      acuna/      <archivo>   →       acuna/        acuna_AAAA-MM.xls
+      despachos/  <archivo>   →       despachos/    despachos_AAAA-MM.xlsx
+      pedidos/    <archivo>   →       pedidos/      pedidos_AAAA-MM.csv        (opcional)
+      gran_natural/ <archivo> →       gran_natural/ gran_natural_AAAA-MM.xls   (opcional, respaldo API)
+      objetivos/  <archivo>   →       objetivos/    objetivos_AAAA-MM.xlsx     (opcional)
 
-Reconoce la fuente por palabras clave en el nombre original (mismas reglas que el
-ETL legacy) y le pone el período que tú indicas. Copia (no borra el original) y
-sobrescribe el destino si ya existe (idempotente: re-descargar el mismo mes solo
-reemplaza el archivo, no acumula basura).
+La fuente la define la BANDEJA (no el nombre). El período lo das tú con --periodo
+(no se deduce del nombre: la fecha del archivo Obuma es la de descarga, no la de
+los datos). El original se mueve a inbox/_procesados/<periodo>/ como respaldo.
 
-Uso:
-    # Archiva lo que haya en Descargas para junio 2026
-    python -m etl.organizar --periodo 2026-06
-
-    # Desde otra carpeta de entrada
-    python -m etl.organizar --periodo 2026-06 --inbox "D:/descargas_kreems"
-
-    # Solo Acuña y despachos (las fuentes manuales típicas)
-    python -m etl.organizar --periodo 2026-06 --solo obuma_acuna autoventa_despachos
-
-    # Ver qué haría sin mover nada
+Uso típico (cada vez que cargas un mes):
+    python -m etl.organizar --periodo 2026-06     # archiva lo que haya en inbox/
     python -m etl.organizar --periodo 2026-06 --dry-run
+    python -m etl.organizar --init                # crea las carpetas inbox/ vacías
 
-Después de archivar, corre el ETL:
+Después:
     python -m etl.run_etl --periodo 2026-06
 """
 import argparse
-import os
 import shutil
 import sys
-import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from etl.config import MENSUAL_DIR, FUENTES, FILE_MATCH
+from etl.config import MENSUAL_DIR, FUENTES
 
-
-def _norm(nombre: str) -> str:
-    """Sin acentos y en MAYÚSCULAS (igual criterio que run_etl)."""
-    nfkd = unicodedata.normalize("NFKD", nombre)
-    return "".join(c for c in nfkd if not unicodedata.combining(c)).upper()
-
-
-def _inbox_por_defecto() -> Path:
-    """Carpeta Descargas del usuario en Windows."""
-    return Path(os.path.expanduser("~")) / "Downloads"
-
-
-def _clasificar(p: Path) -> str | None:
-    """Devuelve la clave de fuente que coincide con el archivo, o None."""
-    nombre = _norm(p.name)
-    for clave, regla in FILE_MATCH.items():
-        if p.suffix.lower() != regla["ext"]:
-            continue
-        if all(k in nombre for k in regla["incluye"]) and not any(
-            k in nombre for k in regla["excluye"]
-        ):
-            return clave
-    return None
+INBOX_DIR = ROOT / "inbox"
 
 
 def _parse_periodo(valor: str) -> tuple[int, int]:
@@ -72,64 +46,126 @@ def _parse_periodo(valor: str) -> tuple[int, int]:
         raise SystemExit(f"--periodo inválido: '{valor}'. Formato AAAA-MM (ej. 2026-06).")
 
 
+def _crear_bandejas(inbox: Path) -> None:
+    """Crea inbox/<fuente>/ para cada fuente (idempotente)."""
+    for clave in FUENTES:
+        (inbox / FUENTES[clave]["carpeta"]).mkdir(parents=True, exist_ok=True)
+    print(f"Bandejas listas en: {inbox}")
+    for clave in FUENTES:
+        print(f"  inbox/{FUENTES[clave]['carpeta']}/   ({clave}, {FUENTES[clave]['ext']})")
+
+
+def _periodo_en_contenido(path: Path, ext: str) -> str | None:
+    """
+    Best-effort: detecta el mes dominante de los datos para avisar si no coincide
+    con --periodo (evita el error típico de archivar el mes equivocado). Nunca
+    bloquea: si no puede determinarlo, devuelve None en silencio.
+    """
+    try:
+        import pandas as pd, io, warnings
+        warnings.simplefilter("ignore")
+        if ext == ".xls":          # Obuma: HTML disfrazado de .xls
+            html = path.read_text(encoding="latin-1", errors="ignore")
+            df = pd.read_html(io.StringIO(html), header=0, flavor="lxml")[0]
+        elif ext == ".xlsx":
+            df = pd.read_excel(path, engine="openpyxl")
+        elif ext == ".csv":
+            df = pd.read_csv(path, sep=";", dtype=str, on_bad_lines="skip")
+        else:
+            return None
+        col = next((c for c in df.columns if "FECHA" in str(c).upper()), None)
+        if not col:
+            return None
+        fechas = pd.to_datetime(df[col], errors="coerce", dayfirst=True).dropna()
+        if fechas.empty:
+            return None
+        top = fechas.dt.to_period("M").value_counts().idxmax()
+        return f"{top.year:04d}-{top.month:02d}"
+    except Exception:
+        return None
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Archiva descargas en data/mensual/ con nombre parametrizado.")
-    ap.add_argument("--periodo", required=True, metavar="AAAA-MM",
+    ap = argparse.ArgumentParser(description="Archiva las descargas desde inbox/ al esquema mensual.")
+    ap.add_argument("--periodo", metavar="AAAA-MM",
                     help="Mes al que pertenecen los archivos (ej. 2026-06).")
-    ap.add_argument("--inbox", type=Path, default=None,
-                    help="Carpeta de entrada (por defecto: ~/Downloads).")
-    ap.add_argument("--solo", nargs="+", choices=list(FUENTES),
-                    help="Limitar a estas fuentes (por defecto: todas las que aparezcan).")
-    ap.add_argument("--dry-run", action="store_true", help="Muestra el plan sin mover archivos.")
+    ap.add_argument("--inbox", type=Path, default=INBOX_DIR,
+                    help=f"Carpeta de bandejas (por defecto: {INBOX_DIR}).")
+    ap.add_argument("--init", action="store_true",
+                    help="Crea las carpetas-bandeja vacías y termina.")
+    ap.add_argument("--dry-run", action="store_true", help="Muestra el plan sin mover nada.")
     args = ap.parse_args()
 
-    anio, mes = _parse_periodo(args.periodo)
-    inbox = (args.inbox or _inbox_por_defecto()).resolve()
-    if not inbox.is_dir():
-        raise SystemExit(f"No existe la carpeta de entrada: {inbox}")
+    inbox = args.inbox.resolve()
 
-    permitidas = set(args.solo) if args.solo else set(FUENTES)
+    if args.init:
+        _crear_bandejas(inbox)
+        return 0
+
+    if not args.periodo:
+        raise SystemExit("Falta --periodo AAAA-MM (o usa --init para crear las bandejas).")
+    anio, mes = _parse_periodo(args.periodo)
     sufijo = f"{anio:04d}-{mes:02d}"
 
+    if not inbox.is_dir():
+        raise SystemExit(f"No existe la carpeta de bandejas: {inbox}\n"
+                         f"Créala con:  python -m etl.organizar --init")
+
     print(f"Inbox:   {inbox}")
-    print(f"Período: {sufijo}")
-    print(f"Fuentes: {', '.join(sorted(permitidas))}\n")
+    print(f"Período: {sufijo}\n")
 
-    encontrados: dict[str, Path] = {}
-    for p in inbox.iterdir():
-        if not p.is_file():
+    procesados = inbox / "_procesados" / sufijo
+    archivados = 0
+    vacias = []
+
+    for clave in FUENTES:
+        carpeta_in = inbox / FUENTES[clave]["carpeta"]
+        ext = FUENTES[clave]["ext"]
+        if not carpeta_in.is_dir():
+            vacias.append(clave)
             continue
-        clave = _clasificar(p)
-        if clave and clave in permitidas:
-            # Si hay varios para la misma fuente, gana el más reciente
-            if clave not in encontrados or p.stat().st_mtime > encontrados[clave].stat().st_mtime:
-                encontrados[clave] = p
+        # Archivos reales (ignora subcarpetas y ocultos)
+        files = [p for p in carpeta_in.iterdir() if p.is_file() and not p.name.startswith(".")]
+        if not files:
+            vacias.append(clave)
+            continue
+        if len(files) > 1:
+            print(f"[!] {clave}: hay {len(files)} archivos en inbox/{FUENTES[clave]['carpeta']}/ "
+                  f"({[f.name for f in files]}). Deja solo uno. Omitido.")
+            continue
 
-    if not encontrados:
-        print("No se encontró ningún archivo reconocible en la carpeta de entrada.")
-        return 1
+        origen = files[0]
+        if origen.suffix.lower() != ext:
+            print(f"[!] {clave}: '{origen.name}' tiene extensión {origen.suffix} "
+                  f"pero se esperaba {ext}. ¿Bandeja equivocada? Omitido.")
+            continue
 
-    movidos = 0
-    for clave in sorted(encontrados):
-        origen = encontrados[clave]
-        carpeta = MENSUAL_DIR / FUENTES[clave]["carpeta"]
-        destino = carpeta / f"{FUENTES[clave]['carpeta']}_{sufijo}{FUENTES[clave]['ext']}"
-        flecha = f"{origen.name}  ->  {destino.relative_to(ROOT)}"
+        # Aviso si el contenido parece de otro mes (no bloquea)
+        det = _periodo_en_contenido(origen, ext)
+        if det and det != sufijo:
+            print(f"[!] {clave}: el contenido parece de {det}, no de {sufijo}. "
+                  f"Revisa el período. (Se archiva igual.)")
+
+        destino = MENSUAL_DIR / FUENTES[clave]["carpeta"] / f"{FUENTES[clave]['carpeta']}_{sufijo}{ext}"
+        rel = destino.relative_to(ROOT)
         if args.dry_run:
-            print(f"[plan] {flecha}")
+            print(f"[plan] inbox/{FUENTES[clave]['carpeta']}/{origen.name}  ->  {rel}")
             continue
-        carpeta.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(origen, destino)   # copia (conserva el original en Descargas)
-        print(f"[ok]   {flecha}")
-        movidos += 1
 
-    faltan = permitidas - set(encontrados)
-    if faltan:
-        print(f"\n[!] Sin archivo en la entrada para: {', '.join(sorted(faltan))}")
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(origen, destino)               # escribe el archivo canónico
+        procesados.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(origen), str(procesados / origen.name))  # vacía la bandeja
+        print(f"[ok]   inbox/{FUENTES[clave]['carpeta']}/{origen.name}  ->  {rel}")
+        archivados += 1
+
+    if vacias:
+        print(f"\n(Sin archivo en bandeja: {', '.join(vacias)})")
 
     if not args.dry_run:
-        print(f"\nArchivados {movidos} archivo(s). Ahora corre:")
-        print(f"    python -m etl.run_etl --periodo {sufijo}")
+        print(f"\nArchivados {archivados} archivo(s). Originales en inbox/_procesados/{sufijo}/.")
+        if archivados:
+            print(f"Ahora corre:\n    python -m etl.run_etl --periodo {sufijo}")
     return 0
 
 

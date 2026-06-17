@@ -1,6 +1,9 @@
 # Datos locales (exportaciones con RUT y datos de clientes — no subir al repo)
 /data/
 
+# Bandeja de descargas a archivar (mismos datos sensibles que /data)
+/inbox/
+
 # Logs y artefactos del ETL (pueden traer nombres de vendedores)
 etl_run.log
 etl_historico.log
