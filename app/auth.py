@@ -133,8 +133,16 @@ def login(identifier: str, password: str) -> tuple[bool, str]:
         return True, ""
     except Exception as e:
         msg = str(e)
-        if "Invalid login" in msg or "invalid" in msg.lower():
+        low = msg.lower()
+        # Distinguir el error REAL: una anon key mala/cortada en los secretos
+        # produce "Invalid API key", que NO es un problema de contraseña.
+        if "api key" in low or "apikey" in low or "api-key" in low:
+            return False, ("Problema de configuración: la API key de Supabase no es "
+                           "válida (revisa los secretos del despliegue). Detalle: " + msg)
+        if "invalid login" in low:
             return False, "Contraseña incorrecta."
+        if "invalid" in low:
+            return False, f"Login rechazado por Supabase. Detalle: {msg}"
         return False, f"Error de conexión: {msg}"
 
 
