@@ -6,14 +6,17 @@ navegador, sin tocar la línea de comandos. Reutiliza el MISMO núcleo de ETL qu
 `run_historico` (`procesar_carga`), de modo que el resultado es idéntico a cargar
 desde las carpetas. Idempotente: volver a subir el mismo mes actualiza, no duplica.
 
-Flujo de datos (igual que el ETL):
-  Obuma (Acuña + Gran Natural)  → ventas, márgenes, clientes, productos, MÁQUINAS
-  Autoventa pedidos (detalle)   → N° de pedidos, $ pedido, "No facturado" (Sin DTE)
-  Autoventa despachos           → entrega de máquinas, logística, devoluciones
-  Cruce: Obuma.N°DCTO = Autoventa.Num documento = Despachos.Documento
+Flujo vigente (2026-06):
+  · Gran Natural (ventas+máquinas) y Pedidos → entran por API en el PC. Aquí solo
+    se suben como RESPALDO si la API falló.
+  · Acuña (Obuma) y Despachos (Autoventa) → NO tienen API: se suben aquí.
+  Al subir despachos, el estado entregada/rechazada se sincroniza con TODAS las
+  máquinas del mes que ya estén en la base (incluidas las de Gran Natural que
+  cargó la API).
 """
 import shutil
 import tempfile
+from datetime import date
 from pathlib import Path
 
 import streamlit as st
@@ -23,12 +26,12 @@ from app.auth import es_gerencia, MESES
 ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_MENSUAL = ROOT / "data" / "mensual"
 
-# Carpeta destino y plantilla de nombre estándar (numérico AAAA_MM, escalable).
+# Carpeta destino y plantilla de nombre estándar (esquema data/mensual/<fuente>/).
 DESTINO = {
-    "acuna":     ("acuña",        "obuma_ventas_acuña_{a}_{m:02d}.xls"),
-    "gn":        ("gran_natural", "obuma_ventas_grannatural_{a}_{m:02d}.xls"),
-    "pedidos":   ("autoventa",    "pedidos_detalle_productos_{a}_{m:02d}.csv"),
-    "despachos": ("autoventa",    "detalle_despachos_{a}_{m:02d}.xlsx"),
+    "acuna":     ("acuna",        "acuna_{a}-{m:02d}.xls"),
+    "gn":        ("gran_natural", "gran_natural_{a}-{m:02d}.xls"),
+    "pedidos":   ("pedidos",      "pedidos_{a}-{m:02d}.csv"),
+    "despachos": ("despachos",    "despachos_{a}-{m:02d}.xlsx"),
 }
 
 
@@ -47,6 +50,59 @@ def _guardar_en_carpetas(anio: int, mes: int, temp_paths: dict):
         except Exception:
             pass  # entorno sin disco escribible: la verdad vive en Supabase
     return copiados
+
+
+def _rango_mes(anio: int, mes: int) -> tuple[str, str]:
+    """(primer día del mes, primer día del mes siguiente) en ISO, para filtrar."""
+    ini = date(anio, mes, 1)
+    fin = date(anio + 1, 1, 1) if mes == 12 else date(anio, mes + 1, 1)
+    return ini.isoformat(), fin.isoformat()
+
+
+def _leer_periodo(client, tabla: str, col_fecha: str, ini: str, fin: str, select: str):
+    """Lee una tabla fact filtrada por mes, paginando (bypass del límite 1000)."""
+    import pandas as pd
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        r = (client.table(tabla).select(select)
+             .gte(col_fecha, ini).lt(col_fecha, fin)
+             .range(offset, offset + _PAGE - 1).execute())
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    return pd.DataFrame(rows)
+
+
+def _sincronizar_estado_maquinas(client, anio: int, mes: int) -> dict | None:
+    """
+    Reconcilia el estado (entregada/rechazada/gestionada) de TODAS las máquinas
+    del mes contra los despachos que ya están en la base. Necesario porque las
+    máquinas de Gran Natural entran por API: al subir los despachos aquí, así
+    toman su estado de entrega. Idempotente.
+    """
+    from etl.maquinas import aplicar_estado_despachos
+    from etl.upsert import upsert_tabla
+
+    ini, fin = _rango_mes(anio, mes)
+    desp = _leer_periodo(client, "fact_despachos", "fecha_ruta", ini, fin,
+                         "documento,estado,fecha_ruta")
+    maq = _leer_periodo(client, "fact_maquinas", "fecha", ini, fin,
+                        "documento,fecha,vendedor_id,cliente_rut,tipo_mov,estado,sociedad_id")
+    if maq.empty or desp.empty:
+        return None
+
+    actualizado = aplicar_estado_despachos(maq, desp)
+    upsert_tabla(client, "fact_maquinas", actualizado,
+                 on_conflict="sociedad_id,documento,cliente_rut,tipo_mov")
+    return {
+        "maquinas": len(actualizado),
+        "entregadas": int((actualizado["estado"] == "entregada").sum()),
+        "rechazadas": int((actualizado["estado"] == "rechazada").sum()),
+        "gestionadas": int((actualizado["estado"] == "gestionada").sum()),
+    }
 
 
 def _ejecutar_carga(anio: int, mes: int, uploads: dict) -> dict:
@@ -72,10 +128,11 @@ def _ejecutar_carga(anio: int, mes: int, uploads: dict) -> dict:
     if uploads.get("gn"):
         obuma_files.append((_save("gn", uploads["gn"]), "grannatural"))
 
+    # Autoventa: pedidos y/o despachos (ya no es obligatorio subir ambos).
     av_pares = []
-    if uploads.get("pedidos") and uploads.get("despachos"):
-        pp = _save("pedidos", uploads["pedidos"])
-        dp = _save("despachos", uploads["despachos"])
+    if uploads.get("pedidos") or uploads.get("despachos"):
+        pp = _save("pedidos", uploads["pedidos"]) if uploads.get("pedidos") else None
+        dp = _save("despachos", uploads["despachos"]) if uploads.get("despachos") else None
         av_pares.append((mes, pp, dp))
 
     client = get_client()
@@ -84,6 +141,12 @@ def _ejecutar_carga(anio: int, mes: int, uploads: dict) -> dict:
     fallback = _asegurar_vendedor_sin_asignar(client)
 
     rep = procesar_carga(client, obuma_files, av_pares, mapeo, fallback)
+
+    # Si se subieron despachos, sincronizar el estado de las máquinas de TODO el
+    # mes (incluye las de Gran Natural cargadas por API).
+    if uploads.get("despachos"):
+        rep["maquinas_sync"] = _sincronizar_estado_maquinas(client, anio, mes)
+
     rep["copiados"] = _guardar_en_carpetas(anio, mes, temp_paths)
     return rep
 
@@ -99,22 +162,27 @@ def render(client, anio: int, mes: int):
         st.markdown("""
 **Sube los exports del mes y se cargan a la base de datos (Supabase).** Es
 **idempotente**: si vuelves a subir un mes ya cargado, se **actualiza** (no se
-duplica). Puedes subir solo lo que tengas; lo mínimo útil es al menos un Obuma.
+duplica). Puedes subir solo lo que tengas.
 
-| Archivo | ERP | Alimenta | Para qué sirve |
+**Lo normal:** subir **Acuña** y **Despachos** (no tienen API). *Gran Natural* y
+*Pedidos* entran solos por la API en el PC — solo súbelos aquí como **respaldo**
+si la API falló.
+
+| Archivo | ERP | Cómo entra | Para qué sirve |
 |---|---|---|---|
-| **Obuma Acuña** (`.xls`) | Obuma | `fact_ventas` (Acuña) + **máquinas** | facturación, margen, %Cumplimiento, máquinas (FL-1/2/3/4/5) |
-| **Obuma Gran Natural** (`.xls`) | Obuma | `fact_ventas` (Gran Natural) + **máquinas** | ídem, sociedad Gran Natural |
-| **Pedidos detalle** (`.csv ;`) | Autoventa | `fact_pedidos` | N° de pedidos, $ pedido vs facturado, *No facturado* (Sin DTE) |
-| **Despachos detalle** (`.xlsx`) | Autoventa | `fact_despachos` | entrega de máquinas, efectividad logística, devoluciones |
+| **Obuma Acuña** (`.xls`) | Obuma | **subir aquí** | facturación, margen, %Cumplimiento, máquinas (sociedad Acuña) |
+| **Despachos** (`.xlsx`) | Autoventa | **subir aquí** | entrega de máquinas (entregada/rechazada), devoluciones |
+| Obuma Gran Natural (`.xls`) | Obuma | API (respaldo aquí) | ventas + máquinas de Gran Natural |
+| Pedidos detalle (`.csv ;`) | Autoventa | API (respaldo aquí) | N° de pedidos, *No facturado* (Sin DTE) |
 
 **Cruce:** `Obuma.N° DCTO = Autoventa.Num documento = Despachos.Documento`.
-La máquina se marca *entregada* cuando su documento aparece como **Entregada**
-en despachos. Los vendedores nuevos que no estén en el sistema se reportan al
-final (sus ventas no se pierden: van a *Sin asignar* hasta registrarlos).
+Al subir los despachos, **todas** las máquinas del mes que ya estén en la base
+—incluidas las de Gran Natural cargadas por API— toman su estado *entregada* /
+*rechazada*. Los vendedores que no estén en el sistema van a *Sin asignar* hasta
+registrarlos (se reportan al final).
 
-> **Nombres:** no te preocupes por el nombre del archivo — al subirlo se guarda
-> con el formato estándar `…_{AAAA}_{MM}` según el período que elijas aquí.
+> **Nombres:** da igual cómo se llame el archivo descargado — lo que importa es
+> el recuadro donde lo sueltas y el período que elijas arriba.
         """)
 
     st.markdown('<div class="seccion-titulo">Período a cargar</div>',
@@ -126,27 +194,25 @@ final (sus ventas no se pierden: van a *Sin asignar* hasta registrarlos).
                            format_func=lambda m: MESES[m],
                            index=list(MESES.keys()).index(mes) if mes in MESES else 0)
 
-    st.markdown('<div class="seccion-titulo">Archivos</div>', unsafe_allow_html=True)
-    cobu1, cobu2 = st.columns(2)
-    up_acuna = cobu1.file_uploader("Obuma · Acuña (.xls)", type=["xls"], key="up_acuna")
-    up_gn    = cobu2.file_uploader("Obuma · Gran Natural (.xls)", type=["xls"], key="up_gn")
-    cav1, cav2 = st.columns(2)
-    up_ped = cav1.file_uploader("Autoventa · Pedidos detalle (.csv)", type=["csv"], key="up_ped")
-    up_des = cav2.file_uploader("Autoventa · Despachos (.xlsx)", type=["xlsx"], key="up_des")
+    st.markdown('<div class="seccion-titulo">Archivos del mes</div>', unsafe_allow_html=True)
+    st.caption("Lo habitual: Acuña + Despachos. (Gran Natural y Pedidos solo si la API falló.)")
+    cprin1, cprin2 = st.columns(2)
+    up_acuna = cprin1.file_uploader("Obuma · Acuña (.xls)", type=["xls"], key="up_acuna")
+    up_des   = cprin2.file_uploader("Autoventa · Despachos (.xlsx)", type=["xlsx"], key="up_des")
+
+    with st.expander("Respaldo: Gran Natural y Pedidos (normalmente por API)", expanded=False):
+        cresp1, cresp2 = st.columns(2)
+        up_gn  = cresp1.file_uploader("Obuma · Gran Natural (.xls)", type=["xls"], key="up_gn")
+        up_ped = cresp2.file_uploader("Autoventa · Pedidos detalle (.csv)", type=["csv"], key="up_ped")
 
     uploads = {"acuna": up_acuna, "gn": up_gn, "pedidos": up_ped, "despachos": up_des}
-    hay_obuma = bool(up_acuna or up_gn)
-    solo_uno_av = bool(up_ped) ^ bool(up_des)
+    hay_algo = any(uploads.values())
 
-    if solo_uno_av:
-        st.info("Autoventa necesita **pedidos y despachos juntos**; sube ambos o ninguno.")
-
-    deshabilitado = not hay_obuma
-    if deshabilitado:
-        st.caption("Sube al menos un archivo de Obuma (Acuña o Gran Natural) para habilitar la carga.")
+    if not hay_algo:
+        st.caption("Sube al menos un archivo para habilitar la carga.")
 
     if st.button("⬆️  Cargar a la base de datos", type="primary",
-                 use_container_width=True, disabled=deshabilitado):
+                 use_container_width=True, disabled=not hay_algo):
         with st.spinner(f"Cargando {MESES[mes_sel]} {anio_sel} a Supabase…"):
             try:
                 rep = _ejecutar_carga(anio_sel, mes_sel, uploads)
@@ -174,6 +240,14 @@ def _mostrar_reporte(rep: dict):
     m2.metric("Pedidos", f"{c['fact_pedidos']:,}".replace(",", "."))
     m3.metric("Despachos", f"{c['fact_despachos']:,}".replace(",", "."))
     m4.metric("Máquinas", f"{c['fact_maquinas']:,}".replace(",", "."))
+
+    sync = rep.get("maquinas_sync")
+    if sync:
+        st.caption(
+            f"Estado de máquinas del mes sincronizado con despachos: "
+            f"**{sync['entregadas']} entregadas**, {sync['rechazadas']} rechazadas, "
+            f"{sync['gestionadas']} gestionadas (sobre {sync['maquinas']} máquinas, "
+            f"incluye Gran Natural cargado por API).")
 
     if rep.get("por_sociedad_mes"):
         st.markdown('<div class="seccion-titulo">Detalle por sociedad y mes</div>',

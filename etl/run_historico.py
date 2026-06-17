@@ -229,9 +229,24 @@ def procesar_carga(client, obuma_files: list[tuple[Path, str]],
     """
     log_no_mapeados: list = []
 
-    # Obuma → ventas + dims
-    obuma = cargar_obuma_multi(obuma_files, mapeo_vendedor, log_no_mapeados,
-                               periodo=None, fallback_vendedor_id=fallback_id)
+    # Obuma → ventas + dims. Puede venir vacío (p.ej. carga web de solo despachos:
+    # Gran Natural ya entró por API). En ese caso se omite el bloque Obuma.
+    if obuma_files:
+        obuma = cargar_obuma_multi(obuma_files, mapeo_vendedor, log_no_mapeados,
+                                   periodo=None, fallback_vendedor_id=fallback_id)
+    else:
+        logger.info("  Sin archivos Obuma en esta carga — se omite (ventas/máquinas "
+                    "no se tocan; el estado de máquinas se sincroniza con despachos).")
+        obuma = {
+            "dim_cliente":  pd.DataFrame(columns=["cliente_rut", "razon_social",
+                                                  "comuna", "region", "tipo",
+                                                  "sociedad_id", "es_maquina"]),
+            "dim_producto": pd.DataFrame(columns=["codigo"]),
+            "fact_ventas":  pd.DataFrame(columns=["fecha", "tipo_dcto", "n_dcto",
+                                                  "producto_codigo", "cliente_rut",
+                                                  "sociedad_id", "vendedor_id"]),
+            "stats":        {"obuma_filas_raw": 0},
+        }
     fact_ventas = obuma["fact_ventas"]
 
     # Máquinas (fuente única: Obuma)
@@ -240,7 +255,8 @@ def procesar_carga(client, obuma_files: list[tuple[Path, str]],
     # Autoventa → pedidos + despachos
     pedidos_parts, despachos_parts, dimcli_av_parts = [], [], []
     for mes, pp, dp in av_pares:
-        logger.info("  Autoventa mes %02d: %s + %s", mes, pp.name, dp.name)
+        logger.info("  Autoventa mes %02d: pedidos=%s | despachos=%s", mes,
+                    pp.name if pp else "—", dp.name if dp else "—")
         av = cargar_autoventa(pp, dp, mapeo_vendedor, log_no_mapeados,
                               fallback_vendedor_id=fallback_id)
         pedidos_parts.append(av["fact_pedidos"])
@@ -273,10 +289,13 @@ def procesar_carga(client, obuma_files: list[tuple[Path, str]],
 
     # Upserts idempotentes
     logger.info("\n-- Upserts a Supabase --")
-    upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut")
-    upsert_tabla(client, "dim_producto", obuma["dim_producto"], on_conflict="codigo")
-    upsert_tabla(client, "fact_ventas", fact_ventas,
-                 on_conflict="sociedad_id,tipo_dcto,n_dcto,producto_codigo,linea")
+    if not dim_cliente.empty:
+        upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut")
+    if not obuma["dim_producto"].empty:
+        upsert_tabla(client, "dim_producto", obuma["dim_producto"], on_conflict="codigo")
+    if not fact_ventas.empty:
+        upsert_tabla(client, "fact_ventas", fact_ventas,
+                     on_conflict="sociedad_id,tipo_dcto,n_dcto,producto_codigo,linea")
     if not fact_pedidos.empty:
         upsert_tabla(client, "fact_pedidos", fact_pedidos,
                      on_conflict="sociedad_id,n_pedido,producto_codigo,linea")
