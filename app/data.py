@@ -3,6 +3,7 @@ El cliente ya trae el JWT del usuario → RLS se aplica automáticamente.
 No se recalcula ninguna métrica aquí: se leen desde las vistas de Postgres.
 """
 import pandas as pd
+from datetime import date, timedelta
 from supabase import Client
 
 
@@ -162,9 +163,20 @@ def get_calendario(client: Client, anio: int, mes: int) -> dict:
          .select("dias_totales,dias_trabajados")
          .eq("anio", anio).eq("mes", mes)
          .execute())
-    if r.data:
-        return r.data[0]
-    return {"dias_totales": 30, "dias_trabajados": 20}
+    row = r.data[0] if r.data else {"dias_totales": 30, "dias_trabajados": 20}
+
+    # Para el mes en curso, recalcular días transcurridos dinámicamente
+    # (el valor en BD queda desactualizado entre cargas del ETL)
+    hoy = date.today()
+    if anio == hoy.year and mes == hoy.month:
+        inicio = date(anio, mes, 1)
+        dias_hab = sum(
+            1 for d in range((hoy - inicio).days + 1)
+            if (inicio + timedelta(days=d)).weekday() < 5
+        )
+        row = {**row, "dias_trabajados": dias_hab}
+
+    return row
 
 
 # ── Objetivos (edición por gerencia) ────────────────────────────────────────
