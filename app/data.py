@@ -143,6 +143,36 @@ def get_maquinas(client: Client, anio: int, mes: int) -> pd.DataFrame:
     return df
 
 
+def get_maquinas_rango(client: Client, fecha_ini, fecha_fin,
+                       sociedad_ids=None) -> pd.DataFrame:
+    """
+    fact_maquinas filtrado por rango de fechas, paginado (bypass límite 1000 de
+    PostgREST). RLS aplica: el vendedor ve solo sus máquinas.
+    """
+    fi = fecha_ini.isoformat() if hasattr(fecha_ini, "isoformat") else str(fecha_ini)
+    ff = fecha_fin.isoformat() if hasattr(fecha_fin, "isoformat") else str(fecha_fin)
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        q = (client.table("fact_maquinas")
+             .select("vendedor_id,tipo_mov,estado,sociedad_id,fecha,cliente_rut,documento")
+             .gte("fecha", fi).lte("fecha", ff)
+             .range(offset, offset + _PAGE - 1))
+        if sociedad_ids:
+            q = q.in_("sociedad_id", sociedad_ids)
+        r = q.execute()
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    return df
+
+
 def get_maquinas_historico(client: Client, anio: int) -> pd.DataFrame:
     r = (client.table("fact_maquinas")
          .select("vendedor_id,tipo_mov,estado,fecha")

@@ -7,9 +7,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from app.styles import fmt_clp, fmt_num
+from app.auth import es_gerencia
 from app.data import (
     get_ventas_rango, get_dim_producto_all,
     get_dim_cliente_geo, get_dim_sociedad,
+    get_maquinas_rango, get_todos_vendedores,
 )
 
 # ─── Paleta & constantes ──────────────────────────────────────────────────────
@@ -588,6 +590,113 @@ def _s03_sucursal(df: pd.DataFrame, df_prev: pd.DataFrame):
 
 # ─── Render principal ─────────────────────────────────────────────────────────
 
+# ─── Sección 04 · Máquinas ────────────────────────────────────────────────────
+
+_TIPO_LBL = {"nueva": "Nuevas (FL-4)", "cambio": "Cambios (FL-1/3/5)",
+             "retiro": "Retiros (FL-2)"}
+_EST_LBL  = {"entregada": "Entregada", "gestionada": "Pendiente",
+             "rechazada": "Rechazada"}
+_EST_COLOR = {"Entregada": _C["verde"], "Pendiente": _C["amrl"],
+              "Rechazada": _C["rojo"]}
+
+
+def _s04_maquinas(client, f_ini, f_fin, soc_ids):
+    _sec("Máquinas (comodato)")
+    st.caption("Aplican los filtros de fecha y sociedad. La categoría no aplica a "
+               "máquinas. Fuente: Obuma (FL-x); estado de entrega cruzado con despachos.")
+
+    df = get_maquinas_rango(client, f_ini, f_fin, soc_ids)
+    if df.empty:
+        _empty()
+        return
+
+    total   = len(df)
+    nuevas  = int((df["tipo_mov"] == "nueva").sum())
+    cambios = int((df["tipo_mov"] == "cambio").sum())
+    retiros = int((df["tipo_mov"] == "retiro").sum())
+    entreg  = int((df["estado"] == "entregada").sum())
+    pend    = int((df["estado"] == "gestionada").sum())
+    rech    = int((df["estado"] == "rechazada").sum())
+    pct_ent = entreg / total if total else 0
+    conv_n  = (((df["tipo_mov"] == "nueva") & (df["estado"] == "entregada")).sum()
+               / nuevas) if nuevas else None
+
+    fila1 = "".join([
+        _kic("🧊", "Máquinas movidas", fmt_num(total), sub="en el período"),
+        _kic("✅", "Nuevas instaladas", fmt_num(nuevas), sub="FL-4 (gestionadas)"),
+        _kic("♻️", "Cambios", fmt_num(cambios), sub="FL-1 / FL-3 / FL-5"),
+        _kic("⬇️", "Retiros", fmt_num(retiros), sub="FL-2"),
+    ])
+    st.markdown(f'<div class="kpi-grid">{fila1}</div>', unsafe_allow_html=True)
+
+    fila2 = "".join([
+        _kic("📦", "Entregadas en terreno", fmt_num(entreg),
+             sub=f"{pct_ent*100:.0f}% de lo movido", color="verde"),
+        _kic("⏳", "Pendientes", fmt_num(pend), color="amarillo"),
+        _kic("✖️", "Rechazadas", fmt_num(rech), color="rojo"),
+        _kic("🔁", "Conversión nuevas→entregada",
+             f"{conv_n*100:.0f}%" if conv_n is not None else "—",
+             sub="de las nuevas, cuántas se entregaron"),
+    ])
+    st.markdown(f'<div class="kpi-grid">{fila2}</div>', unsafe_allow_html=True)
+
+    # El detalle (tabla y desglose por vendedor) es solo para gerencia.
+    if not es_gerencia():
+        return
+
+    st.divider()
+    df["tipo_lbl"]   = df["tipo_mov"].map(_TIPO_LBL).fillna(df["tipo_mov"])
+    df["estado_lbl"] = df["estado"].map(_EST_LBL).fillna(df["estado"])
+
+    c1, c2 = st.columns([45, 55])
+    with c1:
+        _sec("Movimientos por tipo y estado")
+        ct = pd.crosstab(df["tipo_lbl"], df["estado_lbl"],
+                         margins=True, margins_name="Total")
+        st.dataframe(ct, use_container_width=True)
+    with c2:
+        _sec("Estado por tipo de movimiento")
+        g = df.groupby(["tipo_lbl", "estado_lbl"]).size().reset_index(name="n")
+        fig = go.Figure()
+        for est in ["Entregada", "Pendiente", "Rechazada"]:
+            sub = g[g["estado_lbl"] == est]
+            if sub.empty:
+                continue
+            fig.add_trace(go.Bar(
+                x=sub["tipo_lbl"], y=sub["n"], name=est,
+                marker_color=_EST_COLOR.get(est, _C["slate"]),
+                text=sub["n"], textposition="inside",
+            ))
+        fig.update_layout(barmode="stack",
+                          legend=dict(orientation="h", y=-0.2),
+                          yaxis=dict(showgrid=False))
+        st.plotly_chart(_fig_base(fig), use_container_width=True)
+
+    _sec("Detalle por vendedor")
+    vend = get_todos_vendedores(client)
+    vmap = dict(zip(vend["id"], vend["nombre_canonico"])) if not vend.empty else {}
+    df["vend"] = df["vendedor_id"].map(vmap).fillna("Sin asignar")
+
+    piv = pd.crosstab(df["vend"], df["tipo_mov"])
+    for col in ("nueva", "cambio", "retiro"):
+        if col not in piv.columns:
+            piv[col] = 0
+    piv["Movidas"]    = piv[["nueva", "cambio", "retiro"]].sum(axis=1)
+    ent_v             = df[df["estado"] == "entregada"].groupby("vend").size()
+    piv["Entregadas"] = ent_v.reindex(piv.index).fillna(0).astype(int)
+    piv["% Entreg."]  = ((piv["Entregadas"] / piv["Movidas"] * 100)
+                         .round(0).fillna(0).astype(int).astype(str) + "%")
+    piv = (piv.rename(columns={"nueva": "Nuevas", "cambio": "Cambios",
+                               "retiro": "Retiros"})
+              .reset_index().rename(columns={"vend": "Vendedor"})
+              .sort_values("Movidas", ascending=False))
+    st.dataframe(
+        piv[["Vendedor", "Nuevas", "Cambios", "Retiros",
+             "Entregadas", "% Entreg.", "Movidas"]],
+        use_container_width=True, hide_index=True,
+    )
+
+
 def render(client, anio: int, mes: int):
     f_ini, f_fin, soc_ids, cats_sel, df_prod_dim = _page_filters(
         client, anio, mes
@@ -595,20 +704,26 @@ def render(client, anio: int, mes: int):
     if f_ini is None:
         return
 
-    with st.spinner("Cargando datos…"):
-        df_raw, df_prev_raw = _load_pair(client, f_ini, f_fin, soc_ids)
-        df_geo = get_dim_cliente_geo(client)
+    tab_ventas, tab_maquinas = st.tabs(["📊 Ventas", "🧊 Máquinas"])
 
-    df      = _enrich(df_raw,      df_prod_dim, df_geo, cats_sel)
-    df_prev = _enrich(df_prev_raw, df_prod_dim, df_geo, cats_sel)
+    with tab_ventas:
+        with st.spinner("Cargando datos…"):
+            df_raw, df_prev_raw = _load_pair(client, f_ini, f_fin, soc_ids)
+            df_geo = get_dim_cliente_geo(client)
 
-    n_dias  = (f_fin - f_ini).days + 1
-    cat_lbl = f" · Categorías: {', '.join(cats_sel)}" if cats_sel else ""
-    st.caption(
-        f"📅 {f_ini.strftime('%d/%m/%Y')} → {f_fin.strftime('%d/%m/%Y')}"
-        f" · {n_dias} día(s){cat_lbl}"
-    )
+        df      = _enrich(df_raw,      df_prod_dim, df_geo, cats_sel)
+        df_prev = _enrich(df_prev_raw, df_prod_dim, df_geo, cats_sel)
 
-    _s01_productos(df, df_prev)
-    _s02_geografico(df, df_prev, f_ini, f_fin)
-    _s03_sucursal(df, df_prev)
+        n_dias  = (f_fin - f_ini).days + 1
+        cat_lbl = f" · Categorías: {', '.join(cats_sel)}" if cats_sel else ""
+        st.caption(
+            f"📅 {f_ini.strftime('%d/%m/%Y')} → {f_fin.strftime('%d/%m/%Y')}"
+            f" · {n_dias} día(s){cat_lbl}"
+        )
+
+        _s01_productos(df, df_prev)
+        _s02_geografico(df, df_prev, f_ini, f_fin)
+        _s03_sucursal(df, df_prev)
+
+    with tab_maquinas:
+        _s04_maquinas(client, f_ini, f_fin, soc_ids)
