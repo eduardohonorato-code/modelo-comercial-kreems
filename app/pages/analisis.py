@@ -34,6 +34,20 @@ _H = 330
 MESES_C = {1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
            7: "Jul", 8: "Ago", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"}
 
+# Unificación de categorías duplicadas (el mismo producto venía en dos nombres).
+# Claves en MAYÚSCULAS; lo no listado pasa igual.
+_CAT_CANON = {
+    "HELADOS PALETAS":   "PALETAS",
+    "HELADOS BACHA":     "BACHA",
+    "HELADOS POTE":      "POTE",
+    "HELADOS MULTIPACK": "MULTIPACK",
+}
+
+
+def _canon_cat(c) -> str:
+    cu = str(c).upper().strip()
+    return _CAT_CANON.get(cu, cu)
+
 
 # ─── Helpers UI ───────────────────────────────────────────────────────────────
 
@@ -115,10 +129,9 @@ def _page_filters(client, anio: int, mes: int):
 
     cats_all: list = []
     if not df_prod_dim.empty and "categoria" in df_prod_dim.columns:
-        cats_all = sorted(
-            df_prod_dim["categoria"]
-            .dropna().str.upper().str.strip().unique().tolist()
-        )
+        cats_all = sorted({
+            _canon_cat(c) for c in df_prod_dim["categoria"].dropna().tolist()
+        })
 
     _sec("🔍 Filtros")
     c1, c2, c3, c4, c5 = st.columns([1.9, 1.9, 1.9, 3.5, 1.2])
@@ -177,14 +190,15 @@ def _enrich(df: pd.DataFrame, df_prod_dim: pd.DataFrame,
               .rename(columns={"codigo": "producto_codigo"})
               [["producto_codigo", "nombre", "categoria",
                 "subcategoria", "fabricante"]])
-        dp["categoria"] = dp["categoria"].fillna("SIN CATEGORIA").str.upper().str.strip()
+        dp["categoria"] = (dp["categoria"].fillna("SIN CATEGORIA")
+                           .map(_canon_cat))
         df = df.merge(dp, on="producto_codigo", how="left")
 
     if "categoria" not in df.columns:
         df["categoria"] = "SIN CATEGORIA"
     if "nombre" not in df.columns:
         df["nombre"] = df.get("producto_codigo", "?")
-    df["categoria"] = df["categoria"].fillna("SIN CATEGORIA")
+    df["categoria"] = df["categoria"].fillna("SIN CATEGORIA").map(_canon_cat)
 
     # Las líneas de categoría "Servicios" (ej. SER-1 "Servicios de
     # almacenamiento") SÍ son ingreso real facturado y deben sumar en
@@ -760,6 +774,196 @@ de Autoventa, cruzando por número de documento:
     )
 
 
+# ─── Sección 05 · Productos a fondo ───────────────────────────────────────────
+
+def _anio_ventas(client, year, soc_ids, df_prod_dim):
+    """Ventas del año enriquecidas (categoría canónica + nombre), para tendencias."""
+    dy = get_ventas_rango(client, datetime.date(year, 1, 1),
+                          datetime.date(year, 12, 31), soc_ids)
+    if dy.empty:
+        return dy
+    dp = (df_prod_dim.rename(columns={"codigo": "producto_codigo"})
+          [["producto_codigo", "nombre", "categoria", "subcategoria"]].copy())
+    dp["categoria"] = dp["categoria"].fillna("SIN CATEGORIA").map(_canon_cat)
+    dy = dy.merge(dp, on="producto_codigo", how="left")
+    dy["categoria"] = dy["categoria"].fillna("SIN CATEGORIA").map(_canon_cat)
+    dy["fecha"]   = pd.to_datetime(dy["fecha"], errors="coerce")
+    dy["mes_num"] = dy["fecha"].dt.month
+    if "cantidad" in dy.columns:
+        dy.loc[dy["categoria"] == "SERVICIOS", "cantidad"] = 0
+    return dy
+
+
+def _subcats_utiles(serie) -> pd.Series:
+    """Subcategorías legibles (descarta vacíos, '0', 'nan' y códigos numéricos)."""
+    s = serie.dropna().astype(str).str.strip()
+    s = s[(s != "") & (s != "0") & (s.str.lower() != "nan")]
+    return s[~s.str.match(r"^\d+$")]
+
+
+def _s05_productos_fondo(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim):
+    _sec("Productos a fondo")
+    if df_all.empty:
+        _empty()
+        return
+
+    venta_total = _fact_nc(df_all)
+    cli_total   = df_all["cliente_rut"].nunique() if "cliente_rut" in df_all else 0
+
+    excl = {"SERVICIOS", "MAQUINAS", "SIN CATEGORIA"}
+    cats = [c for c in sorted(df_all["categoria"].dropna().unique()) if c not in excl]
+    if not cats:
+        _empty()
+        return
+    default_ix = cats.index("PALETAS") if "PALETAS" in cats else 0
+    cat_sel = st.selectbox("Categoría a analizar", cats, index=default_ix, key="pf_cat")
+
+    sub = df_all[df_all["categoria"] == cat_sel].copy()
+    if sub.empty:
+        _empty()
+        return
+
+    venta = _fact_nc(sub)
+    pct   = venta / venta_total if venta_total else 0
+    nsku  = int(sub["producto_codigo"].nunique())
+    uds   = int(sub["cantidad"].sum()) if "cantidad" in sub else 0
+    ncli  = int(sub["cliente_rut"].nunique()) if "cliente_rut" in sub else 0
+    pen   = ncli / cli_total if cli_total else 0
+
+    kpis = "".join([
+        _kic("💰", f"Venta {cat_sel.title()}", fmt_clp(venta),
+             sub=f"{pct*100:.1f}% del total"),
+        _kic("🏷️", "SKUs activos", fmt_num(nsku)),
+        _kic("🔢", "Unidades", fmt_num(uds)),
+        _kic("🛒", "Clientes que la compran", fmt_num(ncli),
+             sub=f"{pen*100:.0f}% de los activos"),
+    ])
+    st.markdown(f'<div class="kpi-grid">{kpis}</div>', unsafe_allow_html=True)
+
+    agg = (sub.groupby(["producto_codigo", "nombre"])
+              .agg(venta=("neto", "sum"), uds=("cantidad", "sum"))
+              .reset_index().sort_values("venta", ascending=False))
+
+    c1, c2 = st.columns([58, 42])
+    with c1:
+        _sec(f"Mejores SKUs · {cat_sel.title()}")
+        top = agg.head(12).copy()
+        top["lbl"] = top["nombre"].astype(str).str[:34].str.strip()
+        fig = go.Figure(go.Bar(
+            x=top["venta"], y=top["lbl"], orientation="h",
+            marker_color=_C["chart"], text=top["venta"].apply(fmt_clp),
+            textposition="inside", insidetextanchor="end",
+            textfont=dict(size=9, color="white"),
+        ))
+        fig.update_layout(xaxis=dict(showticklabels=False, showgrid=False),
+                          yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
+                          bargap=0.25)
+        st.plotly_chart(_fig_base(fig, 360), use_container_width=True)
+    with c2:
+        sub["subcat"] = (sub["subcategoria"].astype(str).str.strip()
+                         if "subcategoria" in sub else "")
+        scs = _subcats_utiles(sub["subcat"])
+        if scs.nunique() >= 2:
+            _sec("Mix por subcategoría")
+            valid = sub[sub["subcat"].isin(scs.unique())]
+            mix = (valid.groupby("subcat")["neto"].sum()
+                        .sort_values(ascending=False))
+            fig2 = go.Figure(go.Pie(labels=mix.index, values=mix.values,
+                                    hole=0.5, marker_colors=_PALETA))
+            fig2.update_traces(textinfo="label+percent", textfont_size=10)
+            st.plotly_chart(_fig_base(fig2, 360), use_container_width=True)
+        else:
+            _sec("Concentración (Pareto)")
+            par = agg[agg["venta"] > 0].reset_index(drop=True)
+            if par.empty:
+                _empty()
+            else:
+                par["acum"] = par["venta"].cumsum() / par["venta"].sum() * 100
+                n80 = int((par["acum"] <= 80).sum()) + 1
+                fig2 = go.Figure(go.Scatter(y=par["acum"], mode="lines+markers",
+                                            line=dict(color=_C["chart"], width=2)))
+                fig2.add_hline(y=80, line_dash="dash", line_color=_C["amrl"])
+                fig2.update_layout(yaxis=dict(title="% acum.", range=[0, 105]),
+                                   xaxis=dict(title="N° de SKUs"))
+                st.plotly_chart(_fig_base(fig2, 360), use_container_width=True)
+                st.caption(f"**{n80} de {nsku} SKUs** hacen el 80% de la venta.")
+
+    # Tabla de SKUs
+    _sec("Detalle de SKUs")
+    tbl = agg.copy()
+    tbl["% cat."] = ((tbl["venta"] / venta * 100).round(1).astype(str) + "%"
+                     if venta else "—")
+    tbl["Venta"] = tbl["venta"].apply(fmt_clp)
+    tbl["Uds"]   = tbl["uds"].apply(lambda x: fmt_num(int(x or 0)))
+    tbl = tbl.rename(columns={"producto_codigo": "Código", "nombre": "Producto"})
+    st.dataframe(tbl[["Código", "Producto", "Venta", "Uds", "% cat."]],
+                 use_container_width=True, hide_index=True)
+
+    # Tendencia mensual del año
+    _sec(f"Tendencia mensual {f_fin.year} · {cat_sel.title()}")
+    with st.spinner("Cargando tendencia del año…"):
+        dy = _anio_ventas(client, f_fin.year, soc_ids, df_prod_dim)
+    if not dy.empty:
+        serie = dy[dy["categoria"] == cat_sel].groupby("mes_num")["neto"].sum()
+        mm = sorted(serie.index)
+        if mm:
+            fig3 = go.Figure(go.Scatter(
+                x=[MESES_C[m] for m in mm], y=[float(serie[m]) for m in mm],
+                mode="lines+markers", line=dict(color=_C["chart"], width=2),
+                fill="tozeroy"))
+            fig3.update_layout(yaxis=dict(showgrid=False))
+            st.plotly_chart(_fig_base(fig3, 300), use_container_width=True)
+
+    # ── Foco producto nuevo: Galletas ─────────────────────────────────────────
+    st.divider()
+    _sec("🆕 Producto nuevo · Galletas")
+    gal = dy[dy["categoria"] == "GALLETAS"] if not dy.empty else pd.DataFrame()
+    if gal.empty:
+        st.info("Aún no hay ventas de Galletas registradas este año.")
+        return
+
+    g_venta = float(gal["neto"].sum())
+    g_uds   = int(gal["cantidad"].sum()) if "cantidad" in gal else 0
+    g_cli   = int(gal["cliente_rut"].nunique())
+    cli_yr  = dy["cliente_rut"].nunique() if not dy.empty else 0
+    g_pen   = g_cli / cli_yr if cli_yr else 0
+    g_sku   = int(gal["producto_codigo"].nunique())
+
+    kg = "".join([
+        _kic("🍪", "Venta Galletas (año)", fmt_clp(g_venta)),
+        _kic("👥", "Clientes que la compran", fmt_num(g_cli),
+             sub=f"{g_pen*100:.0f}% de la cartera activa"),
+        _kic("🏷️", "SKUs vendidos", f"{g_sku} / 9"),
+        _kic("🔢", "Unidades (año)", fmt_num(g_uds)),
+    ])
+    st.markdown(f'<div class="kpi-grid">{kg}</div>', unsafe_allow_html=True)
+
+    cga, cgb = st.columns(2)
+    with cga:
+        _sec("Adopción mensual")
+        sg = gal.groupby("mes_num")["neto"].sum()
+        mg = sorted(sg.index)
+        figg = go.Figure(go.Bar(x=[MESES_C[m] for m in mg],
+                                y=[float(sg[m]) for m in mg],
+                                marker_color=_C["violeta"],
+                                text=[fmt_clp(sg[m]) for m in mg],
+                                textposition="outside", textfont=dict(size=9)))
+        figg.update_layout(yaxis=dict(showgrid=False))
+        st.plotly_chart(_fig_base(figg, 300), use_container_width=True)
+    with cgb:
+        _sec("Ranking de galletas")
+        ag = (gal.groupby("nombre")["neto"].sum()
+                 .sort_values(ascending=False).head(9))
+        figh = go.Figure(go.Bar(
+            x=ag.values, y=[str(n)[:30] for n in ag.index], orientation="h",
+            marker_color=_C["violeta"], text=[fmt_clp(v) for v in ag.values],
+            textposition="inside", insidetextanchor="end",
+            textfont=dict(size=9, color="white")))
+        figh.update_layout(xaxis=dict(showticklabels=False, showgrid=False),
+                           yaxis=dict(autorange="reversed", tickfont=dict(size=9)))
+        st.plotly_chart(_fig_base(figh, 300), use_container_width=True)
+
+
 def render(client, anio: int, mes: int):
     f_ini, f_fin, soc_ids, cats_sel, df_prod_dim = _page_filters(
         client, anio, mes
@@ -767,16 +971,21 @@ def render(client, anio: int, mes: int):
     if f_ini is None:
         return
 
-    tab_ventas, tab_maquinas = st.tabs(["📊 Ventas", "🧊 Máquinas"])
+    with st.spinner("Cargando datos…"):
+        df_raw, df_prev_raw = _load_pair(client, f_ini, f_fin, soc_ids)
+        df_geo = get_dim_cliente_geo(client)
+
+    # df_all = todo el período sin filtro de categoría (lo usa "Productos a fondo",
+    # que tiene su propio selector). df = aplica el filtro global de categoría.
+    df_all  = _enrich(df_raw, df_prod_dim, df_geo, [])
+    df      = df_all if not cats_sel else df_all[df_all["categoria"].isin(cats_sel)].copy()
+    df_prev = _enrich(df_prev_raw, df_prod_dim, df_geo, cats_sel)
+
+    tab_ventas, tab_maquinas, tab_prod = st.tabs(
+        ["📊 Ventas", "🧊 Máquinas", "🔬 Productos a fondo"]
+    )
 
     with tab_ventas:
-        with st.spinner("Cargando datos…"):
-            df_raw, df_prev_raw = _load_pair(client, f_ini, f_fin, soc_ids)
-            df_geo = get_dim_cliente_geo(client)
-
-        df      = _enrich(df_raw,      df_prod_dim, df_geo, cats_sel)
-        df_prev = _enrich(df_prev_raw, df_prod_dim, df_geo, cats_sel)
-
         n_dias  = (f_fin - f_ini).days + 1
         cat_lbl = f" · Categorías: {', '.join(cats_sel)}" if cats_sel else ""
         st.caption(
@@ -790,3 +999,6 @@ def render(client, anio: int, mes: int):
 
     with tab_maquinas:
         _s04_maquinas(client, f_ini, f_fin, soc_ids)
+
+    with tab_prod:
+        _s05_productos_fondo(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim)
