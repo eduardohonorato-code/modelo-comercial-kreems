@@ -16,7 +16,9 @@
 -- agregar una tabla de feriados y restarlos aquí.
 -- ============================================================================
 
-drop view if exists public.v_resumen_vendedor_mes;
+-- NO usar DROP: la vista v_comision_vendedor_mes depende de esta. Como NO se
+-- cambian columnas (mismos nombres/orden/tipo, solo el origen de dias_trabajados),
+-- CREATE OR REPLACE basta y deja intacta la vista dependiente.
 create or replace view public.v_resumen_vendedor_mes
 with (security_invoker = true) as
 with ventas as (
@@ -70,7 +72,7 @@ select
   coalesce(ve.monto_facturas, 0)                                     as monto_facturas,
   coalesce(ve.monto_notas_credito, 0)                                as monto_notas_credito,
   -- Días hábiles efectivos: dinámicos para el mes en curso (ver dt), guardados si no.
-  dt.dias_trab_efectivo                                              as dias_trabajados,
+  dt.dias_trab_efectivo::smallint                                    as dias_trabajados,
   cal.dias_totales,
   -- Proyección lineal a cierre = (Fact-NC / días_trabajados) * días_totales
   case when dt.dias_trab_efectivo > 0
