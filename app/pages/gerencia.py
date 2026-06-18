@@ -160,10 +160,9 @@ def render(client, anio: int, mes: int):
                 <li><strong>Entregadas</strong> = de esas máquinas, las que figuran como
                     <strong>"Entregada"</strong> en el <em>Detalle de despachos</em> (Autoventa),
                     cruzando por N° de documento. Mide la conversión gestionada → entregada.</li>
-                <li><strong>Retiros</strong> = retiros por término: líneas con código
-                    <strong>FL-2</strong> en Obuma.</li>
-                <li>Los <em>cambios</em> de máquina (FL-1 / FL-3 / FL-5) se registran pero no se
-                    muestran como columna.</li>
+                <li>Esta tabla muestra solo <strong>Gestionadas</strong> y <strong>Entregadas</strong>.
+                    Los <strong>retiros</strong> (FL-2), los <em>cambios</em> (FL-1/3/5) y el detalle
+                    por estado se ven en <strong>Análisis → Máquinas</strong>.</li>
                 <li><strong>Fuente única = Obuma</strong> (cubre Acuña y Gran Natural y los 5 códigos
                     FL). El estado <em>entregada/rechazada</em> se completa al cargar los despachos;
                     sin despacho, la máquina queda <em>gestionada</em>. Si un mes muestra 0
@@ -207,7 +206,6 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
         "<th title='Objetivo de máquinas'>Obj Maq</th>"
         "<th title='Máquinas gestionadas (FL-4)'>Gestionadas</th>"
         "<th title='Máquinas entregadas'>Entregadas</th>"
-        "<th title='Retiros (FL-2)'>Retiros</th>"
         "<th title='Objetivo de visitas'>Obj Visitas</th>"
         "<th title='Número de documentos emitidos'>N° Docs</th>"
         "<th title='% Efectividad (docs / obj visitas)'>% Efec</th>"
@@ -233,7 +231,6 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
           <td>{fmt_num(r.get('obj_maquinas'))}</td>
           <td>{fmt_num(r.get('maquinas_gestionadas'))}</td>
           <td>{fmt_num(r.get('maquinas_entregadas'))}</td>
-          <td>{fmt_num(r.get('maquinas_retiros'))}</td>
           <td>{fmt_num(r.get('obj_visitas'))}</td>
           <td>{fmt_num(r.get('n_documentos'))}</td>
           <td class='{cls_e}'>{fmt_pct(pct_e)}</td>
@@ -269,7 +266,6 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
       <td>{fmt_num(df['obj_maquinas'].sum())}</td>
       <td>{fmt_num(df['maquinas_gestionadas'].sum())}</td>
       <td>{fmt_num(df['maquinas_entregadas'].sum())}</td>
-      <td>{fmt_num(df['maquinas_retiros'].sum())}</td>
       <td>{fmt_num(df['obj_visitas'].sum())}</td>
       <td>{fmt_num(df['n_documentos'].sum())}</td>
       <td></td>

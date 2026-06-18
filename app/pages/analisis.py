@@ -645,6 +645,37 @@ def _s04_maquinas(client, f_ini, f_fin, soc_ids):
         return
 
     st.divider()
+
+    # ── Evolución mensual del año (nuevas vs retiros + neto) ──────────────────
+    _sec(f"Evolución mensual {f_fin.year} · Nuevas vs Retiros")
+    dfa = get_maquinas_rango(client, datetime.date(f_fin.year, 1, 1),
+                             datetime.date(f_fin.year, 12, 31), soc_ids)
+    if dfa.empty:
+        _empty()
+    else:
+        dfa["mes_num"] = dfa["fecha"].dt.month
+        piv_m = dfa.pivot_table(index="mes_num", columns="tipo_mov",
+                                aggfunc="size", fill_value=0)
+        for col in ("nueva", "retiro"):
+            if col not in piv_m.columns:
+                piv_m[col] = 0
+        meses = sorted(piv_m.index)
+        x_lbl = [MESES_C[m] for m in meses]
+        neto  = (piv_m.loc[meses, "nueva"] - piv_m.loc[meses, "retiro"]).tolist()
+        fig_ev = go.Figure()
+        fig_ev.add_trace(go.Bar(x=x_lbl, y=piv_m.loc[meses, "nueva"].tolist(),
+                                name="Nuevas (FL-4)", marker_color=_C["verde"]))
+        fig_ev.add_trace(go.Bar(x=x_lbl, y=piv_m.loc[meses, "retiro"].tolist(),
+                                name="Retiros (FL-2)", marker_color=_C["rojo"]))
+        fig_ev.add_trace(go.Scatter(x=x_lbl, y=neto, name="Neto (nuevas − retiros)",
+                                    mode="lines+markers",
+                                    line=dict(color=_C["azul"], width=2)))
+        fig_ev.update_layout(barmode="group", yaxis=dict(showgrid=False),
+                             legend=dict(orientation="h", y=-0.2))
+        st.plotly_chart(_fig_base(fig_ev), use_container_width=True)
+        st.caption("El **neto** (nuevas − retiros) es el crecimiento del parque de "
+                   "máquinas: positivo = más máquinas en calle.")
+
     df["tipo_lbl"]   = df["tipo_mov"].map(_TIPO_LBL).fillna(df["tipo_mov"])
     df["estado_lbl"] = df["estado"].map(_EST_LBL).fillna(df["estado"])
 
