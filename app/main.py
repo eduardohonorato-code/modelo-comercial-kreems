@@ -101,6 +101,7 @@ def sidebar():
         else:
             nav_items.append(("vendedor", "👤", "Mi Panel"))
         nav_items.append(("analisis", "📈", "Análisis"))
+        nav_items.append(("clientes", "🧾", "Clientes"))
         if es_gerencia():
             nav_items.append(("comisiones", "💰", "Comisiones"))
             nav_items.append(("carga",  "📤", "Carga de archivos"))
@@ -351,7 +352,7 @@ def main():
     with (st.spinner("Cargando tu panel…") if (primera or cambio)
           else contextlib.nullcontext()):
         from app.pages import (vendedor, gerencia, analisis, carga,
-                                inicio, admin, comisiones)
+                                inicio, admin, comisiones, clientes)
 
         client    = get_client_auth()
         nombre_mes     = MESES[mes]
@@ -376,6 +377,10 @@ def main():
         elif pagina == "analisis":
             st.markdown(f"## 📈 Análisis — {nombre_mes} {anio}")
             analisis.render(client, anio, mes)
+
+        elif pagina == "clientes":
+            st.markdown(f"## 🧾 Clientes — {nombre_mes} {anio}")
+            clientes.render(client, anio, mes)
 
         elif pagina == "comisiones":
             if not es_gerencia():

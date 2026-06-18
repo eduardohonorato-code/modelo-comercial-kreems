@@ -339,6 +339,56 @@ def get_dim_sociedad(client: Client) -> pd.DataFrame:
     return pd.DataFrame(r.data) if r.data else pd.DataFrame()
 
 
+def get_dim_cliente_full(client: Client) -> pd.DataFrame:
+    """dim_cliente con datos descriptivos (para enriquecer el ranking de clientes)."""
+    r = client.table("dim_cliente").select(
+        "rut,razon_social,comuna,region,tipo"
+    ).execute()
+    return pd.DataFrame(r.data) if r.data else pd.DataFrame()
+
+
+def get_top_clientes(client: Client, anio: int, mes: int,
+                     sociedad_ids=None) -> pd.DataFrame:
+    """
+    Ranking de clientes por Fact-NC en el mes. RLS aplica: un vendedor solo
+    ve sus clientes; gerencia ve todos. Reusa get_ventas_rango (paginado) para
+    no quedar corto por el límite de 1000 filas de PostgREST.
+
+    Devuelve, por cliente_rut: fact_nc (neto, NC ya negativas), n_facturas
+    (facturas distintas) y los datos descriptivos de dim_cliente. Ordenado
+    de mayor a menor Fact-NC.
+    """
+    import calendar as _cal
+    ultimo = _cal.monthrange(anio, mes)[1]
+    fini, ffin = f"{anio}-{mes:02d}-01", f"{anio}-{mes:02d}-{ultimo:02d}"
+    df = get_ventas_rango(client, fini, ffin, sociedad_ids)
+    if df.empty:
+        return pd.DataFrame()
+
+    df["neto"] = pd.to_numeric(df["neto"], errors="coerce").fillna(0)
+    es_factura = df["tipo_dcto"].str.contains("factura", case=False, na=False)
+
+    agg = (df.groupby("cliente_rut", dropna=False)
+             .agg(fact_nc=("neto", "sum"))
+             .reset_index())
+    nfac = (df[es_factura].groupby("cliente_rut")["n_dcto"]
+              .nunique().reset_index(name="n_facturas"))
+    agg = agg.merge(nfac, on="cliente_rut", how="left")
+    agg["n_facturas"] = agg["n_facturas"].fillna(0).astype(int)
+
+    # Enriquecer con datos del cliente
+    dfc = get_dim_cliente_full(client)
+    if not dfc.empty:
+        agg = agg.merge(dfc.rename(columns={"rut": "cliente_rut"}),
+                        on="cliente_rut", how="left")
+    for col in ["razon_social", "comuna", "region", "tipo"]:
+        if col not in agg.columns:
+            agg[col] = None
+    agg["razon_social"] = agg["razon_social"].fillna(agg["cliente_rut"])
+
+    return agg.sort_values("fact_nc", ascending=False).reset_index(drop=True)
+
+
 # ── Comisiones (sección Sueldos y Comisiones — solo gerencia) ───────────────
 
 def get_comisiones(client: Client, anio: int, mes: int) -> pd.DataFrame:
