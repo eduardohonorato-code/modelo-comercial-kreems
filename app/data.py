@@ -53,6 +53,7 @@ def get_pedidos_resumen(client: Client, anio: int, mes: int) -> pd.DataFrame:
              .select("vendedor_id,neto,doc_venta,fecha")
              .gte("fecha", fecha_ini)
              .lt("fecha", fecha_fin)
+             .order("id")
              .range(offset, offset + _PAGE - 1)
              .execute())
         if not r.data:
@@ -156,6 +157,7 @@ def get_maquinas_rango(client: Client, fecha_ini, fecha_fin,
         q = (client.table("fact_maquinas")
              .select("vendedor_id,tipo_mov,estado,sociedad_id,fecha,cliente_rut,documento")
              .gte("fecha", fi).lte("fecha", ff)
+             .order("id")
              .range(offset, offset + _PAGE - 1))
         if sociedad_ids:
             q = q.in_("sociedad_id", sociedad_ids)
@@ -296,6 +298,7 @@ def get_ventas_rango(client: Client, fecha_ini, fecha_fin, sociedad_ids=None) ->
                      "sociedad_id,sucursal,vendedor_id,cantidad,neto,costo,margen")
              .gte("fecha", str(fecha_ini))
              .lte("fecha", str(fecha_fin))
+             .order("id")
              .range(offset, offset + _PAGE - 1))
         if sociedad_ids:
             q = q.in_("sociedad_id", sociedad_ids)
@@ -485,6 +488,7 @@ def get_ventas_detalle_doc(client: Client, anio: int, mes: int) -> pd.DataFrame:
         r = (client.table("fact_ventas")
              .select("vendedor_id,n_dcto,tipo_dcto,fecha,cliente_rut,neto")
              .gte("fecha", fini).lte("fecha", ffin)
+             .order("id")
              .range(offset, offset + _PAGE - 1).execute())
         if not r.data:
             break

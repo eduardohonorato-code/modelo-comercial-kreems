@@ -66,6 +66,7 @@ def _leer_periodo(client, tabla: str, col_fecha: str, ini: str, fin: str, select
     while True:
         r = (client.table(tabla).select(select)
              .gte(col_fecha, ini).lt(col_fecha, fin)
+             .order("id")
              .range(offset, offset + _PAGE - 1).execute())
         if not r.data:
             break

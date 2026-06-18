@@ -794,6 +794,20 @@ def _anio_ventas(client, year, soc_ids, df_prod_dim):
     return dy
 
 
+def _anio_ventas_cached(client, year, soc_ids, df_prod_dim):
+    """
+    Cachea la data anual en session_state para que cambiar de categoría no
+    re-consulte las decenas de miles de filas del año. RLS-safe: session_state es
+    por usuario/sesión. Se re-consulta solo si cambia el año o la sociedad.
+    """
+    params = (year, tuple(soc_ids) if soc_ids else None)
+    cache = st.session_state.get("_anal_yr_ventas")
+    if not cache or cache[0] != params:
+        st.session_state["_anal_yr_ventas"] = (
+            params, _anio_ventas(client, year, soc_ids, df_prod_dim))
+    return st.session_state["_anal_yr_ventas"][1]
+
+
 def _subcats_utiles(serie) -> pd.Series:
     """Subcategorías legibles (descarta vacíos, '0', 'nan' y códigos numéricos)."""
     s = serie.dropna().astype(str).str.strip()
@@ -902,7 +916,7 @@ def _s05_productos_fondo(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim):
     # Tendencia mensual del año
     _sec(f"Tendencia mensual {f_fin.year} · {cat_sel.title()}")
     with st.spinner("Cargando tendencia del año…"):
-        dy = _anio_ventas(client, f_fin.year, soc_ids, df_prod_dim)
+        dy = _anio_ventas_cached(client, f_fin.year, soc_ids, df_prod_dim)
     if not dy.empty:
         serie = dy[dy["categoria"] == cat_sel].groupby("mes_num")["neto"].sum()
         mm = sorted(serie.index)
