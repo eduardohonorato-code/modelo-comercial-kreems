@@ -340,15 +340,19 @@ def main():
     if "pagina" not in st.session_state:
         st.session_state.pagina = "inicio"
 
-    # Imports diferidos: solo al estar autenticado. La primera vez tardan unos
-    # segundos (plotly/data) → se muestra un spinner "Cargando tu panel…".
+    # Sidebar primero (es liviano y fija la página al hacer clic en nav).
+    anio, mes = sidebar()
+    pagina    = st.session_state.get("pagina", "inicio")
+
+    # Spinner "Cargando…" en la primera carga Y al cambiar de página (cubre los
+    # imports diferidos + la carga de datos, evita ver el contenido viejo mezclado).
     primera = not st.session_state.get("_panel_listo")
-    with (st.spinner("Cargando tu panel…") if primera else contextlib.nullcontext()):
+    cambio  = st.session_state.get("_pagina_render") != pagina
+    with (st.spinner("Cargando tu panel…") if (primera or cambio)
+          else contextlib.nullcontext()):
         from app.pages import (vendedor, gerencia, analisis, carga,
                                 inicio, admin, comisiones)
 
-        anio, mes = sidebar()
-        pagina    = st.session_state.get("pagina", "inicio")
         client    = get_client_auth()
         nombre_mes     = MESES[mes]
         nombre_usuario = st.session_state.get("vendedor_nombre", "")
@@ -394,7 +398,8 @@ def main():
             st.markdown("## ⚙️ Administración de Usuarios")
             admin.render()
 
-    st.session_state["_panel_listo"] = True
+    st.session_state["_panel_listo"]   = True
+    st.session_state["_pagina_render"] = pagina
 
 
 if __name__ == "__main__":

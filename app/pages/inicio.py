@@ -113,6 +113,11 @@ def _render_kpis(df: pd.DataFrame, cal: dict, pct_anterior):
     ritmo    = pct_dias * obj_total
     brecha   = fact_nc - obj_total
 
+    # Proyección a cierre (lineal) y su % vs objetivo (mismo criterio que la vista)
+    proy_total = (fact_nc / dias_t * dias_tot) if dias_t else None
+    pct_proy   = (proy_total / obj_total) if (proy_total is not None and obj_total) else None
+    proy_cls   = _cls_semaforo(pct_proy)
+
     # Delta vs mes anterior
     if pct_anterior is not None and pct_cumpl is not None:
         delta_pp  = (pct_cumpl - pct_anterior) * 100
@@ -156,6 +161,15 @@ def _render_kpis(df: pd.DataFrame, cal: dict, pct_anterior):
           <div class="kic-label">Cumplimiento Total</div>
           <div class="kic-value {cumpl_cls}">{fmt_pct(pct_cumpl)}</div>
           <div class="kic-delta {delta_cls}">{delta_txt}</div>
+        </div>
+      </div>
+
+      <div class="kpi-icon-card" style="border-left-color:{_color_semaforo(pct_proy)}">
+        <div class="kic-icon">🔮</div>
+        <div class="kic-body">
+          <div class="kic-label">% Proyección</div>
+          <div class="kic-value {proy_cls}">{fmt_pct(pct_proy)}</div>
+          <div class="kic-sub">Proyectado a fin de mes</div>
         </div>
       </div>
 
