@@ -6,7 +6,7 @@ import pandas as pd
 from app.styles import fmt_clp, fmt_pct, fmt_num, color_pct
 from app.data import (get_resumen, get_pedidos_resumen, get_calendario,
                       get_todos_vendedores, get_objetivos, upsert_objetivo,
-                      get_ultima_factura, get_comision_entradas)
+                      get_ultima_factura)
 
 MESES = {
     1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",5:"Mayo",6:"Junio",
@@ -35,20 +35,11 @@ def render(client, anio: int, mes: int):
     else:
         df["pedidos_neto"] = None
 
-    # Merge con cartera de clientes asignados (entrada manual de comisiones)
-    dfcart = get_comision_entradas(client, anio, mes)
-    if not dfcart.empty and "cartera_clientes" in dfcart.columns:
-        df = df.merge(dfcart[["vendedor_id", "cartera_clientes"]],
-                      on="vendedor_id", how="left")
-    else:
-        df["cartera_clientes"] = None
-
     # Convertir tipos
     for col in ["fact_nc","monto_facturas","monto_notas_credito","proyeccion_cierre",
                 "obj_venta","no_facturado_monto","pedidos_neto",
                 "maquinas_gestionadas","maquinas_entregadas","maquinas_retiros",
-                "obj_maquinas","obj_visitas","n_documentos","n_facturas","n_notas_credito",
-                "cartera_clientes"]:
+                "obj_maquinas","obj_visitas","n_documentos","n_facturas","n_notas_credito"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
@@ -181,9 +172,6 @@ def render(client, anio: int, mes: int):
                  las facturas/NC de <strong>Obuma</strong>; Pedidos, No Fact. y % Fact. de
                  <strong>Autoventa</strong>; los objetivos los edita gerencia. Todo se calcula en la
                  vista <code>v_resumen_vendedor_mes</code>, no en la app.</p>
-              <p><strong>Cartera</strong> = nº de clientes asignados al vendedor (se ingresa en
-                 <strong>Comisiones</strong>); define el rango/tramo de la comisión por efectividad.
-                 Si está en 0, aún no se ha cargado ese mes.</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -221,7 +209,6 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
         "<th title='Objetivo de visitas'>Obj Visitas</th>"
         "<th title='Número de documentos emitidos'>N° Docs</th>"
         "<th title='% Efectividad (docs / obj visitas)'>% Efec</th>"
-        "<th title='Clientes asignados (cartera) — define el rango de comisión'>Cartera</th>"
     )
     rows = ""
     for _, r in df_sorted.iterrows():
@@ -247,7 +234,6 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
           <td>{fmt_num(r.get('obj_visitas'))}</td>
           <td>{fmt_num(r.get('n_documentos'))}</td>
           <td class='{cls_e}'>{fmt_pct(pct_e)}</td>
-          <td>{fmt_num(r.get('cartera_clientes'))}</td>
         </tr>"""
 
     if not mostrar_total:
@@ -283,7 +269,6 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
       <td>{fmt_num(df['obj_visitas'].sum())}</td>
       <td>{fmt_num(df['n_documentos'].sum())}</td>
       <td></td>
-      <td>{fmt_num(df['cartera_clientes'].sum())}</td>
     </tr>"""
 
     st.markdown(f"""
