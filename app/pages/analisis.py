@@ -914,55 +914,6 @@ def _s05_productos_fondo(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim):
             fig3.update_layout(yaxis=dict(showgrid=False))
             st.plotly_chart(_fig_base(fig3, 300), use_container_width=True)
 
-    # ── Foco producto nuevo: Galletas ─────────────────────────────────────────
-    st.divider()
-    _sec("🆕 Producto nuevo · Galletas")
-    gal = dy[dy["categoria"] == "GALLETAS"] if not dy.empty else pd.DataFrame()
-    if gal.empty:
-        st.info("Aún no hay ventas de Galletas registradas este año.")
-        return
-
-    g_venta = float(gal["neto"].sum())
-    g_uds   = int(gal["cantidad"].sum()) if "cantidad" in gal else 0
-    g_cli   = int(gal["cliente_rut"].nunique())
-    cli_yr  = dy["cliente_rut"].nunique() if not dy.empty else 0
-    g_pen   = g_cli / cli_yr if cli_yr else 0
-    g_sku   = int(gal["producto_codigo"].nunique())
-
-    kg = "".join([
-        _kic("🍪", "Venta Galletas (año)", fmt_clp(g_venta)),
-        _kic("👥", "Clientes que la compran", fmt_num(g_cli),
-             sub=f"{g_pen*100:.0f}% de la cartera activa"),
-        _kic("🏷️", "SKUs vendidos", f"{g_sku} / 9"),
-        _kic("🔢", "Unidades (año)", fmt_num(g_uds)),
-    ])
-    st.markdown(f'<div class="kpi-grid">{kg}</div>', unsafe_allow_html=True)
-
-    cga, cgb = st.columns(2)
-    with cga:
-        _sec("Adopción mensual")
-        sg = gal.groupby("mes_num")["neto"].sum()
-        mg = sorted(sg.index)
-        figg = go.Figure(go.Bar(x=[MESES_C[m] for m in mg],
-                                y=[float(sg[m]) for m in mg],
-                                marker_color=_C["violeta"],
-                                text=[fmt_clp(sg[m]) for m in mg],
-                                textposition="outside", textfont=dict(size=9)))
-        figg.update_layout(yaxis=dict(showgrid=False))
-        st.plotly_chart(_fig_base(figg, 300), use_container_width=True)
-    with cgb:
-        _sec("Ranking de galletas")
-        ag = (gal.groupby("nombre")["neto"].sum()
-                 .sort_values(ascending=False).head(9))
-        figh = go.Figure(go.Bar(
-            x=ag.values, y=[str(n)[:30] for n in ag.index], orientation="h",
-            marker_color=_C["violeta"], text=[fmt_clp(v) for v in ag.values],
-            textposition="inside", insidetextanchor="end",
-            textfont=dict(size=9, color="white")))
-        figh.update_layout(xaxis=dict(showticklabels=False, showgrid=False),
-                           yaxis=dict(autorange="reversed", tickfont=dict(size=9)))
-        st.plotly_chart(_fig_base(figh, 300), use_container_width=True)
-
 
 def render(client, anio: int, mes: int):
     f_ini, f_fin, soc_ids, cats_sel, df_prod_dim = _page_filters(
