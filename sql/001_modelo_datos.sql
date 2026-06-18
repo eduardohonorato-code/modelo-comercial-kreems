@@ -71,6 +71,15 @@ create table if not exists public.calendario_laboral (
 );
 comment on table public.calendario_laboral is 'Base de la proyección lineal a cierre (sección 3).';
 
+-- Feriados legales de Chile: el conteo de días hábiles del mes en curso los
+-- descuenta (ver vista v_resumen_vendedor_mes). Se siembran en 016_feriados.sql.
+create table if not exists public.feriados (
+  fecha         date    primary key,
+  nombre        text    not null,
+  irrenunciable boolean not null default false
+);
+comment on table public.feriados is 'Feriados legales de Chile (días no hábiles).';
+
 -- ============================================================================
 -- 2. HECHOS
 --    Cada tabla lleva una llave natural (constraint UNIQUE) para que el ETL
@@ -243,10 +252,10 @@ select
   coalesce(ve.monto_notas_credito, 0)                                as monto_notas_credito,
   -- Días hábiles efectivos: dinámicos para el mes en curso (ver dt), guardados si no.
   dt.dias_trab_efectivo::smallint                                    as dias_trabajados,
-  cal.dias_totales,
+  dt.dias_tot_efectivo::smallint                                     as dias_totales,
   -- Proyección lineal a cierre = (Fact-NC / días_trabajados) * días_totales
   case when dt.dias_trab_efectivo > 0
-       then round(coalesce(ve.fact_nc,0) / dt.dias_trab_efectivo * cal.dias_totales, 2)
+       then round(coalesce(ve.fact_nc,0) / dt.dias_trab_efectivo * dt.dias_tot_efectivo, 2)
   end                                                               as proyeccion_cierre,
   o.obj_venta,
   o.obj_maquinas,
@@ -257,7 +266,7 @@ select
   end                                                               as pct_cumplimiento,
   -- % Proyección = Proyección / objetivo de venta
   case when o.obj_venta > 0 and dt.dias_trab_efectivo > 0
-       then round((coalesce(ve.fact_nc,0) / dt.dias_trab_efectivo * cal.dias_totales) / o.obj_venta, 4)
+       then round((coalesce(ve.fact_nc,0) / dt.dias_trab_efectivo * dt.dias_tot_efectivo) / o.obj_venta, 4)
   end                                                               as pct_proyeccion,
   -- % Efectividad = N° de facturas / objetivo de visitas
   case when o.obj_visitas > 0
@@ -279,20 +288,32 @@ left join maquinas                  ma  on ma.vendedor_id = p.vendedor_id and ma
 left join pedidos                   pe  on pe.vendedor_id = p.vendedor_id and pe.anio = p.anio and pe.mes = p.mes
 left join public.objetivos_mensuales o  on o.vendedor_id  = p.vendedor_id and o.anio  = p.anio and o.mes  = p.mes
 left join public.calendario_laboral cal on cal.anio = p.anio and cal.mes = p.mes
--- Días hábiles efectivos: si (anio,mes) es el mes actual, cuenta Lun-Vie del 1°
--- a hoy (capado a dias_totales); si es un mes pasado, usa el valor guardado.
+-- Días hábiles efectivos. Mes EN CURSO: Lun-Vie del 1° a hoy (y total del mes),
+-- descontando feriados. Mes pasado/cerrado: valores guardados (no se recalculan,
+-- para no alterar comisiones ya hechas).
 cross join lateral (
-  select case
-    when p.anio = extract(year  from current_date)::int
-     and p.mes  = extract(month from current_date)::int
-    then least(
-           (select count(*)::smallint
+  select
+    case
+      when p.anio = extract(year from current_date)::int
+       and p.mes  = extract(month from current_date)::int
+      then (select count(*)
               from generate_series(date_trunc('month', current_date)::date,
                                    current_date, interval '1 day') g
-             where extract(isodow from g) < 6),
-           cal.dias_totales)
-    else cal.dias_trabajados
-  end as dias_trab_efectivo
+             where extract(isodow from g) < 6
+               and g::date not in (select f.fecha from public.feriados f))
+      else cal.dias_trabajados
+    end as dias_trab_efectivo,
+    case
+      when p.anio = extract(year from current_date)::int
+       and p.mes  = extract(month from current_date)::int
+      then (select count(*)
+              from generate_series(date_trunc('month', current_date)::date,
+                                   (date_trunc('month', current_date) + interval '1 month' - interval '1 day')::date,
+                                   interval '1 day') g
+             where extract(isodow from g) < 6
+               and g::date not in (select f.fecha from public.feriados f))
+      else cal.dias_totales
+    end as dias_tot_efectivo
 ) dt;
 
 -- ============================================================================
@@ -332,6 +353,7 @@ alter table public.dim_cliente         enable row level security;
 alter table public.dim_producto        enable row level security;
 alter table public.dim_fecha           enable row level security;
 alter table public.calendario_laboral  enable row level security;
+alter table public.feriados            enable row level security;
 alter table public.fact_ventas         enable row level security;
 alter table public.fact_pedidos        enable row level security;
 alter table public.fact_despachos      enable row level security;
@@ -344,7 +366,7 @@ do $$
 declare t text;
 begin
   foreach t in array array[
-    'dim_sociedad','dim_cliente','dim_producto','dim_fecha','calendario_laboral'
+    'dim_sociedad','dim_cliente','dim_producto','dim_fecha','calendario_laboral','feriados'
   ] loop
     execute format('drop policy if exists %I on public.%I', t||'_sel', t);
     execute format(

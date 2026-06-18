@@ -165,18 +165,34 @@ def get_calendario(client: Client, anio: int, mes: int) -> dict:
          .execute())
     row = r.data[0] if r.data else {"dias_totales": 30, "dias_trabajados": 20}
 
-    # Para el mes en curso, recalcular días transcurridos dinámicamente
-    # (el valor en BD queda desactualizado entre cargas del ETL)
+    # Para el mes en curso, recalcular días hábiles dinámicamente descontando
+    # feriados (consistente con la vista v_resumen_vendedor_mes). El valor en BD
+    # queda desactualizado entre cargas del ETL.
     hoy = date.today()
     if anio == hoy.year and mes == hoy.month:
         inicio = date(anio, mes, 1)
-        dias_hab = sum(
-            1 for d in range((hoy - inicio).days + 1)
-            if (inicio + timedelta(days=d)).weekday() < 5
-        )
-        # Capar a días_totales (consistente con la vista v_resumen_vendedor_mes)
-        tope = row.get("dias_totales") or dias_hab
-        row = {**row, "dias_trabajados": min(dias_hab, tope)}
+        ultimo = (date(anio + 1, 1, 1) if mes == 12
+                  else date(anio, mes + 1, 1)) - timedelta(days=1)
+        # Feriados del mes (si la tabla aún no existe, se ignora sin romper)
+        feriados: set = set()
+        try:
+            fr = (client.table("feriados").select("fecha")
+                  .gte("fecha", inicio.isoformat())
+                  .lte("fecha", ultimo.isoformat()).execute())
+            feriados = {f["fecha"] for f in (fr.data or [])}
+        except Exception:
+            pass
+
+        def _habiles(desde: date, hasta: date) -> int:
+            return sum(
+                1 for n in range((hasta - desde).days + 1)
+                if (x := desde + timedelta(days=n)).weekday() < 5
+                and x.isoformat() not in feriados
+            )
+
+        row = {**row,
+               "dias_trabajados": _habiles(inicio, hoy),
+               "dias_totales":    _habiles(inicio, ultimo)}
 
     return row
 
