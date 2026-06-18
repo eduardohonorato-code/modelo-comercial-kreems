@@ -440,57 +440,13 @@ insert into public.dim_sociedad (id, nombre) values
   (2, 'Gran Natural SPA')
 on conflict (id) do nothing;
 
--- 6.2 Usuarios de prueba (Supabase Auth)
---     vendedor.demo@kreems.cl / Demo1234!   (rol vendedor)
---     gerente.demo@kreems.cl  / Demo1234!   (rol gerencia)
-insert into auth.users
-  (instance_id, id, aud, role, email, encrypted_password,
-   email_confirmed_at, created_at, updated_at,
-   raw_app_meta_data, raw_user_meta_data,
-   confirmation_token, recovery_token, email_change_token_new, email_change)
-values
-  ('00000000-0000-0000-0000-000000000000',
-   '11111111-1111-1111-1111-111111111111',
-   'authenticated','authenticated','vendedor.demo@kreems.cl',
-   extensions.crypt('Demo1234!', extensions.gen_salt('bf')),
-   now(), now(), now(),
-   '{"provider":"email","providers":["email"]}','{}','','','',''),
-  ('00000000-0000-0000-0000-000000000000',
-   '22222222-2222-2222-2222-222222222222',
-   'authenticated','authenticated','gerente.demo@kreems.cl',
-   extensions.crypt('Demo1234!', extensions.gen_salt('bf')),
-   now(), now(), now(),
-   '{"provider":"email","providers":["email"]}','{}','','','','')
-on conflict (id) do nothing;
+-- 6.2 Usuarios de prueba (Supabase Auth) — ELIMINADOS (2026-06-18).
+--     Las cuentas demo (vendedor.demo@/gerente.demo@kreems.cl, UUIDs 1111.../2222...)
+--     ya no se usan y se borraron de Auth + perfil_usuario. Seed deshabilitado para
+--     que no reaparezcan al re-correr este script. Si vuelves a necesitar usuarios de
+--     prueba de RLS, créalos desde el panel de Supabase, no desde aquí.
 
--- Identidad email (para que el login real funcione en GoTrue). Tolerante a fallos.
-do $$
-begin
-  insert into auth.identities
-    (id, user_id, identity_data, provider, provider_id, last_sign_in_at, created_at, updated_at)
-  values
-    (gen_random_uuid(),'11111111-1111-1111-1111-111111111111',
-     '{"sub":"11111111-1111-1111-1111-111111111111","email":"vendedor.demo@kreems.cl"}',
-     'email','11111111-1111-1111-1111-111111111111', now(), now(), now()),
-    (gen_random_uuid(),'22222222-2222-2222-2222-222222222222',
-     '{"sub":"22222222-2222-2222-2222-222222222222","email":"gerente.demo@kreems.cl"}',
-     'email','22222222-2222-2222-2222-222222222222', now(), now(), now())
-  on conflict do nothing;
-exception when others then
-  raise notice 'auth.identities no insertado (%). El login real puede requerir crear los usuarios desde el panel; la demo de RLS por claims funciona igual.', sqlerrm;
-end $$;
-
--- 6.3 Perfiles (rol de cada usuario)
-insert into public.perfil_usuario (user_id, rol) values
-  ('11111111-1111-1111-1111-111111111111','vendedor'),
-  ('22222222-2222-2222-2222-222222222222','gerencia')
-on conflict (user_id) do update set rol = excluded.rol;
-
--- 6.4 Vendedores (uno ligado al usuario de prueba; otro sin usuario)
-insert into public.dim_vendedor (nombre_canonico, cod_vendedor_autoventa, user_id, activo)
-values ('Vendedor Demo','V001','11111111-1111-1111-1111-111111111111', true)
-on conflict (nombre_canonico) do update set user_id = excluded.user_id;
-
+-- 6.4 Vendedor demo sin usuario (inofensivo; sin ligar a Auth).
 insert into public.dim_vendedor (nombre_canonico, cod_vendedor_autoventa, activo)
 values ('Vendedor Dos','V002', true)
 on conflict (nombre_canonico) do nothing;
