@@ -88,6 +88,23 @@ def aplicar_estado_despachos(fact_maquinas: pd.DataFrame,
     return fact_maquinas
 
 
+def marcar_despachos_maquina(fact_despachos: pd.DataFrame,
+                             fact_maquinas: pd.DataFrame) -> pd.DataFrame:
+    """
+    Marca `es_maquina` en los despachos cuyo documento corresponde a una máquina.
+    La fuente de verdad de qué documento es máquina es `fact_maquinas` (derivada
+    de Obuma, categoría 'Maquinas'/FL-x), NO los pedidos de Autoventa: por eso se
+    recalcula aquí, donde ya tenemos las máquinas del período.
+    """
+    if fact_despachos.empty:
+        return fact_despachos
+    docs = (set(fact_maquinas["documento"].dropna().astype(str).str.strip())
+            if not fact_maquinas.empty else set())
+    fd = fact_despachos.copy()
+    fd["es_maquina"] = fd["documento"].astype(str).str.strip().isin(docs)
+    return fd
+
+
 def aplicar_override_vendedor(fact_maquinas: pd.DataFrame,
                               overrides: pd.DataFrame) -> pd.DataFrame:
     """

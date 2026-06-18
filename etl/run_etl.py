@@ -35,7 +35,7 @@ from etl.config import DATA_DIR, FILE_MATCH, MENSUAL_DIR, FUENTES
 from etl.cleaners import construir_mapeo_vendedor
 from etl.upsert import upsert_tabla
 from etl.maquinas import (derivar_maquinas_obuma, aplicar_estado_despachos,
-                          aplicar_override_vendedor)
+                          aplicar_override_vendedor, marcar_despachos_maquina)
 from etl.loaders.obuma import cargar_obuma_multi
 from etl.loaders.autoventa import cargar_autoventa
 
@@ -351,10 +351,6 @@ def run(periodo: tuple | None = None):
         client, "fact_pedidos", autov["fact_pedidos"],
         on_conflict="sociedad_id,n_pedido,producto_codigo,linea",
     )
-    upsert_tabla(
-        client, "fact_despachos", autov["fact_despachos"],
-        on_conflict="sociedad_id,documento,cliente_rut",
-    )
 
     # Máquinas: fuente única = Obuma (categoría 'Maquinas', códigos FL-x), igual
     # que la carga histórica. Se derivan de fact_ventas y se les aplica el estado
@@ -367,6 +363,13 @@ def run(periodo: tuple | None = None):
     # Override manual de vendedor (tabla maquina_vendedor_override; vacía = sin efecto)
     fact_maquinas = aplicar_override_vendedor(
         fact_maquinas, _leer_overrides_maquina(client))
+
+    # Marcar es_maquina en los despachos según las máquinas (Obuma) antes de subir.
+    fact_despachos = marcar_despachos_maquina(autov["fact_despachos"], fact_maquinas)
+    upsert_tabla(
+        client, "fact_despachos", fact_despachos,
+        on_conflict="sociedad_id,documento,cliente_rut",
+    )
     if not fact_maquinas.empty:
         upsert_tabla(
             client, "fact_maquinas", fact_maquinas,

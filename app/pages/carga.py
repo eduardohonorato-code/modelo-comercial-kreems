@@ -89,10 +89,30 @@ def _sincronizar_estado_maquinas(client, anio: int, mes: int) -> dict | None:
     ini, fin = _rango_mes(anio, mes)
     desp = _leer_periodo(client, "fact_despachos", "fecha_ruta", ini, fin,
                          "documento,estado,fecha_ruta")
+    if desp.empty:
+        return None
     maq = _leer_periodo(client, "fact_maquinas", "fecha", ini, fin,
                         "documento,fecha,vendedor_id,cliente_rut,tipo_mov,estado,sociedad_id")
-    if maq.empty or desp.empty:
-        return None
+
+    # Reconciliar es_maquina en los despachos del mes según las máquinas (Obuma):
+    # un despacho es de máquina si su documento es una máquina derivada de Obuma.
+    machine_docs = (sorted(set(maq["documento"].dropna().astype(str)))
+                    if not maq.empty else [])
+    n_maquina_desp = 0
+    try:
+        (client.table("fact_despachos").update({"es_maquina": False})
+         .gte("fecha_ruta", ini).lt("fecha_ruta", fin).execute())
+        if machine_docs:
+            r = (client.table("fact_despachos").update({"es_maquina": True})
+                 .gte("fecha_ruta", ini).lt("fecha_ruta", fin)
+                 .in_("documento", machine_docs).execute())
+            n_maquina_desp = len(r.data or [])
+    except Exception:
+        pass
+
+    if maq.empty:
+        return {"maquinas": 0, "entregadas": 0, "rechazadas": 0,
+                "gestionadas": 0, "despachos_maquina": n_maquina_desp}
 
     actualizado = aplicar_estado_despachos(maq, desp)
     upsert_tabla(client, "fact_maquinas", actualizado,
@@ -102,6 +122,7 @@ def _sincronizar_estado_maquinas(client, anio: int, mes: int) -> dict | None:
         "entregadas": int((actualizado["estado"] == "entregada").sum()),
         "rechazadas": int((actualizado["estado"] == "rechazada").sum()),
         "gestionadas": int((actualizado["estado"] == "gestionada").sum()),
+        "despachos_maquina": n_maquina_desp,
     }
 
 
@@ -247,7 +268,8 @@ def _mostrar_reporte(rep: dict):
             f"Estado de máquinas del mes sincronizado con despachos: "
             f"**{sync['entregadas']} entregadas**, {sync['rechazadas']} rechazadas, "
             f"{sync['gestionadas']} gestionadas (sobre {sync['maquinas']} máquinas, "
-            f"incluye Gran Natural cargado por API).")
+            f"incluye Gran Natural cargado por API). "
+            f"{sync.get('despachos_maquina', 0)} despachos marcados como máquina.")
 
     if rep.get("por_sociedad_mes"):
         st.markdown('<div class="seccion-titulo">Detalle por sociedad y mes</div>',

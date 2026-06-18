@@ -43,7 +43,8 @@ from etl.db import get_client
 from etl.config import SOCIEDAD_ID
 from etl.cleaners import construir_mapeo_vendedor
 from etl.upsert import upsert_tabla
-from etl.maquinas import derivar_maquinas_obuma, aplicar_estado_despachos
+from etl.maquinas import (derivar_maquinas_obuma, aplicar_estado_despachos,
+                          marcar_despachos_maquina)
 from etl.loaders.obuma import cargar_obuma_multi
 from etl.loaders.autoventa import cargar_autoventa
 
@@ -275,6 +276,9 @@ def procesar_carga(client, obuma_files: list[tuple[Path, str]],
 
     # Estado de máquinas según despachos
     fact_maquinas = aplicar_estado_despachos(fact_maquinas, fact_despachos)
+    # Marcar es_maquina en los despachos según las máquinas (Obuma), no los
+    # pedidos de Autoventa (que pueden no venir en esta carga).
+    fact_despachos = marcar_despachos_maquina(fact_despachos, fact_maquinas)
 
     # dim_cliente: Obuma (prioridad) + Autoventa; marcar es_maquina
     dim_cliente = (
