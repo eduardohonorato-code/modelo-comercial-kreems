@@ -174,7 +174,9 @@ def get_calendario(client: Client, anio: int, mes: int) -> dict:
             1 for d in range((hoy - inicio).days + 1)
             if (inicio + timedelta(days=d)).weekday() < 5
         )
-        row = {**row, "dias_trabajados": dias_hab}
+        # Capar a días_totales (consistente con la vista v_resumen_vendedor_mes)
+        tope = row.get("dias_totales") or dias_hab
+        row = {**row, "dias_trabajados": min(dias_hab, tope)}
 
     return row
 
