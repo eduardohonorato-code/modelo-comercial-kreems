@@ -640,6 +640,38 @@ def _s04_maquinas(client, f_ini, f_fin, soc_ids):
     ])
     st.markdown(f'<div class="kpi-grid">{fila2}</div>', unsafe_allow_html=True)
 
+    with st.expander("ℹ️ De dónde vienen estos datos (fuentes y cruce)", expanded=False):
+        st.markdown("""
+**1) Tipo de movimiento — sale de Obuma.** Cada máquina es una línea de la categoría
+*"Maquinas"* en las **ventas de Obuma**, identificada por su código **FL**:
+
+| Código | Significado | Se cuenta como |
+|---|---|---|
+| **FL-4** | Instalación cliente nuevo | **Nueva** (gestionada) |
+| **FL-1 / FL-3 / FL-5** | Cambio de máquina (mala, tamaño, etc.) | **Cambio** |
+| **FL-2** | Retiro por término | **Retiro** |
+
+**2) Estado de entrega — sale de Autoventa (despachos).** El estado *entregada /
+rechazada / pendiente* **no** viene de Obuma: se obtiene del **Detalle de despachos**
+de Autoventa, cruzando por número de documento:
+
+`Obuma "N° DCTO"  =  Despachos "Documento"`
+
+- Documento aparece **Entregada** en despachos → *entregada*.
+- Aparece **Rechazada** → *rechazada*.
+- No tiene despacho (no salió a ruta o no se cargó) → queda **gestionada / pendiente**.
+
+**3) Cómo entra cada fuente:**
+- **Gran Natural** (ventas + FL): por **API de Obuma** (automático).
+- **Acuña** (ventas + FL): por **Excel** en la página *Carga* (no tiene API).
+- **Despachos** (estado de entrega): por **Excel** en *Carga* (Autoventa no expone el
+  estado por API).
+
+> Por eso, al subir los despachos, las máquinas de Gran Natural —cargadas por API—
+> recién ahí toman su estado *entregada / rechazada*. Sin despacho cargado se ven como
+> *gestionadas / pendientes*.
+""")
+
     # El detalle (tabla y desglose por vendedor) es solo para gerencia.
     if not es_gerencia():
         return
