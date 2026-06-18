@@ -185,9 +185,18 @@ def _render_kpis(df: pd.DataFrame, cal: dict, pct_anterior):
       <div class="kpi-icon-card">
         <div class="kic-icon">⏱️</div>
         <div class="kic-body">
-          <div class="kic-label">Ritmo Esperado</div>
+          <div class="kic-label">Esperado a Hoy</div>
           <div class="kic-value">{fmt_clp(ritmo)}</div>
-          <div class="kic-sub">Proyección lineal a hoy</div>
+          <div class="kic-sub">Lo que deberías llevar hoy</div>
+        </div>
+      </div>
+
+      <div class="kpi-icon-card" style="border-left-color:{_color_semaforo(pct_proy)}">
+        <div class="kic-icon">📈</div>
+        <div class="kic-body">
+          <div class="kic-label">Proyección Cierre</div>
+          <div class="kic-value {proy_cls}">{fmt_clp(proy_total)}</div>
+          <div class="kic-sub">Al ritmo actual a fin de mes</div>
         </div>
       </div>
 

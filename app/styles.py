@@ -464,11 +464,11 @@ table.kreems tr.total-row td:first-child { background: var(--rosa-100) !importan
 /* ── KPI Cards con ícono (S2) ── */
 .kpi-6-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: .7rem;
   margin-bottom: 1.1rem;
 }
-@media (max-width: 700px) { .kpi-6-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 1100px) { .kpi-6-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 400px) { .kpi-6-grid { grid-template-columns: 1fr; } }
 
 .kpi-icon-card {
