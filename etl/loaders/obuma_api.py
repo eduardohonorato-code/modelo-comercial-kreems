@@ -63,6 +63,16 @@ REGION_MAP = {
     "16": "Ñuble",
 }
 
+# Sucursales de Obuma: la API entrega rel_sucursal_id (número interno). Se mapea
+# al MISMO nombre que trae el export Excel (mayúsculas, sin acento) para que el
+# análisis agrupe ambas fuentes en la misma sucursal. IDs identificados por la
+# región dominante de sus clientes (Gran Natural).
+SUCURSAL_MAP = {
+    "257": "CONCEPCION",
+    "266": "SANTIAGO",
+    "267": "TEMUCO",
+}
+
 
 # ── Cliente HTTP ──────────────────────────────────────────────────────────────
 
@@ -221,7 +231,10 @@ def cargar_obuma_api(
             "comuna": cli.get("cliente_comuna_facturacion"),
             "region_cod": str(cli.get("cliente_region_facturacion") or ""),
             "producto_codigo": str(it.get("codigo_comercial") or "").strip(),
-            "sucursal": str(cab.get("rel_sucursal_id") or ""),
+            "sucursal": SUCURSAL_MAP.get(
+                str(cab.get("rel_sucursal_id") or ""),
+                str(cab.get("rel_sucursal_id") or ""),
+            ),
             "cantidad": _num(it.get("cantidad")),
             "neto": _num(it.get("subtotal")),
             "costo": _num(it.get("costo_subtotal") or it.get("costo")),
