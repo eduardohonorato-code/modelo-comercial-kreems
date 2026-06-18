@@ -25,6 +25,12 @@ drop policy if exists feriados_sel on public.feriados;
 create policy feriados_sel on public.feriados
   for select to authenticated using (true);
 
+-- GRANTs explícitos: los `grant ... on all tables` de 001/003 ya corrieron antes
+-- de existir esta tabla, así que hay que otorgarlos aquí. La vista es
+-- security_invoker → el usuario que la consulta necesita SELECT sobre feriados.
+grant select on public.feriados to authenticated;
+grant all    on public.feriados to service_role;
+
 -- 2. Feriados nacionales 2026 (calendario chileno oficial) ------------------
 insert into public.feriados (fecha, nombre, irrenunciable) values
   ('2026-01-01', 'Año Nuevo',                              true),
