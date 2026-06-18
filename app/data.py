@@ -514,14 +514,20 @@ def get_ultima_factura(client: Client, anio: int, mes: int) -> str:
     """Fecha de la última factura emitida en el período (dd-mm-yyyy)."""
     import calendar as _cal
     ultimo_dia = _cal.monthrange(anio, mes)[1]
-    r = (client.table("fact_ventas")
-         .select("fecha")
-         .ilike("tipo_dcto", "%factura%")
-         .gte("fecha", f"{anio}-{mes:02d}-01")
-         .lte("fecha", f"{anio}-{mes:02d}-{ultimo_dia:02d}")
-         .order("fecha", desc=True)
-         .limit(1)
-         .execute())
+    # Dato cosmético del header: nunca debe tumbar la página de Inicio.
+    # Si la query falla (JWT expirado, permiso sobre fact_ventas, etc.) se
+    # degrada a "—" en vez de propagar el APIError.
+    try:
+        r = (client.table("fact_ventas")
+             .select("fecha")
+             .ilike("tipo_dcto", "%factura%")
+             .gte("fecha", f"{anio}-{mes:02d}-01")
+             .lte("fecha", f"{anio}-{mes:02d}-{ultimo_dia:02d}")
+             .order("fecha", desc=True)
+             .limit(1)
+             .execute())
+    except Exception:
+        return "—"
     if r.data:
         import datetime
         return datetime.date.fromisoformat(r.data[0]["fecha"][:10]).strftime("%d-%m-%Y")
