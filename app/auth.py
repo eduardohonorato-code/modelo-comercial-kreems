@@ -176,7 +176,7 @@ def logout():
     except Exception:
         pass
     for key in ["access_token", "refresh_token", "user_id", "email", "rol",
-                "vendedor_id", "vendedor_nombre"]:
+                "vendedor_id", "vendedor_nombre", "_panel_listo"]:
         st.session_state.pop(key, None)
 
 

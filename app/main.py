@@ -4,6 +4,7 @@ Punto de entrada: streamlit run app/main.py
 """
 import sys
 import datetime
+import contextlib
 import pandas as pd
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -22,9 +23,19 @@ st.set_page_config(
 from app.auth import (login, logout, is_authenticated, es_gerencia,
                       get_rol, MESES, get_client_auth, cambiar_password)
 from app.styles import CSS, logo_img
-from app.pages import vendedor, gerencia, analisis, carga, inicio, admin, comisiones
+# Los módulos de páginas (app.pages) NO se importan aquí: cargan plotly/data y
+# enlentecen la pantalla de login. Se importan dentro de main() tras autenticar.
 
 st.markdown(CSS, unsafe_allow_html=True)
+
+# Indicador de carga centrado y con color de marca (para st.spinner).
+st.markdown("""
+<style>
+[data-testid="stSpinner"]{display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:.5rem;padding:2rem 0;}
+[data-testid="stSpinner"] p{color:var(--rosa-deep,#C01E6E);font-weight:600;font-size:1rem;}
+</style>
+""", unsafe_allow_html=True)
 
 
 # ── LOGIN ──────────────────────────────────────────────────────────────────────
@@ -329,52 +340,61 @@ def main():
     if "pagina" not in st.session_state:
         st.session_state.pagina = "inicio"
 
-    anio, mes = sidebar()
-    pagina    = st.session_state.get("pagina", "inicio")
-    client    = get_client_auth()
-    nombre_mes     = MESES[mes]
-    nombre_usuario = st.session_state.get("vendedor_nombre", "")
+    # Imports diferidos: solo al estar autenticado. La primera vez tardan unos
+    # segundos (plotly/data) → se muestra un spinner "Cargando tu panel…".
+    primera = not st.session_state.get("_panel_listo")
+    with (st.spinner("Cargando tu panel…") if primera else contextlib.nullcontext()):
+        from app.pages import (vendedor, gerencia, analisis, carga,
+                                inicio, admin, comisiones)
 
-    if pagina == "inicio":
-        inicio.render(client, anio, mes, nombre_usuario)
+        anio, mes = sidebar()
+        pagina    = st.session_state.get("pagina", "inicio")
+        client    = get_client_auth()
+        nombre_mes     = MESES[mes]
+        nombre_usuario = st.session_state.get("vendedor_nombre", "")
 
-    elif pagina == "gerencia":
-        st.markdown(f"## 📊 Panel de Gerencia — {nombre_mes} {anio}")
-        gerencia.render(client, anio, mes)
+        if pagina == "inicio":
+            inicio.render(client, anio, mes, nombre_usuario)
 
-    elif pagina == "vendedor":
-        if es_gerencia():
-            vend_visto = st.session_state.get("admin_vend_vista", "")
-            subtitulo  = f" — {vend_visto}" if vend_visto else ""
-            st.markdown(f"## 👤 Panel Vendedor{subtitulo} · {nombre_mes} {anio}")
-        else:
-            st.markdown(f"## 👤 {nombre_usuario}")
-        vendedor.render(client, anio, mes, nombre_usuario)
+        elif pagina == "gerencia":
+            st.markdown(f"## 📊 Panel de Gerencia — {nombre_mes} {anio}")
+            gerencia.render(client, anio, mes)
 
-    elif pagina == "analisis":
-        st.markdown(f"## 📈 Análisis — {nombre_mes} {anio}")
-        analisis.render(client, anio, mes)
+        elif pagina == "vendedor":
+            if es_gerencia():
+                vend_visto = st.session_state.get("admin_vend_vista", "")
+                subtitulo  = f" — {vend_visto}" if vend_visto else ""
+                st.markdown(f"## 👤 Panel Vendedor{subtitulo} · {nombre_mes} {anio}")
+            else:
+                st.markdown(f"## 👤 {nombre_usuario}")
+            vendedor.render(client, anio, mes, nombre_usuario)
 
-    elif pagina == "comisiones":
-        if not es_gerencia():
-            st.session_state.pagina = "inicio"
-            st.rerun()
-        st.markdown(f"## 💰 Comisiones — {nombre_mes} {anio}")
-        comisiones.render(client, anio, mes)
+        elif pagina == "analisis":
+            st.markdown(f"## 📈 Análisis — {nombre_mes} {anio}")
+            analisis.render(client, anio, mes)
 
-    elif pagina == "carga":
-        if not es_gerencia():
-            st.session_state.pagina = "inicio"
-            st.rerun()
-        st.markdown("## 📤 Carga de archivos")
-        carga.render(client, anio, mes)
+        elif pagina == "comisiones":
+            if not es_gerencia():
+                st.session_state.pagina = "inicio"
+                st.rerun()
+            st.markdown(f"## 💰 Comisiones — {nombre_mes} {anio}")
+            comisiones.render(client, anio, mes)
 
-    elif pagina == "admin":
-        if not es_gerencia():
-            st.session_state.pagina = "inicio"
-            st.rerun()
-        st.markdown("## ⚙️ Administración de Usuarios")
-        admin.render()
+        elif pagina == "carga":
+            if not es_gerencia():
+                st.session_state.pagina = "inicio"
+                st.rerun()
+            st.markdown("## 📤 Carga de archivos")
+            carga.render(client, anio, mes)
+
+        elif pagina == "admin":
+            if not es_gerencia():
+                st.session_state.pagina = "inicio"
+                st.rerun()
+            st.markdown("## ⚙️ Administración de Usuarios")
+            admin.render()
+
+    st.session_state["_panel_listo"] = True
 
 
 if __name__ == "__main__":
