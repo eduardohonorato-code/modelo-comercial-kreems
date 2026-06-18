@@ -141,6 +141,17 @@ def render(client, anio: int, mes: int, nombre: str):
         st.progress(min(entr / gest, 1.0),
                     text=f"Conversión gestionada→entregada: {fmt_pct(conv)}")
 
+    with st.expander("ℹ️ De dónde salen Gestionadas, Entregadas y Retiros", expanded=False):
+        st.markdown("""
+- **Gestionadas** = máquinas instaladas a cliente nuevo: líneas con código **FL-4** en **Obuma**.
+  Es lo que colocaste en el mes.
+- **Entregadas** = de esas máquinas, las que aparecen como **"Entregada"** en el detalle de
+  despachos (Autoventa), cruzando por N° de documento.
+- **Retiros** = retiros por término: líneas con código **FL-2** en Obuma.
+- Los *cambios* de máquina (FL-1 / FL-3 / FL-5) se registran pero no se muestran aquí.
+- Si ves **0 gestionadas**, es que no hubo líneas FL-4 en Obuma ese mes (no es un error de cálculo).
+""")
+
     # ── Gráfico gauge: % cumplimiento ────────────────────────────────────────
     st.markdown('<div class="seccion-titulo">Gauge de cumplimiento</div>',
                 unsafe_allow_html=True)

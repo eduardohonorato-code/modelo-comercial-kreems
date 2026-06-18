@@ -131,11 +131,12 @@ def render(client, anio: int, mes: int):
             )
             _tabla_gerencia(df_sin_obj, mostrar_total=False)
 
-    # Nota explicativa del embudo Pedidos → Fact-NC (colapsable)
-    with st.expander("ℹ️ Cómo leer Pedidos vs Fact-NC", expanded=False):
+    # Nota explicativa: de dónde sale cada columna (colapsable)
+    with st.expander("ℹ️ Cómo leer la tabla y de dónde sale cada columna", expanded=False):
         st.markdown(
             """
             <div class="nota-embudo">
+              <p><strong>Pedidos vs Fact-NC</strong></p>
               <ul>
                 <li><strong>Pedidos = Ped. Fact. + No Fact.</strong> El total de pedidos (Autoventa)
                     se divide entre los que ya tienen factura y los que aún no (Sin DTE).</li>
@@ -151,6 +152,27 @@ def render(client, anio: int, mes: int):
                 <li>Pedido y factura caen en el <strong>mismo mes</strong> (sin arrastre de meses
                     anteriores, verificado por folio).</li>
               </ul>
+              <p><strong>Máquinas — de dónde sale cada columna</strong></p>
+              <ul>
+                <li><strong>Gestionadas</strong> = instalaciones a cliente nuevo: líneas con código
+                    <strong>FL-4</strong> en <strong>Obuma</strong> (categoría "Maquinas"). Es lo que
+                    el vendedor colocó en el mes.</li>
+                <li><strong>Entregadas</strong> = de esas máquinas, las que figuran como
+                    <strong>"Entregada"</strong> en el <em>Detalle de despachos</em> (Autoventa),
+                    cruzando por N° de documento. Mide la conversión gestionada → entregada.</li>
+                <li><strong>Retiros</strong> = retiros por término: líneas con código
+                    <strong>FL-2</strong> en Obuma.</li>
+                <li>Los <em>cambios</em> de máquina (FL-1 / FL-3 / FL-5) se registran pero no se
+                    muestran como columna.</li>
+                <li><strong>Fuente única = Obuma</strong> (cubre Acuña y Gran Natural y los 5 códigos
+                    FL). El estado <em>entregada/rechazada</em> se completa al cargar los despachos;
+                    sin despacho, la máquina queda <em>gestionada</em>. Si un mes muestra 0
+                    gestionadas, es que no hubo líneas FL-4 en Obuma ese mes.</li>
+              </ul>
+              <p><strong>Resto de columnas:</strong> Fact-NC, N° docs, NC, % Cumpl. y % Efec. salen de
+                 las facturas/NC de <strong>Obuma</strong>; Pedidos, No Fact. y % Fact. de
+                 <strong>Autoventa</strong>; los objetivos los edita gerencia. Todo se calcula en la
+                 vista <code>v_resumen_vendedor_mes</code>, no en la app.</p>
             </div>
             """,
             unsafe_allow_html=True,
