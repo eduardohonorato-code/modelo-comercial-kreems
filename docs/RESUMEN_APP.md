@@ -33,9 +33,10 @@ Resuelve en concreto:
 | Pantalla | Para quién | Qué muestra |
 |---|---|---|
 | **🏠 Inicio** | Todos | Resumen del mes: venta real, meta, % cumplimiento, **% y monto de proyección**, días hábiles, brecha a meta. Para gerencia: ranking y alertas del equipo. |
-| **📊 Panel Gerencia** | Gerencia | Tabla de todos los vendedores: Fact‑NC, % cumplimiento, pedidos, no facturado, máquinas, efectividad y **cartera de clientes**. Ranking y edición de objetivos. |
+| **📊 Panel Gerencia** | Gerencia | Tabla de todos los vendedores: Fact‑NC, % cumplimiento, pedidos, no facturado, máquinas y efectividad. Ranking y edición de objetivos. |
 | **👤 Panel Vendedor** | Vendedor | Sus propios KPIs: objetivo, Fact‑NC, proyección, máquinas, efectividad. |
 | **📈 Análisis** | Todos | 3 vistas: **Ventas** (productos, geografía, sucursales), **Máquinas** (estado y evolución nuevas vs retiros), **Productos a fondo** (drill‑down por categoría y mejores SKUs). |
+| **🧾 Clientes** | Todos | CRM analítico en 5 pestañas: **Resumen** (estados de cartera + concentración/Pareto), **Segmentación** (ABC y RFM), **Alertas** (crecen/caen/riesgo/upsell), **Ranking** avanzado y **Ficha** por cliente (evolución, mix de productos y salud comercial). Cada vendedor ve solo sus clientes. |
 | **💰 Comisiones** | Gerencia | Cálculo de comisiones (efectividad, PNV, máquinas) y carga de la cartera del período. |
 | **📤 Carga** | Gerencia | Sube los archivos del mes (Acuña + despachos) a la base de datos, sin tocar la línea de comandos. |
 
@@ -51,6 +52,10 @@ Resuelve en concreto:
 - **Máquinas:** nuevas (FL‑4), cambios (FL‑1/3/5), retiros (FL‑2); el estado
   *entregada/rechazada* sale de los despachos.
 - **No facturado** = pedidos sin documento emitido (Sin DTE).
+- **Clientes (CRM):** estado por **recencia** de compra — *activo* (≤1 mes), *en riesgo*
+  (2 meses), *perdido* (≥3 meses), *nuevo* (1ª compra el mes) y *recuperado* (vuelve tras
+  ≥3 meses). **ABC** por facturación acumulada (A 80% / B 95% / C resto), **RFM** (recencia,
+  frecuencia, monto) y **salud comercial** 0–100 (recencia 40% · frecuencia 30% · tendencia 30%).
 
 ---
 
@@ -93,4 +98,5 @@ Dos ERP, consolidados por dos sociedades (**Acuña** y **Gran Natural**):
 - ✅ En producción y uso diario por el equipo comercial.
 - ✅ Ventas y máquinas de Gran Natural por API; Acuña y despachos por carga web.
 - ✅ Análisis de productos, máquinas y comisiones operativos.
+- ✅ Sección **Clientes (CRM)**: segmentación, alertas comerciales, ranking y ficha por cliente.
 - 🔜 Pendiente con IT: API de Acuña y estado de despachos por API (hoy manuales).
