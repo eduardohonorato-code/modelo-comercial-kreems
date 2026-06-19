@@ -389,6 +389,107 @@ def get_top_clientes(client: Client, anio: int, mes: int,
     return agg.sort_values("fact_nc", ascending=False).reset_index(drop=True)
 
 
+def get_clientes_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
+    """
+    Matriz cliente × mes para toda la historia disponible (base del CRM de
+    Clientes). RLS aplica: vendedor ve solo sus clientes. Pagina para no
+    quedar corto con el límite de 1000 filas de PostgREST.
+
+    Devuelve formato largo (una fila por cliente-mes con actividad):
+      cliente_rut, ym ('YYYY-MM'), fact_nc (SUM neto), n_facturas (folios
+      distintos), razon_social, comuna, region, tipo.
+    """
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        q = (client.table("fact_ventas")
+             .select("fecha,tipo_dcto,n_dcto,cliente_rut,neto")
+             .order("id")
+             .range(offset, offset + _PAGE - 1))
+        if sociedad_ids:
+            q = q.in_("sociedad_id", sociedad_ids)
+        r = q.execute()
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df["neto"] = pd.to_numeric(df["neto"], errors="coerce").fillna(0)
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df = df.dropna(subset=["fecha"])
+    df["ym"] = df["fecha"].dt.strftime("%Y-%m")
+    df["es_fac"] = df["tipo_dcto"].str.contains("factura", case=False, na=False)
+
+    monto = (df.groupby(["cliente_rut", "ym"], dropna=False)["neto"]
+               .sum().reset_index(name="fact_nc"))
+    nfac = (df[df["es_fac"]].groupby(["cliente_rut", "ym"])["n_dcto"]
+              .nunique().reset_index(name="n_facturas"))
+    out = monto.merge(nfac, on=["cliente_rut", "ym"], how="left")
+    out["n_facturas"] = out["n_facturas"].fillna(0).astype(int)
+
+    dfc = get_dim_cliente_full(client)
+    if not dfc.empty:
+        out = out.merge(dfc.rename(columns={"rut": "cliente_rut"}),
+                        on="cliente_rut", how="left")
+    for col in ["razon_social", "comuna", "region", "tipo"]:
+        if col not in out.columns:
+            out[col] = None
+    out["razon_social"] = out["razon_social"].fillna(out["cliente_rut"])
+    return out
+
+
+def get_cliente_detalle(client: Client, cliente_rut: str):
+    """
+    Detalle de un cliente para su ficha: (df_ventas, df_pedidos).
+    - df_ventas: líneas de fact_ventas (fecha, neto, n_dcto, tipo_dcto,
+      producto_codigo, cantidad, categoria, nombre_producto).
+    - df_pedidos: líneas de fact_pedidos (fecha, neto, facturado).
+    Pagina ambas tablas. RLS aplica.
+    """
+    def _paginar(tabla, cols):
+        _PAGE, offset, rows = 1000, 0, []
+        while True:
+            r = (client.table(tabla).select(cols)
+                 .eq("cliente_rut", cliente_rut)
+                 .order("id").range(offset, offset + _PAGE - 1).execute())
+            if not r.data:
+                break
+            rows.extend(r.data)
+            if len(r.data) < _PAGE:
+                break
+            offset += _PAGE
+        return pd.DataFrame(rows)
+
+    dfv = _paginar("fact_ventas",
+                   "fecha,neto,n_dcto,tipo_dcto,producto_codigo,cantidad")
+    if not dfv.empty:
+        for c in ["neto", "cantidad"]:
+            dfv[c] = pd.to_numeric(dfv[c], errors="coerce").fillna(0)
+        dfv["fecha"] = pd.to_datetime(dfv["fecha"], errors="coerce")
+        dp = get_dim_producto_all(client)
+        if not dp.empty:
+            dp = dp.rename(columns={"codigo": "producto_codigo",
+                                    "nombre": "nombre_producto"})
+            dfv = dfv.merge(dp[["producto_codigo", "nombre_producto", "categoria"]],
+                            on="producto_codigo", how="left")
+        # Servicios (SER-*) traen Cantidad basura: neutralizar solo la cantidad.
+        if "categoria" in dfv.columns:
+            mask_serv = dfv["categoria"].astype(str).str.upper().str.contains(
+                "SERVICIO", na=False)
+            dfv.loc[mask_serv, "cantidad"] = 0
+
+    dfp = _paginar("fact_pedidos", "fecha,neto,facturado")
+    if not dfp.empty:
+        dfp["neto"] = pd.to_numeric(dfp["neto"], errors="coerce").fillna(0)
+        dfp["fecha"] = pd.to_datetime(dfp["fecha"], errors="coerce")
+
+    return dfv, dfp
+
+
 # ── Comisiones (sección Sueldos y Comisiones — solo gerencia) ───────────────
 
 def get_comisiones(client: Client, anio: int, mes: int) -> pd.DataFrame:
