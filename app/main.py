@@ -354,7 +354,13 @@ def main():
         from app.pages import (vendedor, gerencia, analisis, carga,
                                 inicio, admin, comisiones, clientes)
 
-        client    = get_client_auth()
+        client = get_client_auth()
+        if client is None:
+            # La sesión expiró y no se pudo refrescar → volver al login limpio.
+            logout()
+            st.warning("Tu sesión expiró. Vuelve a ingresar.")
+            st.stop()
+
         nombre_mes     = MESES[mes]
         nombre_usuario = st.session_state.get("vendedor_nombre", "")
 

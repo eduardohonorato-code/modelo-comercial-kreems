@@ -63,10 +63,13 @@ def _refrescar_token_si_necesario() -> str | None:
     if exp and time.time() < exp - 60:
         return token  # Todavía vigente
 
+    ya_expiro = bool(exp) and time.time() >= exp
+
     # Intentar refresh
     refresh = st.session_state.get("refresh_token")
     if not refresh:
-        return token  # Sin refresh token; que falle en la query
+        # Sin refresh token: si ya expiró, no sirve → None (forzar re-login)
+        return None if ya_expiro else token
 
     try:
         anon = create_client(_URL, _ANON)
@@ -76,9 +79,10 @@ def _refrescar_token_si_necesario() -> str | None:
             st.session_state["refresh_token"] = resp.session.refresh_token
             return resp.session.access_token
     except Exception:
-        pass  # Si falla el refresh, devolver el token viejo y dejar que la query falle
+        pass  # Refresh falló
 
-    return token
+    # Si el token ya expiró y no se pudo refrescar → None (la sesión murió)
+    return None if ya_expiro else token
 
 
 def get_client_auth() -> Client | None:
