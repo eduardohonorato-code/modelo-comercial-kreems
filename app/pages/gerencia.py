@@ -158,6 +158,12 @@ def render(client, anio: int, mes: int):
                     factura. <strong>"—"</strong> = vendedor sin pedidos en Autoventa (ej. solo Acuña).</li>
                 <li>Pedido y factura caen en el <strong>mismo mes</strong> (sin arrastre de meses
                     anteriores, verificado por folio).</li>
+                <li><strong>"No Facturado" puede aparecer inflado por cruce de sociedades.</strong>
+                    Si un pedido se ingresa en Autoventa (Gran Natural) pero termina
+                    facturándose por <strong>Acuña</strong> (Obuma), Autoventa nunca ve el DTE y lo
+                    deja como <em>Sin DTE</em> para siempre — aunque la venta SÍ existe (entra en
+                    Fact-NC por Acuña). Ej.: un vendedor con mucha venta Acuña puede mostrar un
+                    "No Facturado" alto que en realidad ya está facturado en la otra sociedad.</li>
               </ul>
               <p><strong>Máquinas — de dónde sale cada columna</strong></p>
               <ul>
