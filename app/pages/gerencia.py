@@ -56,6 +56,8 @@ def render(client, anio: int, mes: int):
     total_docs  = df["n_documentos"].sum()
     total_mgst  = df["maquinas_gestionadas"].sum()
     total_menv  = df["maquinas_entregadas"].sum()
+    total_ped   = df["pedidos_neto"].sum() if "pedidos_neto" in df else 0
+    total_nofac = df["no_facturado_monto"].sum() if "no_facturado_monto" in df else 0
     pct_global  = total_fnc / total_obj if total_obj else None
 
     cls = color_pct(pct_global)
@@ -97,6 +99,11 @@ def render(client, anio: int, mes: int):
         <div class="kpi-label">Fact-NC</div>
         <div class="kpi-value {cls}">{fmt_clp(total_fnc)}</div>
         <div class="kpi-sub">% Cumpl: <strong>{fmt_pct(pct_global)}</strong></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Pedidos</div>
+        <div class="kpi-value">{fmt_clp(total_ped)}</div>
+        <div class="kpi-sub">No fact.: {fmt_clp(total_nofac)}</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">N° Documentos</div>

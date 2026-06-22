@@ -62,6 +62,17 @@ def render(client, anio: int, mes: int, nombre: str):
 
     r = fila.iloc[0]
 
+    # Pedidos del vendedor (Autoventa) — no viene en la vista, se trae aparte.
+    ped_neto = 0.0
+    try:
+        dfped = get_pedidos_resumen(client, anio, mes)
+        if not dfped.empty:
+            pr = dfped[dfped["vendedor_id"] == r["vendedor_id"]]
+            if not pr.empty:
+                ped_neto = float(pr.iloc[0]["pedidos_neto"] or 0)
+    except Exception:
+        pass
+
     # ── KPIs principales ────────────────────────────────────────────────────
     pct_c = r.get("pct_cumplimiento")
     pct_p = r.get("pct_proyeccion")
@@ -97,6 +108,11 @@ def render(client, anio: int, mes: int, nombre: str):
       </div>
     </div>
     <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Pedidos</div>
+        <div class="kpi-value">{fmt_clp(ped_neto)}</div>
+        <div class="kpi-sub">Autoventa (facturado + no fact.)</div>
+      </div>
       <div class="kpi-card">
         <div class="kpi-label">N° Facturas</div>
         <div class="kpi-value">{fmt_num(r.get("n_facturas"))}</div>
