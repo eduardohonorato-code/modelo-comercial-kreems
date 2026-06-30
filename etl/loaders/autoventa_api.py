@@ -86,9 +86,16 @@ def cargar_autoventa_api(
     mapeo_vendedor: dict,
     log_no_mapeados: list,
     fallback_vendedor_id: int | None = None,
+    vendedor_doc_obuma: dict | None = None,
 ) -> dict:
     """
     Carga los pedidos del período (año, mes) desde la API de Autoventa.
+
+    `vendedor_doc_obuma`: mapa folio (num_documento, str) → vendedor_id del
+    DOCUMENTO en Obuma. Si se entrega, los pedidos FACTURADOS se reatribuyen al
+    vendedor del DTE de Obuma (fuente de verdad de a quién pertenece la venta
+    facturada), en vez del vendedor por-línea de Autoventa. Así Ped.Fact cuadra
+    con Fact-NC por vendedor. Ver memoria 'atribucion-vendedor-linea-doc'.
 
     Returns (espejo de la parte pedidos de cargar_autoventa):
       {fact_pedidos, dim_cliente, stats, _docs_facturados}
@@ -166,6 +173,29 @@ def cargar_autoventa_api(
         df["vendedor_nombre"], mapeo_vendedor, log_no_mapeados,
         fuente="autoventa_api", fallback_id=fallback_vendedor_id,
     )
+
+    # ── Reatribución al DTE de Obuma (pedidos facturados) ───────────────────
+    # Autoventa atribuye el vendedor por línea; Obuma lo atribuye por documento.
+    # Para que Ped.Fact cuadre con Fact-NC por vendedor, el vendedor de un pedido
+    # FACTURADO debe ser el del documento en Obuma (el DTE es la venta oficial).
+    # Solo se sobreescribe cuando el folio cruza un documento de Obuma con un
+    # vendedor REAL (si Obuma quedó "Sin asignar", se respeta el de Autoventa,
+    # que puede ser mejor; ese hueco se corrige por el lado de Obuma).
+    if vendedor_doc_obuma:
+        es_fact = df["doc_venta"] != "Sin DTE"
+        num = df["num_documento"].astype("string").str.strip()
+        nuevo = num.map(vendedor_doc_obuma)
+        aplicar = (
+            es_fact & nuevo.notna()
+            & (nuevo != fallback_vendedor_id)
+            & (nuevo != df["vendedor_id"])
+        )
+        n_reasig = int(aplicar.sum())
+        monto_reasig = float(df.loc[aplicar, "neto"].sum())
+        df.loc[aplicar, "vendedor_id"] = nuevo[aplicar].astype(int)
+        logger.info("  [AV-API] reatribución al DTE de Obuma: %d líneas / $%.0f "
+                    "movidos al vendedor del documento", n_reasig, monto_reasig)
+
     df["linea"] = (
         df.groupby(["sociedad_id", "n_pedido", "producto_codigo"]).cumcount() + 1
     ).astype("Int64")

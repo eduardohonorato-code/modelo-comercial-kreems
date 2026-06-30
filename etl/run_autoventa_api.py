@@ -22,10 +22,13 @@ Requisitos en .env:
     SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
 """
 import argparse
+import calendar
 import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -34,6 +37,7 @@ load_dotenv()
 
 from etl.db import get_client
 from etl.cleaners import construir_mapeo_vendedor
+from etl.config import SOCIEDAD_ID
 from etl.upsert import upsert_tabla
 from etl.loaders.autoventa_api import cargar_autoventa_api
 
@@ -54,6 +58,42 @@ def _asegurar_vendedor_sin_asignar(client) -> int:
     ins = (client.table("dim_vendedor")
            .insert({"nombre_canonico": "Sin asignar", "activo": True}).execute())
     return ins.data[0]["id"]
+
+
+def _mapa_vendedor_doc_obuma(client, periodo: tuple, fallback_id: int) -> dict:
+    """
+    Mapa folio (n_dcto, str) → vendedor_id del DOCUMENTO en Obuma para el período,
+    sociedad Gran Natural. Se usa para reatribuir los pedidos facturados de
+    Autoventa al vendedor del DTE (ver memoria 'atribucion-vendedor-linea-doc').
+
+    Obuma atribuye el vendedor por documento, así que normalmente es uniforme por
+    n_dcto; por robustez se toma el vendedor con MAYOR monto del documento.
+    Requiere que Obuma ya esté cargado del período (run_diario corre Obuma antes).
+    """
+    anio, mes = periodo
+    desde = f"{anio}-{mes:02d}-01"
+    hasta = f"{anio}-{mes:02d}-{calendar.monthrange(anio, mes)[1]:02d}"
+    soc = SOCIEDAD_ID["grannatural"]
+    filas, off = [], 0
+    while True:
+        r = (client.table("fact_ventas")
+             .select("n_dcto,vendedor_id,neto")
+             .eq("sociedad_id", soc)
+             .gte("fecha", desde).lte("fecha", hasta)
+             .order("id").range(off, off + 999).execute())
+        filas += r.data or []
+        if not r.data or len(r.data) < 1000:
+            break
+        off += 1000
+    if not filas:
+        return {}
+    d = pd.DataFrame(filas)
+    d["neto"] = d["neto"].astype(float)
+    d["n_dcto"] = d["n_dcto"].astype(str).str.strip()
+    # vendedor del documento = el de mayor monto sumado dentro del n_dcto
+    g = (d.groupby(["n_dcto", "vendedor_id"])["neto"].sum().reset_index()
+         .sort_values("neto").drop_duplicates("n_dcto", keep="last"))
+    return dict(zip(g["n_dcto"], g["vendedor_id"].astype(int)))
 
 
 def _parse_periodo(valor: str) -> tuple:
@@ -80,9 +120,15 @@ def run(periodo: tuple, dry_run: bool = False):
     logger.info("Vendedores en dim_vendedor: %d | fallback 'Sin asignar' id=%s",
                 len(mapeo_vendedor), fallback_id)
 
+    # Mapa folio→vendedor del DTE de Obuma para reatribuir los pedidos facturados
+    # (Obuma debe estar cargado del período; en run_diario corre antes que esto).
+    vendedor_doc = _mapa_vendedor_doc_obuma(client, periodo, fallback_id)
+    logger.info("Mapa folio→vendedor (Obuma) del período: %d documentos", len(vendedor_doc))
+
     log_no_mapeados: list = []
     av = cargar_autoventa_api(periodo, mapeo_vendedor, log_no_mapeados,
-                              fallback_vendedor_id=fallback_id)
+                              fallback_vendedor_id=fallback_id,
+                              vendedor_doc_obuma=vendedor_doc)
 
     fact_pedidos = av["fact_pedidos"]
     if fact_pedidos.empty:
