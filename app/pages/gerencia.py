@@ -143,48 +143,75 @@ def render(client, anio: int, mes: int):
         st.markdown(
             """
             <div class="nota-embudo">
-              <p><strong>Pedidos vs Fact-NC</strong></p>
+              <p><strong>Dos ERP alimentan esta tabla:</strong> <strong>Obuma</strong> (facturación
+                 oficial — DTE, notas de crédito, máquinas) y <strong>Autoventa</strong> (pedidos y
+                 logística). Los <strong>objetivos</strong> los edita gerencia. Las dos sociedades,
+                 <strong>Acuña</strong> y <strong>Gran Natural</strong>, están en Obuma;
+                 <strong>Autoventa cubre solo Gran Natural.</strong></p>
+
+              <p><strong>De dónde sale cada columna</strong></p>
               <ul>
-                <li><strong>Pedidos = Ped. Fact. + No Fact.</strong> El total de pedidos (Autoventa)
-                    se divide entre los que ya tienen factura y los que aún no (Sin DTE).</li>
-                <li><strong>Ped. Fact. ≈ Facturas de Gran Natural.</strong> A nivel sociedad cuadra
-                    al peso (mayo: $55,1M = $55,1M). La fórmula que sí se cumple es
-                    <em>Ped. Fact. − NC = Fact-NC</em>, no "Pedidos total − NC".</li>
-                <li><strong>No iguala a Fact-NC por dos razones, no por error:</strong>
-                    (1) <em>Pedidos total</em> incluye el No Facturado, que todavía no es venta;
-                    (2) <em>Acuña no pasa por Autoventa</em> (Autoventa = solo Gran Natural), así que
-                    su facturación entra en Fact-NC pero no en Pedidos.</li>
-                <li><strong>% Fact. = Ped. Fact. / Pedidos</strong>: qué parte de lo pedido llegó a
+                <li><strong>Vendedor</strong> — dimensión de vendedores (se mapea el nombre de cada
+                    ERP a un id único, tolerando variaciones de escritura).</li>
+                <li><strong>Objetivo</strong> — objetivo de venta del mes, <em>cargado por gerencia</em>
+                    (editable abajo). Igual para <em>Obj Maq</em> y <em>Obj Visitas</em>.</li>
+                <li><strong>Fact-NC</strong> — <strong>Obuma</strong>: facturas menos notas de crédito
+                    (las NC entran con signo negativo). Es la <em>venta neta oficial</em> y el número
+                    contra el que se mide el objetivo. Obuma atribuye el vendedor <em>por documento</em>.</li>
+                <li><strong>% Cumpl</strong> — Fact-NC / Objetivo.</li>
+                <li><strong>Pedidos</strong> — <strong>Autoventa</strong>: neto total de pedidos del
+                    mes = <em>Ped. Fact. + No Fact.</em></li>
+                <li><strong>Ped. Fact.</strong> — <strong>Autoventa</strong>: pedidos que ya tienen
+                    folio (DTE emitido) = <em>Pedidos − No Fact.</em> <strong>El vendedor de un pedido
+                    facturado se hereda del documento en Obuma</strong> (el DTE manda), no de quién
+                    cargó la línea en Autoventa — así esta columna usa el mismo criterio que Fact-NC.</li>
+                <li><strong>No Fact.</strong> — <strong>Autoventa</strong>: pedidos marcados
+                    <em>Sin DTE</em> (despachados pero aún sin factura emitida).</li>
+                <li><strong>% Fact.</strong> — Ped. Fact. / Pedidos: qué parte de lo pedido llegó a
                     factura. <strong>"—"</strong> = vendedor sin pedidos en Autoventa (ej. solo Acuña).</li>
-                <li>Pedido y factura caen en el <strong>mismo mes</strong> (sin arrastre de meses
-                    anteriores, verificado por folio).</li>
-                <li><strong>"No Facturado" puede aparecer inflado por cruce de sociedades.</strong>
-                    Si un pedido se ingresa en Autoventa (Gran Natural) pero termina
-                    facturándose por <strong>Acuña</strong> (Obuma), Autoventa nunca ve el DTE y lo
-                    deja como <em>Sin DTE</em> para siempre — aunque la venta SÍ existe (entra en
-                    Fact-NC por Acuña). Ej.: un vendedor con mucha venta Acuña puede mostrar un
-                    "No Facturado" alto que en realidad ya está facturado en la otra sociedad.</li>
-              </ul>
-              <p><strong>Máquinas — de dónde sale cada columna</strong></p>
-              <ul>
-                <li><strong>Gestionadas</strong> = instalaciones a cliente nuevo: líneas con código
-                    <strong>FL-4</strong> en <strong>Obuma</strong> (categoría "Maquinas"). Es lo que
-                    el vendedor colocó en el mes.</li>
-                <li><strong>Entregadas</strong> = de esas máquinas, las que figuran como
+                <li><strong>NC</strong> — <strong>Obuma</strong>: suma de notas de crédito del mes.</li>
+                <li><strong>Gestionadas</strong> — <strong>Obuma</strong>: instalaciones a cliente
+                    nuevo, líneas con código <strong>FL-4</strong> (categoría "Maquinas"). Lo que el
+                    vendedor colocó en el mes.</li>
+                <li><strong>Entregadas</strong> — de esas máquinas, las que figuran como
                     <strong>"Entregada"</strong> en el <em>Detalle de despachos</em> (Autoventa),
                     cruzando por N° de documento. Mide la conversión gestionada → entregada.</li>
-                <li>Esta tabla muestra solo <strong>Gestionadas</strong> y <strong>Entregadas</strong>.
-                    Los <strong>retiros</strong> (FL-2), los <em>cambios</em> (FL-1/3/5) y el detalle
-                    por estado se ven en <strong>Análisis → Máquinas</strong>.</li>
-                <li><strong>Fuente única = Obuma</strong> (cubre Acuña y Gran Natural y los 5 códigos
-                    FL). El estado <em>entregada/rechazada</em> se completa al cargar los despachos;
-                    sin despacho, la máquina queda <em>gestionada</em>. Si un mes muestra 0
-                    gestionadas, es que no hubo líneas FL-4 en Obuma ese mes.</li>
+                <li><strong>N° Docs</strong> — <strong>Obuma</strong>: nº de facturas distintas del
+                    vendedor en el mes.</li>
+                <li><strong>% Efec</strong> — N° Docs / Obj Visitas.</li>
               </ul>
-              <p><strong>Resto de columnas:</strong> Fact-NC, N° docs, NC, % Cumpl. y % Efec. salen de
-                 las facturas/NC de <strong>Obuma</strong>; Pedidos, No Fact. y % Fact. de
-                 <strong>Autoventa</strong>; los objetivos los edita gerencia. Todo se calcula en la
-                 vista <code>v_resumen_vendedor_mes</code>, no en la app.</p>
+
+              <p><strong>Cómo leer el embudo Pedidos → Fact-NC</strong></p>
+              <ul>
+                <li>La identidad que se cumple es <strong>Ped. Fact. − NC = Fact-NC</strong>
+                    (no "Pedidos total − NC"). Para vendedores <strong>100% Gran Natural cuadra al
+                    peso</strong> (las diferencias de unos pesos son redondeo de la API de Autoventa).</li>
+                <li><strong>Por qué a un vendedor puede NO cuadrarle, sin que sea error:</strong></li>
+                <li>① <strong>Tiene venta en Acuña.</strong> Acuña no pasa por Autoventa, así que su
+                    facturación entra en Fact-NC pero no tiene pedidos que la respalden → Fact-NC &gt;
+                    Ped. Fact. (ej.: un vendedor con Pedidos = 0 y Fact-NC &gt; 0 es 100% Acuña).</li>
+                <li>② <strong>"No Facturado" inflado por cruce de sociedades.</strong> Si un pedido se
+                    ingresa en Autoventa (Gran Natural) pero termina facturándose por <strong>Acuña</strong>,
+                    Autoventa nunca ve el DTE y lo deja <em>Sin DTE</em> para siempre — aunque la venta
+                    sí existe (ya está en Fact-NC por Acuña).</li>
+                <li>③ <strong>Documento sin vendedor en Obuma.</strong> Si Obuma dejó la factura en
+                    "Sin asignar" pero Autoventa sí sabe de quién es, los montos quedan en filas
+                    distintas. Se corrige mapeando ese vendedor en Obuma.</li>
+                <li>Pedido y factura caen en el <strong>mismo mes</strong> (sin arrastre, verificado
+                    por folio).</li>
+              </ul>
+
+              <p><strong>Sobre máquinas:</strong> esta tabla muestra solo <em>Gestionadas</em> y
+                 <em>Entregadas</em>. Los <strong>retiros</strong> (FL-2), los <em>cambios</em>
+                 (FL-1/3/5) y el detalle por estado están en <strong>Análisis → Máquinas</strong>.
+                 La fuente de las máquinas es <strong>Obuma</strong> (cubre las dos sociedades y los 5
+                 códigos FL); el estado <em>entregada/rechazada</em> se completa al cargar los
+                 despachos — sin despacho, la máquina queda <em>gestionada</em>.</p>
+
+              <p><strong>Cálculo:</strong> casi todo se lee de la vista
+                 <code>v_resumen_vendedor_mes</code> (Fact-NC, NC, máquinas, objetivos, N° Docs y sus
+                 %); <em>Pedidos</em> sale de <code>fact_pedidos</code> y <em>Ped. Fact.</em> se deriva
+                 en la app como Pedidos − No Fact. Ningún número se recalcula a mano: salen del ETL.</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -212,7 +239,7 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
         "<th title='Facturación neta de notas de crédito'>Fact-NC</th>"
         "<th title='Fact-NC / Objetivo'>% Cumpl</th>"
         "<th title='Pedidos neto total (Autoventa) = facturados + no facturado'>Pedidos</th>"
-        "<th title='Pedidos con folio emitido. A nivel Gran Natural = Facturas Obuma exacto. No iguala Fact-NC porque Acuña no pasa por Autoventa'>Ped. Fact.</th>"
+        "<th title='Pedidos con folio emitido (Autoventa). El vendedor se hereda del documento en Obuma (el DTE manda). En Gran Natural, Ped. Fact. − NC = Fact-NC al peso; no iguala Fact-NC cuando hay venta Acuña (no pasa por Autoventa)'>Ped. Fact.</th>"
         "<th title='Monto no facturado (Sin DTE): pedidos cargados que aún no se facturan'>No Fact.</th>"
         "<th title='% de pedidos que llegaron a factura (Ped. Fact. / Pedidos). “—” = vendedor sin pedidos en Autoventa (ej. solo Acuña)'>% Fact.</th>"
         "<th title='Suma notas de crédito'>NC</th>"
