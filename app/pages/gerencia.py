@@ -155,9 +155,24 @@ def render(client, anio: int, mes: int):
                     ERP a un id único, tolerando variaciones de escritura).</li>
                 <li><strong>Objetivo</strong> — objetivo de venta del mes, <em>cargado por gerencia</em>
                     (editable abajo). Igual para <em>Obj Maq</em> y <em>Obj Visitas</em>.</li>
-                <li><strong>Fact-NC</strong> — <strong>Obuma</strong>: facturas menos notas de crédito
-                    (las NC entran con signo negativo). Es la <em>venta neta oficial</em> y el número
-                    contra el que se mide el objetivo. Obuma atribuye el vendedor <em>por documento</em>.</li>
+                <li><strong>Fact-NC</strong> — <strong>Obuma</strong>. Es la <em>venta neta oficial</em>
+                    del vendedor y el número contra el que se mide el objetivo. Detalle:
+                    <ul>
+                      <li><strong>Fórmula:</strong> suma de <em>facturas</em> − suma de <em>notas de
+                          crédito</em> del mes. Las NC entran con <strong>signo negativo</strong>
+                          (devoluciones/anulaciones que restan venta).</li>
+                      <li><strong>Qué documentos cuenta:</strong> solo DTE reales —
+                          <em>factura electrónica</em>, <em>factura exenta</em> y <em>nota de
+                          crédito</em>. Se <strong>excluyen</strong> notas de venta/pedidos internos y
+                          guías de despacho (no son venta facturada).</li>
+                      <li><strong>Cubre las dos sociedades:</strong> Acuña + Gran Natural (Obuma es el
+                          único ERP con la facturación de ambas).</li>
+                      <li><strong>Atribución por documento:</strong> toda la factura suma al vendedor
+                          que figura en el DTE (por eso es la fuente de verdad para repartir las
+                          ventas entre vendedores).</li>
+                      <li>Se suma a <strong>nivel de línea de producto</strong> (cada factura puede
+                          traer varias líneas); el monto usado es el <em>neto</em>, sin IVA.</li>
+                    </ul></li>
                 <li><strong>% Cumpl</strong> — Fact-NC / Objetivo.</li>
                 <li><strong>Pedidos</strong> — <strong>Autoventa</strong>: neto total de pedidos del
                     mes = <em>Ped. Fact. + No Fact.</em></li>
