@@ -202,11 +202,26 @@ def es_admin() -> bool:
 
 def cambiar_password(nueva_pass: str) -> tuple[bool, str]:
     """Cambia la contraseña del usuario actualmente autenticado."""
-    client = get_client_auth()
-    if not client:
-        return False, "No hay sesión activa."
+    # update_user es una operación de Auth (GoTrue), NO de PostgREST. Por eso no
+    # sirve get_client_auth() (ese solo carga el token en postgrest para las RLS).
+    # Hay que cargar la sesión completa en el cliente de auth con set_session, si
+    # no, GoTrue responde "Auth session missing!".
+    token   = _refrescar_token_si_necesario()
+    refresh = st.session_state.get("refresh_token")
+    if not token or not refresh:
+        return False, "No hay sesión activa. Vuelve a iniciar sesión e inténtalo de nuevo."
     try:
+        client = create_client(_URL, _ANON)
+        client.auth.set_session(token, refresh)
         client.auth.update_user({"password": nueva_pass})
+        # set_session pudo rotar los tokens; reflejarlo en la sesión de Streamlit.
+        try:
+            sess = client.auth.get_session()
+            if sess:
+                st.session_state["access_token"]  = sess.access_token
+                st.session_state["refresh_token"] = sess.refresh_token
+        except Exception:
+            pass
         return True, ""
     except Exception as e:
         return False, str(e)
