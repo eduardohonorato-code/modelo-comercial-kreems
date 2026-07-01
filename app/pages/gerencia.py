@@ -194,10 +194,11 @@ def render(client, anio: int, mes: int):
                 <li><strong>% Fact.</strong> — Ped. Fact. / Pedidos: qué parte de lo pedido llegó a
                     factura. <strong>"—"</strong> = vendedor sin pedidos en Autoventa (ej. solo Acuña).</li>
                 <li><strong>NC</strong> — <strong>Obuma</strong>: suma de notas de crédito del mes.</li>
-                <li><strong>Maq. Ingresadas AV</strong> — máquinas de <strong>instalación a cliente
-                    nuevo</strong> (código <strong>FL-4</strong>), tal como se ingresan en
-                    <strong>Autoventa</strong>. Es lo que el vendedor colocó en el mes. El vendedor se
-                    toma de Autoventa (quien gestionó la máquina en terreno). NO incluye cambios
+                <li><strong>Maq. Ingresadas AV</strong> <em>(AV = Autoventa)</em> — máquinas de
+                    <strong>instalación a cliente nuevo</strong> (código <strong>FL-4</strong>), tal
+                    como se ingresan en <strong>Autoventa</strong>. Es lo que el vendedor colocó en el
+                    mes. El vendedor se toma de Autoventa (quien gestionó la máquina en terreno), no de
+                    Obuma (que suele dejar estos documentos en "Sin asignar"). NO incluye cambios
                     (FL-1/3/5) ni retiros (FL-2).</li>
                 <li><strong>Maq. Entregada</strong> — de esas máquinas ingresadas, las que figuran como
                     <strong>"Entregada"</strong> en el <em>Detalle de despachos</em>, cruzando por N° de
@@ -234,6 +235,12 @@ def render(client, anio: int, mes: int):
                  los 5 códigos FL) y el <strong>vendedor se atribuye según Autoventa</strong>; el estado
                  <em>entregada/rechazada</em> se completa al cargar los despachos — sin despacho, la
                  máquina ingresada queda pendiente de entrega.</p>
+
+              <p><strong>Tarjetas de arriba (totales del equipo):</strong> son la suma de todos los
+                 vendedores. <strong>Proyección Cierre</strong> = venta estimada a fin de mes con ritmo
+                 lineal: <em>(Fact-NC / días trabajados) × días del mes</em> (descontando feriados);
+                 <em>% Proy</em> = Proyección / Objetivo. Las demás tarjetas son los mismos conceptos
+                 de la tabla, sumados.</p>
 
               <p><strong>Cálculo:</strong> casi todo se lee de la vista
                  <code>v_resumen_vendedor_mes</code> (Fact-NC, NC, máquinas, objetivos, N° Docs y sus
