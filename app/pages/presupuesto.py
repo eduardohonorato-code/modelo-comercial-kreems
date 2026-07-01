@@ -348,6 +348,47 @@ def render(client, anio: int, mes: int):
                    "se cargan igual que siempre en **Panel Gerencia → Editar objetivos**. "
                    "Esto es solo la base cuantitativa.")
 
+        with st.expander("ℹ️ Cómo se calcula cada sugerencia (lógica y fórmulas)"):
+            growth_txt = (fmt_pct(sug["growth"] - 1) if sug.get("growth") else "—")
+            st.markdown(f"""
+            <div class="nota-embudo">
+              <p><strong>📉 Ritmo reciente × estacionalidad</strong> — "si seguimos vendiendo
+                 al ritmo actual, ¿cuánto corresponde a {MESES_NOM[mes_obj]} según su peso
+                 histórico en el año?"</p>
+              <ul>
+                <li><strong>Fórmula:</strong> <em>(Venta real de los últimos 3 meses cerrados ÷
+                    peso histórico de esos 3 meses) × peso histórico de {MESES_NOM[mes_obj]}</em>.</li>
+                <li>El <em>peso histórico</em> de un mes es el % de la venta anual que ese mes
+                    representó en los años históricos (el gráfico de Estacionalidad). Dividir por el
+                    peso de los meses base "des-estacionaliza" la venta reciente (quita el efecto
+                    verano/invierno) y multiplicar por el peso del mes objetivo la vuelve a ajustar
+                    a la estación de ese mes.</li>
+                <li>Meses base usados ahora: <strong>{base_txt}</strong>.</li>
+                <li><em>Cuándo confiar:</em> es la mejor referencia cuando el negocio viene estable;
+                    capta el ritmo real y corrige por estación.</li>
+              </ul>
+              <p><strong>📆 Año pasado × crecimiento</strong> — "lo que vendimos en
+                 {MESES_NOM[mes_obj]} del año pasado, ajustado por cuánto estamos creciendo".</p>
+              <ul>
+                <li><strong>Fórmula:</strong> <em>Venta de {MESES_NOM[mes_obj]} {anio-1} ×
+                    crecimiento reciente</em>, donde el crecimiento = venta de los últimos 3 meses
+                    de {anio} ÷ venta de los mismos 3 meses de {anio-1}
+                    (hoy: <strong>{growth_txt}</strong>).</li>
+                <li><em>Cuándo confiar:</em> útil cuando el año pasado fue "normal" en ese mes; se
+                    distorsiona si hubo eventos puntuales (quiebres de stock, promociones únicas).</li>
+              </ul>
+              <p><strong>🎯 Presupuesto definido</strong> — el monto que gerencia planificó para
+                 {MESES_NOM[mes_obj]} en el presupuesto anual (editor de abajo). Es el compromiso
+                 del plan, sin ajuste por la realidad del año.</p>
+              <p><strong>Sugerido final = promedio simple</strong> de las referencias disponibles
+                 (hoy {len(refs)}). Si una referencia no tiene datos suficientes (ej. faltan
+                 históricos), simplemente no participa del promedio.</p>
+              <p><strong>Reparto por vendedor:</strong> el sugerido total se distribuye según la
+                 participación de cada vendedor en el Fact-NC de los meses base ({base_txt}),
+                 redondeado a $100.000. Excluye "Sin asignar".</p>
+            </div>
+            """, unsafe_allow_html=True)
+
         # Reparto sugerido por vendedor (participación últimos meses cerrados)
         if base:
             part = get_participacion_vendedores(client, anio, base)

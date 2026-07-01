@@ -202,6 +202,11 @@ def render(client, anio: int, mes: int):
                           traer varias líneas); el monto usado es el <em>neto</em>, sin IVA.</li>
                     </ul></li>
                 <li><strong>% Cumpl</strong> — Fact-NC / Objetivo.</li>
+                <li><strong>Proyección</strong> — venta estimada al cierre del mes si el vendedor
+                    mantiene su ritmo actual: <em>(Fact-NC / días hábiles transcurridos) × días
+                    hábiles del mes</em> (descontando feriados). El color compara la proyección
+                    contra el objetivo: verde ≥100%, amarillo ≥70%, rojo &lt;70%. En meses cerrados
+                    coincide con el Fact-NC final.</li>
                 <li><strong>Pedidos</strong> — <strong>Autoventa</strong>: neto total de pedidos del
                     mes = <em>Ped. Fact. + No Fact.</em></li>
                 <li><strong>Ped. Fact.</strong> — <strong>Autoventa</strong>: pedidos que ya tienen
@@ -295,6 +300,7 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
         "<th title='Objetivo de venta mensual'>Objetivo</th>"
         "<th title='Facturación neta de notas de crédito'>Fact-NC</th>"
         "<th title='Fact-NC / Objetivo'>% Cumpl</th>"
+        "<th title='Venta proyectada al cierre del mes al ritmo actual: (Fact-NC / días trabajados) × días del mes. Color según % proyectado vs objetivo'>Proyección</th>"
         "<th title='Pedidos neto total (Autoventa) = facturados + no facturado'>Pedidos</th>"
         "<th title='Pedidos con folio emitido (Autoventa). El vendedor se hereda del documento en Obuma (el DTE manda). En Gran Natural, Ped. Fact. − NC = Fact-NC al peso; no iguala Fact-NC cuando hay venta Acuña (no pasa por Autoventa)'>Ped. Fact.</th>"
         "<th title='Monto no facturado (Sin DTE): pedidos cargados que aún no se facturan'>No Fact.</th>"
@@ -315,11 +321,16 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
         cls_e = color_pct(pct_e, umbral_ok=0.5, umbral_warn=0.3)
         ped_tot = r.get("pedidos_neto") or 0
         pct_fact = (r.get("pedidos_facturado") / ped_tot) if ped_tot else None
+        # Proyección a cierre: color según % proyectado vs objetivo (ritmo)
+        proy   = r.get("proyeccion_cierre")
+        pct_p  = pd.to_numeric(r.get("pct_proyeccion"), errors="coerce")
+        cls_p  = color_pct(None if pd.isna(pct_p) else float(pct_p))
         rows += f"""<tr>
           <td style='text-align:left'>{r['nombre_canonico']}</td>
           <td>{fmt_clp(r.get('obj_venta'))}</td>
           <td>{fmt_clp(r.get('fact_nc'))}</td>
           <td class='{cls_c}'>{fmt_pct(pct_c)}</td>
+          <td class='{cls_p}'>{fmt_clp(proy)}</td>
           <td>{fmt_clp(r.get('pedidos_neto'))}</td>
           <td>{fmt_clp(r.get('pedidos_facturado'))}</td>
           <td>{fmt_clp(r.get('no_facturado_monto'))}</td>
@@ -350,11 +361,14 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
     tot_ped  = df.get('pedidos_neto', pd.Series()).sum() if 'pedidos_neto' in df else 0
     tot_pedf = df.get('pedidos_facturado', pd.Series()).sum() if 'pedidos_facturado' in df else 0
     pct_fact_tot = (tot_pedf / tot_ped) if tot_ped else None
+    pct_proy_tot = tot_proy / tot_obj if tot_obj else None
+    cls_proy_tot = color_pct(pct_proy_tot)
     rows += f"""<tr class='total-row'>
       <td style='text-align:left'>TOTAL</td>
       <td>{fmt_clp(tot_obj)}</td>
       <td>{fmt_clp(tot_fnc)}</td>
       <td class='{cls_tot}'>{fmt_pct(pct_tot)}</td>
+      <td class='{cls_proy_tot}'>{fmt_clp(tot_proy)}</td>
       <td>{fmt_clp(tot_ped)}</td>
       <td>{fmt_clp(tot_pedf)}</td>
       <td>{fmt_clp(df['no_facturado_monto'].sum())}</td>

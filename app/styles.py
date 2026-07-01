@@ -361,18 +361,19 @@ h2 { font-size: 1.25rem !important; font-weight: 700 !important;
 table.kreems {
   width: 100%;
   border-collapse: collapse;
-  font-size: .76rem;
+  font-size: .74rem;
   background: white;
+  font-variant-numeric: tabular-nums; /* números alineados, más legible en foto */
 }
 table.kreems th {
   background: var(--azul);
   color: white;
-  padding: .45rem .55rem;
+  padding: .42rem .42rem;
   text-align: right;
   white-space: nowrap;
   font-weight: 600;
-  font-size: .7rem;
-  letter-spacing: .02em;
+  font-size: .66rem;
+  letter-spacing: .01em;
   cursor: default;
 }
 table.kreems th:first-child {
@@ -383,7 +384,7 @@ table.kreems th:first-child {
   background: var(--azul);
 }
 table.kreems td {
-  padding: .38rem .55rem;
+  padding: .34rem .42rem;
   border-bottom: 1px solid #F0F0F5;
   text-align: right;
   white-space: nowrap;
