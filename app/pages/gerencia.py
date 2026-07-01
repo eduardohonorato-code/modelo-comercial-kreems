@@ -58,9 +58,12 @@ def render(client, anio: int, mes: int):
     total_menv  = df["maquinas_entregadas"].sum()
     total_ped   = df["pedidos_neto"].sum() if "pedidos_neto" in df else 0
     total_nofac = df["no_facturado_monto"].sum() if "no_facturado_monto" in df else 0
+    total_proy  = df["proyeccion_cierre"].sum() if "proyeccion_cierre" in df else 0
     pct_global  = total_fnc / total_obj if total_obj else None
+    pct_proy    = total_proy / total_obj if total_obj else None
 
-    cls = color_pct(pct_global)
+    cls      = color_pct(pct_global)
+    cls_proy = color_pct(pct_proy)
 
     # ── Strip de contexto ────────────────────────────────────────────────────
     st.markdown(f"""
@@ -80,9 +83,9 @@ def render(client, anio: int, mes: int):
     </div>
     """, unsafe_allow_html=True)
 
-    # ── KPIs financieros (3×2) ───────────────────────────────────────────────
+    # ── KPIs financieros (4×2 = rectángulo simétrico para pantallazos) ───────
     st.markdown(f"""
-    <div class="kpi-grid-3">
+    <div class="kpi-grid-4">
       <div class="kpi-card">
         <div class="kpi-label">Objetivo total</div>
         <div class="kpi-value">{fmt_clp(total_obj)}</div>
@@ -99,6 +102,11 @@ def render(client, anio: int, mes: int):
         <div class="kpi-label">Fact-NC</div>
         <div class="kpi-value {cls}">{fmt_clp(total_fnc)}</div>
         <div class="kpi-sub">% Cumpl: <strong>{fmt_pct(pct_global)}</strong></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Proyección Cierre</div>
+        <div class="kpi-value {cls_proy}">{fmt_clp(total_proy)}</div>
+        <div class="kpi-sub">% Proy: <strong>{fmt_pct(pct_proy)}</strong></div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Pedidos</div>

@@ -235,6 +235,16 @@ h2 { font-size: 1.25rem !important; font-weight: 700 !important;
 @media (max-width: 600px) {
   .kpi-grid-3 { grid-template-columns: repeat(2, 1fr); }
 }
+/* Grilla fija de 4 columnas (para 8 KPIs → 2×4 simétrico, ideal pantallazo) */
+.kpi-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: .75rem;
+  margin-bottom: 1.25rem;
+}
+@media (max-width: 900px) {
+  .kpi-grid-4 { grid-template-columns: repeat(2, 1fr); }
+}
 .kpi-card {
   background: var(--bg-card);
   border-radius: 12px;
