@@ -174,6 +174,23 @@ def cargar_autoventa_api(
         fuente="autoventa_api", fallback_id=fallback_vendedor_id,
     )
 
+    # Mapa folio → vendedor de las líneas de MÁQUINA (FL-x) con la atribución
+    # ORIGINAL de Autoventa (antes del override al DTE de Obuma). Se usa para
+    # reatribuir el vendedor de fact_maquinas (ver run_autoventa_api): en máquinas
+    # la fuente correcta del vendedor es Autoventa, no Obuma (que las deja 'Sin
+    # asignar'). Se toma el vendedor mayoritario de las líneas FL de cada folio.
+    _cod = df["producto_codigo"].astype(str).str.upper().str.strip()
+    _fl = df[_cod.str.startswith("FL-")].copy()
+    _fl["_folio"] = _fl["num_documento"].astype("string").str.strip()
+    _fl = _fl[_fl["_folio"].notna() & (_fl["_folio"] != "")
+              & (_fl["_folio"].str.lower() != "nan")]
+    vendedor_fl_folio = (
+        {k: int(v) for k, v in
+         _fl.groupby("_folio")["vendedor_id"]
+            .agg(lambda s: s.value_counts().idxmax()).items()}
+        if not _fl.empty else {}
+    )
+
     # ── Reatribución al DTE de Obuma (pedidos facturados) ───────────────────
     # Autoventa atribuye el vendedor por línea; Obuma lo atribuye por documento.
     # Para que Ped.Fact cuadre con Fact-NC por vendedor, el vendedor de un pedido
@@ -245,4 +262,5 @@ def cargar_autoventa_api(
         "dim_cliente": dim_cliente,
         "stats": stats,
         "_docs_facturados": docs_facturados,
+        "_vendedor_fl_folio": vendedor_fl_folio,
     }

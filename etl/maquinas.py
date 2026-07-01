@@ -105,6 +105,38 @@ def marcar_despachos_maquina(fact_despachos: pd.DataFrame,
     return fd
 
 
+def reatribuir_vendedor_autoventa(fact_maquinas: pd.DataFrame,
+                                  vendedor_por_folio: dict,
+                                  fallback_id: int | None = None) -> pd.DataFrame:
+    """
+    Reasigna el vendedor de cada máquina al que figura en AUTOVENTA para ese
+    documento (folio). Para las máquinas (comodato, gestión en terreno) Autoventa
+    es la fuente correcta de quién colocó/retiró la máquina; Obuma suele dejar
+    esos documentos en 'Sin asignar'. Así el conteo por vendedor coincide con el
+    reporte que trabaja desde Autoventa (ej. Tomás, jefe de ventas, conserva sus
+    máquinas en su propia fila).
+
+    `vendedor_por_folio`: dict folio(str) → vendedor_id (tomado de las líneas FL
+    de Autoventa). Solo afecta filas cuyo `documento` está en el mapa (GN
+    facturadas). No toca Acuña (folios que no vienen de Autoventa). Si el mapa
+    apunta al fallback 'Sin asignar', se respeta la atribución previa.
+    """
+    if fact_maquinas.empty or not vendedor_por_folio:
+        return fact_maquinas
+    fm = fact_maquinas.copy()
+    doc = fm["documento"].astype(str).str.strip()
+    nuevo = doc.map(vendedor_por_folio)
+    aplicar = nuevo.notna() & (nuevo != fm["vendedor_id"])
+    if fallback_id is not None:
+        aplicar &= (nuevo != fallback_id)
+    n = int(aplicar.sum())
+    if n:
+        fm.loc[aplicar, "vendedor_id"] = nuevo[aplicar].astype(int)
+        logger.info("  Máquinas reatribuidas al vendedor de Autoventa: %d "
+                    "movimientos", n)
+    return fm
+
+
 def aplicar_override_vendedor(fact_maquinas: pd.DataFrame,
                               overrides: pd.DataFrame) -> pd.DataFrame:
     """

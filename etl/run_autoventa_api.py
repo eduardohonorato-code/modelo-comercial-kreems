@@ -40,6 +40,7 @@ from etl.cleaners import construir_mapeo_vendedor
 from etl.config import SOCIEDAD_ID
 from etl.upsert import upsert_tabla
 from etl.loaders.autoventa_api import cargar_autoventa_api
+from etl.maquinas import reatribuir_vendedor_autoventa, aplicar_override_vendedor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -94,6 +95,39 @@ def _mapa_vendedor_doc_obuma(client, periodo: tuple, fallback_id: int) -> dict:
     g = (d.groupby(["n_dcto", "vendedor_id"])["neto"].sum().reset_index()
          .sort_values("neto").drop_duplicates("n_dcto", keep="last"))
     return dict(zip(g["n_dcto"], g["vendedor_id"].astype(int)))
+
+
+def _leer_maquinas_periodo(client, periodo: tuple) -> pd.DataFrame:
+    """
+    Lee fact_maquinas de Gran Natural del período (ya cargada por Obuma en
+    run_diario) para reatribuir su vendedor al de Autoventa.
+    """
+    anio, mes = periodo
+    desde = f"{anio}-{mes:02d}-01"
+    hasta = f"{anio}-{mes:02d}-{calendar.monthrange(anio, mes)[1]:02d}"
+    cols = "documento,fecha,vendedor_id,cliente_rut,tipo_mov,estado,sociedad_id"
+    rows, off = [], 0
+    while True:
+        b = (client.table("fact_maquinas").select(cols)
+             .eq("sociedad_id", SOCIEDAD_ID["grannatural"])
+             .gte("fecha", desde).lte("fecha", hasta)
+             .order("documento").range(off, off + 999).execute().data)
+        rows += b or []
+        if not b or len(b) < 1000:
+            break
+        off += 1000
+    return pd.DataFrame(rows)
+
+
+def _leer_overrides_maquina(client) -> pd.DataFrame:
+    """Lee maquina_vendedor_override (corrección manual de gerencia; vacío si no existe)."""
+    vacio = pd.DataFrame(columns=["sociedad_id", "documento", "vendedor_id"])
+    try:
+        r = (client.table("maquina_vendedor_override")
+             .select("sociedad_id,documento,vendedor_id").range(0, 9999).execute())
+        return pd.DataFrame(r.data) if r.data else vacio
+    except Exception:
+        return vacio
 
 
 def _parse_periodo(valor: str) -> tuple:
@@ -153,6 +187,24 @@ def run(periodo: tuple, dry_run: bool = False):
     upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut")
     upsert_tabla(client, "fact_pedidos", fact_pedidos,
                  on_conflict="sociedad_id,n_pedido,producto_codigo,linea")
+
+    # ── Reatribuir el vendedor de las MÁQUINAS GN al de Autoventa ───────────
+    # Las máquinas se derivan de Obuma (cubre ambas sociedades y todos los FL),
+    # pero Obuma suele dejar estos documentos 'Sin asignar'. Autoventa sí sabe
+    # quién gestionó la máquina en terreno (ej. Tomás). Aquí corregimos SOLO el
+    # vendedor de las máquinas del período usando las líneas FL de Autoventa; el
+    # override manual de gerencia se re-aplica al final para que siga ganando.
+    fm = _leer_maquinas_periodo(client, periodo)
+    if not fm.empty:
+        fm2 = reatribuir_vendedor_autoventa(
+            fm, av.get("_vendedor_fl_folio") or {}, fallback_id=fallback_id)
+        fm2 = aplicar_override_vendedor(fm2, _leer_overrides_maquina(client))
+        if not fm2["vendedor_id"].astype("Int64").equals(fm["vendedor_id"].astype("Int64")):
+            upsert_tabla(client, "fact_maquinas", fm2,
+                         on_conflict="sociedad_id,documento,cliente_rut,tipo_mov")
+            logger.info("  fact_maquinas GN: vendedor actualizado desde Autoventa.")
+        else:
+            logger.info("  fact_maquinas GN: sin cambios de vendedor.")
 
     if log_no_mapeados:
         unicos = sorted({r["nombre_original"] for r in log_no_mapeados})
