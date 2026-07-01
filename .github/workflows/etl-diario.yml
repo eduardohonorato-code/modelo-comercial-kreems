@@ -43,6 +43,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas "supabase==2.7.4" python-dotenv python-dateutil openpyxl lxml
 
+      - name: Verificar que los secrets llegaron (sin revelar valores)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OBUMA_API_KEY: ${{ secrets.OBUMA_API_KEY }}
+          AUTOVENTA_API_KEY_ADMIN: ${{ secrets.AUTOVENTA_API_KEY_ADMIN }}
+        run: |
+          echo "Largo de cada secret (0 = FALTA o mal nombrado):"
+          echo "  SUPABASE_URL ............. ${#SUPABASE_URL} chars"
+          echo "  SUPABASE_SERVICE_ROLE_KEY  ${#SUPABASE_SERVICE_ROLE_KEY} chars"
+          echo "  OBUMA_API_KEY ............ ${#OBUMA_API_KEY} chars"
+          echo "  AUTOVENTA_API_KEY_ADMIN .. ${#AUTOVENTA_API_KEY_ADMIN} chars"
+
       - name: Ejecutar carga diaria (Obuma + Autoventa Gran Natural)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
