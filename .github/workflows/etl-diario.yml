@@ -1,0 +1,62 @@
+name: ETL diario Kreems (nube)
+
+# Corre el ETL de Gran Natural (ventas Obuma + pedidos Autoventa) en los
+# servidores de GitHub, SIN depender del PC de la oficina. Así los datos quedan
+# frescos temprano en la mañana para el reporte de las 9 AM.
+#
+# Horarios (GitHub usa UTC; Chile = UTC-4 en invierno / UTC-3 en verano):
+#   10:00 UTC -> 06:00 (invierno) / 07:00 (verano) Chile
+#   11:00 UTC -> 07:00 (invierno) / 08:00 (verano) Chile
+# Dos corridas por redundancia (el cron de GitHub puede retrasarse unos minutos).
+# Ambas terminan bastante antes de las 9 AM. El ETL es idempotente: correr dos
+# veces NO duplica.
+#
+# Requiere estos Secrets del repo (Settings -> Secrets and variables -> Actions):
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OBUMA_API_KEY, AUTOVENTA_API_KEY_ADMIN
+#   (AUTOVENTA_EMPRESA_ID es opcional; por defecto 548)
+
+on:
+  schedule:
+    - cron: "0 10 * * *"
+    - cron: "0 11 * * *"
+  workflow_dispatch: {}   # permite ejecutarlo a mano desde la pestaña "Actions"
+
+concurrency:
+  group: etl-diario
+  cancel-in-progress: false
+
+jobs:
+  cargar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout del repo
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias del ETL
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas "supabase==2.7.4" python-dotenv python-dateutil openpyxl lxml
+
+      - name: Ejecutar carga diaria (Obuma + Autoventa Gran Natural)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OBUMA_API_KEY: ${{ secrets.OBUMA_API_KEY }}
+          AUTOVENTA_API_KEY_ADMIN: ${{ secrets.AUTOVENTA_API_KEY_ADMIN }}
+          AUTOVENTA_EMPRESA_ID: ${{ secrets.AUTOVENTA_EMPRESA_ID || '548' }}
+        run: python -m etl.run_diario
+
+      - name: Guardar el log como artifact (para revisar si algo falla)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etl_auto-log
+          path: etl_auto.log
+          if-no-files-found: ignore
+          retention-days: 14
