@@ -43,23 +43,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas "supabase==2.7.4" python-dotenv python-dateutil openpyxl lxml
 
-      - name: Verificar que los secrets llegaron (sin revelar valores)
+      - name: Verificar que los secrets estén configurados
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OBUMA_API_KEY: ${{ secrets.OBUMA_API_KEY }}
           AUTOVENTA_API_KEY_ADMIN: ${{ secrets.AUTOVENTA_API_KEY_ADMIN }}
-          V_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          V_OBUMA_API_KEY: ${{ vars.OBUMA_API_KEY }}
         run: |
-          echo "== Como SECRETS (0 = no está como secret) =="
-          echo "  SUPABASE_URL ............. ${#SUPABASE_URL} chars"
-          echo "  SUPABASE_SERVICE_ROLE_KEY  ${#SUPABASE_SERVICE_ROLE_KEY} chars"
-          echo "  OBUMA_API_KEY ............ ${#OBUMA_API_KEY} chars"
-          echo "  AUTOVENTA_API_KEY_ADMIN .. ${#AUTOVENTA_API_KEY_ADMIN} chars"
-          echo "== Como VARIABLES (si acá hay chars, quedaron en la pestaña equivocada) =="
-          echo "  SUPABASE_URL (var) ....... ${#V_SUPABASE_URL} chars"
-          echo "  OBUMA_API_KEY (var) ...... ${#V_OBUMA_API_KEY} chars"
+          faltan=""
+          for s in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY OBUMA_API_KEY AUTOVENTA_API_KEY_ADMIN; do
+            if [ -z "${!s}" ]; then faltan="$faltan $s"; fi
+          done
+          if [ -n "$faltan" ]; then
+            echo "::error::Faltan estos secrets (créalos en Settings > Secrets and variables > Actions > Secrets):$faltan"
+            exit 1
+          fi
+          echo "OK: los 4 secrets están configurados."
 
       - name: Ejecutar carga diaria (Obuma + Autoventa Gran Natural)
         env:
