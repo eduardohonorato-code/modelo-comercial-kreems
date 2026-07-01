@@ -65,24 +65,6 @@ def render(client, anio: int, mes: int):
     cls      = color_pct(pct_global)
     cls_proy = color_pct(pct_proy)
 
-    # ── Strip de contexto ────────────────────────────────────────────────────
-    st.markdown(f"""
-    <div class="kpi-strip">
-      <div class="kpi-strip-card">
-        <div class="kpi-strip-value">{cal['dias_totales']}</div>
-        <div class="kpi-strip-label">Total días mes</div>
-      </div>
-      <div class="kpi-strip-card">
-        <div class="kpi-strip-value">{cal['dias_trabajados']}</div>
-        <div class="kpi-strip-label">Días trabajados</div>
-      </div>
-      <div class="kpi-strip-card">
-        <div class="kpi-strip-value">{ultima_factura}</div>
-        <div class="kpi-strip-label">Última factura</div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
     # ── KPIs financieros (4×2 = rectángulo simétrico para pantallazos) ───────
     st.markdown(f"""
     <div class="kpi-grid-4">
@@ -128,6 +110,25 @@ def render(client, anio: int, mes: int):
     # ── Tabla principal (réplica mejorada del Power BI) ──────────────────────
     st.markdown('<div class="seccion-titulo">Seguimiento por vendedor</div>',
                 unsafe_allow_html=True)
+
+    # Tira de contexto (días del mes + última factura) justo arriba del cuadro,
+    # para que un solo pantallazo del seguimiento incluya el período de referencia.
+    st.markdown(f"""
+    <div class="kpi-strip">
+      <div class="kpi-strip-card">
+        <div class="kpi-strip-value">{cal['dias_totales']}</div>
+        <div class="kpi-strip-label">Total días mes</div>
+      </div>
+      <div class="kpi-strip-card">
+        <div class="kpi-strip-value">{cal['dias_trabajados']}</div>
+        <div class="kpi-strip-label">Días trabajados</div>
+      </div>
+      <div class="kpi-strip-card">
+        <div class="kpi-strip-value">{ultima_factura}</div>
+        <div class="kpi-strip-label">Última factura</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Separar vendedores CON y SIN objetivo
     df_con_obj = df[df["obj_venta"] > 0].copy()
