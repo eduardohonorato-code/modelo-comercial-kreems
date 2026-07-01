@@ -289,6 +289,87 @@ def get_todos_vendedores(client: Client) -> pd.DataFrame:
     return pd.DataFrame(r.data) if r.data else pd.DataFrame()
 
 
+# ── Presupuesto de venta (sección gerencia) ──────────────────────────────────
+# Tablas livianas (sql/017): presupuesto_venta y ventas_historicas guardan SOLO
+# el monto mensual total de la empresa (sin detalle de facturación). Fail-soft:
+# si las tablas aún no existen (falta correr sql/017), devuelven vacío.
+
+def get_presupuesto(client: Client, anio: int) -> pd.DataFrame:
+    """Presupuesto mensual del año → DataFrame(mes, monto)."""
+    try:
+        r = (client.table("presupuesto_venta").select("mes,monto")
+             .eq("anio", anio).order("mes").execute())
+        return pd.DataFrame(r.data) if r.data else pd.DataFrame(columns=["mes", "monto"])
+    except Exception:
+        return pd.DataFrame(columns=["mes", "monto"])
+
+
+def upsert_presupuesto(client: Client, anio: int, mes: int, monto: float):
+    """Guarda (crea o actualiza) el presupuesto de un mes."""
+    client.table("presupuesto_venta").upsert(
+        {"anio": anio, "mes": mes, "monto": monto},
+        on_conflict="anio,mes").execute()
+
+
+def get_ventas_historicas(client: Client) -> pd.DataFrame:
+    """Ventas totales mensuales de años anteriores → DataFrame(anio, mes, monto)."""
+    try:
+        r = (client.table("ventas_historicas").select("anio,mes,monto")
+             .order("anio").order("mes").execute())
+        return pd.DataFrame(r.data) if r.data else pd.DataFrame(columns=["anio", "mes", "monto"])
+    except Exception:
+        return pd.DataFrame(columns=["anio", "mes", "monto"])
+
+
+def upsert_venta_historica(client: Client, anio: int, mes: int, monto: float):
+    """Guarda (crea o actualiza) la venta total de un mes histórico."""
+    client.table("ventas_historicas").upsert(
+        {"anio": anio, "mes": mes, "monto": monto},
+        on_conflict="anio,mes").execute()
+
+
+def get_real_mensual(client: Client, anio: int) -> pd.DataFrame:
+    """
+    Venta real (Fact-NC) y proyección de cierre por MES del año, sumando todos
+    los vendedores desde la vista v_resumen_vendedor_mes (misma fuente que el
+    Panel Gerencia → cuadra exacto con lo que ya se reporta).
+    Retorna DataFrame(mes, fact_nc, proyeccion).
+    """
+    r = (client.table("v_resumen_vendedor_mes")
+         .select("mes,fact_nc,proyeccion_cierre")
+         .eq("anio", anio).execute())
+    if not r.data:
+        return pd.DataFrame(columns=["mes", "fact_nc", "proyeccion"])
+    df = pd.DataFrame(r.data)
+    for c in ["fact_nc", "proyeccion_cierre"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    out = (df.groupby("mes")
+             .agg(fact_nc=("fact_nc", "sum"), proyeccion=("proyeccion_cierre", "sum"))
+             .reset_index())
+    return out
+
+
+def get_participacion_vendedores(client: Client, anio: int, meses: list) -> pd.DataFrame:
+    """
+    Participación de cada vendedor en el Fact-NC de los meses dados (para el
+    reparto sugerido del objetivo). Excluye 'Sin asignar'.
+    Retorna DataFrame(vendedor_id, nombre_canonico, fact_nc, share) orden desc.
+    """
+    r = (client.table("v_resumen_vendedor_mes")
+         .select("vendedor_id,nombre_canonico,mes,fact_nc")
+         .eq("anio", anio).in_("mes", meses).execute())
+    if not r.data:
+        return pd.DataFrame(columns=["vendedor_id", "nombre_canonico", "fact_nc", "share"])
+    df = pd.DataFrame(r.data)
+    df["fact_nc"] = pd.to_numeric(df["fact_nc"], errors="coerce").fillna(0)
+    df = df[df["nombre_canonico"] != "Sin asignar"]
+    g = (df.groupby(["vendedor_id", "nombre_canonico"])["fact_nc"].sum()
+           .reset_index().sort_values("fact_nc", ascending=False))
+    total = g["fact_nc"].sum()
+    g["share"] = g["fact_nc"] / total if total else 0
+    return g
+
+
 def get_ventas_diarias(client: Client, anio: int, mes: int) -> pd.DataFrame:
     """
     Suma de neto por fecha del mes (facturas + NC ya firmadas negativas).
