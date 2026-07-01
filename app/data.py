@@ -74,6 +74,38 @@ def get_pedidos_resumen(client: Client, anio: int, mes: int) -> pd.DataFrame:
     return agg
 
 
+def get_maquinas_sin_factura(client: Client, anio: int, mes: int) -> pd.DataFrame:
+    """
+    Máquinas de instalación cliente nuevo (FL-4) ingresadas en Autoventa pero aún
+    SIN factura (doc_venta='Sin DTE'). No cuentan en "Maq. Ingresadas AV" hasta
+    que se facture su flete; esta lista las hace visibles para no perderlas de
+    vista. RLS aplica: un vendedor ve solo las suyas. Fail-soft: si la lectura de
+    fact_pedidos falla (grant/JWT), devuelve vacío sin romper la página.
+    """
+    cols = ["vendedor_id", "cliente_rut", "fecha", "n_pedido", "vendedor"]
+    fecha_ini = f"{anio:04d}-{mes:02d}-01"
+    fecha_fin = f"{anio + (mes // 12):04d}-{(mes % 12) + 1:02d}-01"
+    try:
+        r = (client.table("fact_pedidos")
+             .select("vendedor_id,cliente_rut,fecha,n_pedido")
+             .eq("producto_codigo", "FL-4")
+             .eq("doc_venta", "Sin DTE")
+             .gte("fecha", fecha_ini).lt("fecha", fecha_fin)
+             .order("fecha").range(0, 999).execute())
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    if not r.data:
+        return pd.DataFrame(columns=cols)
+    df = pd.DataFrame(r.data)
+    try:
+        vd = client.table("dim_vendedor").select("id,nombre_canonico").execute().data
+        nom = {v["id"]: v["nombre_canonico"] for v in (vd or [])}
+        df["vendedor"] = df["vendedor_id"].map(nom).fillna("Sin asignar")
+    except Exception:
+        df["vendedor"] = df["vendedor_id"].astype(str)
+    return df
+
+
 # ── Análisis de ventas por producto / categoría ──────────────────────────────
 
 def get_ventas_producto(client: Client, anio: int, mes: int) -> pd.DataFrame:

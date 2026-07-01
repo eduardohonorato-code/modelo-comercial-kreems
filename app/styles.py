@@ -293,6 +293,22 @@ h2 { font-size: 1.25rem !important; font-weight: 700 !important;
   line-height: 1.35;
 }
 
+/* ── Aviso: máquinas ingresadas sin factura (FL-4 Sin DTE) ── */
+.aviso-maq {
+  background: #FCF6EA;
+  border: 1px solid var(--amarillo);
+  border-left: 4px solid var(--amarillo);
+  border-radius: 8px;
+  padding: .7rem .9rem;
+  margin: .2rem 0 1rem;
+  font-size: .82rem;
+  color: var(--gris-dark, #333);
+}
+.aviso-maq strong { color: var(--amarillo); }
+.aviso-maq-sub { font-size: .75rem; color: var(--gris); margin: .2rem 0 .3rem; }
+.aviso-maq ul { margin: .25rem 0 0; padding-left: 1.1rem; }
+.aviso-maq li { margin: .1rem 0; }
+
 /* ── Sección header ── */
 .seccion-titulo {
   font-size: .92rem;
