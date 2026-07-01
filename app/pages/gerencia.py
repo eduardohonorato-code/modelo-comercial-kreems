@@ -100,9 +100,9 @@ def render(client, anio: int, mes: int):
         <div class="kpi-value">{fmt_num(total_docs)}</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Máq. Gestionadas</div>
+        <div class="kpi-label">Maq. Ingresadas AV</div>
         <div class="kpi-value">{fmt_num(total_mgst)}</div>
-        <div class="kpi-sub">Entregadas: {fmt_num(total_menv)}</div>
+        <div class="kpi-sub">Maq. Entregada: {fmt_num(total_menv)}</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -194,12 +194,14 @@ def render(client, anio: int, mes: int):
                 <li><strong>% Fact.</strong> — Ped. Fact. / Pedidos: qué parte de lo pedido llegó a
                     factura. <strong>"—"</strong> = vendedor sin pedidos en Autoventa (ej. solo Acuña).</li>
                 <li><strong>NC</strong> — <strong>Obuma</strong>: suma de notas de crédito del mes.</li>
-                <li><strong>Gestionadas</strong> — <strong>Obuma</strong>: instalaciones a cliente
-                    nuevo, líneas con código <strong>FL-4</strong> (categoría "Maquinas"). Lo que el
-                    vendedor colocó en el mes.</li>
-                <li><strong>Entregadas</strong> — de esas máquinas, las que figuran como
-                    <strong>"Entregada"</strong> en el <em>Detalle de despachos</em> (Autoventa),
-                    cruzando por N° de documento. Mide la conversión gestionada → entregada.</li>
+                <li><strong>Maq. Ingresadas AV</strong> — máquinas de <strong>instalación a cliente
+                    nuevo</strong> (código <strong>FL-4</strong>), tal como se ingresan en
+                    <strong>Autoventa</strong>. Es lo que el vendedor colocó en el mes. El vendedor se
+                    toma de Autoventa (quien gestionó la máquina en terreno). NO incluye cambios
+                    (FL-1/3/5) ni retiros (FL-2).</li>
+                <li><strong>Maq. Entregada</strong> — de esas máquinas ingresadas, las que figuran como
+                    <strong>"Entregada"</strong> en el <em>Detalle de despachos</em>, cruzando por N° de
+                    documento. Mide la conversión ingresada → entregada.</li>
                 <li><strong>N° Docs</strong> — <strong>Obuma</strong>: nº de facturas distintas del
                     vendedor en el mes.</li>
                 <li><strong>% Efec</strong> — N° Docs / Obj Visitas.</li>
@@ -225,12 +227,13 @@ def render(client, anio: int, mes: int):
                     por folio).</li>
               </ul>
 
-              <p><strong>Sobre máquinas:</strong> esta tabla muestra solo <em>Gestionadas</em> y
-                 <em>Entregadas</em>. Los <strong>retiros</strong> (FL-2), los <em>cambios</em>
+              <p><strong>Sobre máquinas:</strong> esta tabla muestra solo <em>Maq. Ingresadas AV</em> y
+                 <em>Maq. Entregada</em>. Los <strong>retiros</strong> (FL-2), los <em>cambios</em>
                  (FL-1/3/5) y el detalle por estado están en <strong>Análisis → Máquinas</strong>.
-                 La fuente de las máquinas es <strong>Obuma</strong> (cubre las dos sociedades y los 5
-                 códigos FL); el estado <em>entregada/rechazada</em> se completa al cargar los
-                 despachos — sin despacho, la máquina queda <em>gestionada</em>.</p>
+                 El movimiento de máquina se toma de <strong>Obuma</strong> (cubre las dos sociedades y
+                 los 5 códigos FL) y el <strong>vendedor se atribuye según Autoventa</strong>; el estado
+                 <em>entregada/rechazada</em> se completa al cargar los despachos — sin despacho, la
+                 máquina ingresada queda pendiente de entrega.</p>
 
               <p><strong>Cálculo:</strong> casi todo se lee de la vista
                  <code>v_resumen_vendedor_mes</code> (Fact-NC, NC, máquinas, objetivos, N° Docs y sus
@@ -268,8 +271,8 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
         "<th title='% de pedidos que llegaron a factura (Ped. Fact. / Pedidos). “—” = vendedor sin pedidos en Autoventa (ej. solo Acuña)'>% Fact.</th>"
         "<th title='Suma notas de crédito'>NC</th>"
         "<th title='Objetivo de máquinas'>Obj Maq</th>"
-        "<th title='Máquinas gestionadas (FL-4)'>Gestionadas</th>"
-        "<th title='Máquinas entregadas'>Entregadas</th>"
+        "<th title='Máquinas de instalación a cliente nuevo (FL-4), ingresadas en Autoventa. Vendedor según Autoventa'>Maq. Ingresadas AV</th>"
+        "<th title='De las ingresadas (FL-4), las que figuran como Entregada en los despachos'>Maq. Entregada</th>"
         "<th title='Objetivo de visitas'>Obj Visitas</th>"
         "<th title='Número de documentos emitidos'>N° Docs</th>"
         "<th title='% Efectividad (docs / obj visitas)'>% Efec</th>"
