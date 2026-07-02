@@ -4,6 +4,9 @@
 # Bandeja de descargas a archivar (mismos datos sensibles que /data)
 /inbox/
 
+# Reportes generados (traen RUT y datos de clientes — no subir al repo público)
+/reportes/
+
 # Logs y artefactos del ETL (pueden traer nombres de vendedores)
 etl_run.log
 etl_historico.log
