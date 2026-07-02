@@ -20,7 +20,8 @@ import streamlit as st
 from app.styles import fmt_clp, fmt_pct, color_pct
 from app.data import (get_presupuesto, upsert_presupuesto,
                       get_ventas_historicas, upsert_venta_historica,
-                      get_real_mensual, get_participacion_vendedores)
+                      get_real_mensual, get_participacion_vendedores,
+                      get_objetivos)
 
 MESES_ABR = {1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
              7: "Jul", 8: "Ago", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"}
@@ -396,14 +397,55 @@ def render(client, anio: int, mes: int):
                 with st.expander(f"👥 Reparto sugerido por vendedor (según participación {base_txt})"):
                     part = part.copy()
                     part["obj_sug"] = (part["share"] * sug["sugerido"] / 100000).round() * 100000
-                    tabla = part[["nombre_canonico", "fact_nc", "share", "obj_sug"]].copy()
-                    tabla.columns = ["Vendedor", f"Fact-NC {base_txt}", "Participación", "Objetivo sugerido"]
+
+                    # Objetivo vigente de referencia: el del mes objetivo si ya
+                    # está cargado; si no, el del mes más reciente con objetivos
+                    # (típico al planificar: comparar contra el mes anterior).
+                    obj_ref, mes_ref = pd.DataFrame(), None
+                    for mm in range(mes_obj, max(0, mes_obj - 4), -1):
+                        o = get_objetivos(client, anio, mm)
+                        if not o.empty and pd.to_numeric(
+                                o["obj_venta"], errors="coerce").fillna(0).sum() > 0:
+                            obj_ref, mes_ref = o, mm
+                            break
+
+                    col_obj = f"Obj. {MESES_ABR[mes_ref]}" if mes_ref else "Obj. actual"
+                    if not obj_ref.empty:
+                        obj_ref["obj_venta"] = pd.to_numeric(
+                            obj_ref["obj_venta"], errors="coerce").fillna(0)
+                        part = part.merge(
+                            obj_ref[["vendedor_id", "obj_venta"]],
+                            on="vendedor_id", how="left")
+                        part["obj_venta"] = part["obj_venta"].fillna(0)
+                    else:
+                        part["obj_venta"] = 0.0
+
+                    def _delta(r):
+                        if r["obj_venta"] > 0:
+                            d = r["obj_sug"] / r["obj_venta"] - 1
+                            return ("▲ " if d >= 0 else "▼ ") + fmt_pct(abs(d))
+                        return "—"
+                    part["delta"] = part.apply(_delta, axis=1)
+
+                    tabla = part[["nombre_canonico", "fact_nc", "share",
+                                  "obj_venta", "obj_sug", "delta"]].copy()
+                    tabla.columns = ["Vendedor", f"Fact-NC {base_txt}", "Participación",
+                                     col_obj, "Objetivo sugerido", "Δ sugerido vs actual"]
                     tabla[f"Fact-NC {base_txt}"] = tabla[f"Fact-NC {base_txt}"].apply(fmt_clp)
                     tabla["Participación"] = tabla["Participación"].apply(fmt_pct)
+                    tabla[col_obj] = tabla[col_obj].apply(lambda v: fmt_clp(v) if v else "—")
                     tabla["Objetivo sugerido"] = tabla["Objetivo sugerido"].apply(fmt_clp)
                     st.dataframe(tabla, use_container_width=True, hide_index=True)
-                    st.caption("Redondeado a $100.000. Es una referencia por participación "
-                               "histórica — ajusta según cartera, máquinas nuevas o foco comercial.")
+                    nota_ref = (f"'{col_obj}' es el objetivo cargado de "
+                                f"{MESES_NOM[mes_ref]} (el mes más reciente con objetivos)."
+                                if mes_ref and mes_ref != mes_obj else
+                                f"'{col_obj}' es el objetivo ya cargado para {MESES_NOM[mes_obj]}."
+                                if mes_ref else
+                                "Aún no hay objetivos cargados para comparar.")
+                    st.caption("Sugerido redondeado a $100.000, repartido por participación "
+                               f"histórica. {nota_ref} Δ = cuánto sube (▲) o baja (▼) el "
+                               "sugerido respecto a ese objetivo. Ajusta según cartera, "
+                               "máquinas nuevas o foco comercial.")
 
     # ── 6. Mantención de datos (editores) ─────────────────────────────────────
     st.markdown('<div class="seccion-titulo">⚙️ Mantener datos</div>',
