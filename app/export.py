@@ -63,7 +63,8 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi, facecolor="white")
     fig.text(0.006, 0.988, titulo, fontsize=15, fontweight="bold", color=NAVY, va="top")
     if subtitulo:
-        fig.text(0.006, 0.988 - 0.95 / fig_h, subtitulo, fontsize=10, color="#555", va="top")
+        fig.text(0.006, 0.988 - 0.95 / fig_h, subtitulo, fontsize=10.5,
+                 color="#1A1A1A", fontweight="bold", va="top")
 
     top = 1 - (1.30 if subtitulo else 0.78) / fig_h
     ax = fig.add_axes([0.006, 0.008, 0.988, max(top, 0.4)])

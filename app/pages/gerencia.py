@@ -150,7 +150,7 @@ def render(client, anio: int, mes: int):
     _subt = (f"{MESES[mes]} {anio}  ·  Días del mes: {cal['dias_totales']}  ·  "
              f"Días trabajados: {cal['dias_trabajados']}  ·  Última factura: {ultima_factura}")
     _disp, _col = _export_seguimiento(df)
-    bloque_descarga(_disp, _col, f"Seguimiento por vendedor — {MESES[mes]} {anio}",
+    bloque_descarga(_disp, _col, "Reporte Seguimiento Objetivos",
                     _subt, f"seguimiento_{anio}_{mes:02d}")
 
     # Aviso: máquinas FL-4 ingresadas en Autoventa que aún NO tienen factura.
