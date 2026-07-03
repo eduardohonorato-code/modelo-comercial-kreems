@@ -142,6 +142,7 @@ def _tabla_comisiones(df: pd.DataFrame):
     header = (
         "<th style='text-align:left'>Vendedor</th>"
         "<th title='Plan de comisión'>Plan</th>"
+        "<th title='Objetivo de venta mensual'>Objetivo</th>"
         "<th title='Facturación neta de NC'>Fact-NC</th>"
         "<th title='% logro PNV (real)'>%PNV</th>"
         "<th title='Comisión PNV (tramo)'>Com PNV</th>"
@@ -178,6 +179,7 @@ def _tabla_comisiones(df: pd.DataFrame):
         rows += f"""<tr>
           <td style='text-align:left'>{r['nombre_canonico']}</td>
           <td>{plan}</td>
+          <td>{fmt_clp(r.get('obj_venta'))}</td>
           <td>{fmt_clp(r.get('fact_nc'))}</td>
           <td class='{cls_pnv}'>{fmt_pct(pct_pnv)}{pnv_star}</td>
           <td>{fmt_clp(r.get('com_pnv'))}</td>
@@ -196,6 +198,7 @@ def _tabla_comisiones(df: pd.DataFrame):
     # Fila de totales
     rows += f"""<tr class='total-row'>
       <td style='text-align:left'>TOTAL</td><td></td>
+      <td>{fmt_clp(df['obj_venta'].sum())}</td>
       <td>{fmt_clp(df['fact_nc'].sum())}</td><td></td>
       <td>{fmt_clp(df['com_pnv'].sum())}</td>
       <td>{fmt_clp(df['bono_4pct'].sum())}</td><td></td>
@@ -224,6 +227,7 @@ def _export_comisiones(df: pd.DataFrame):
         plan = plan_lbl.get(int(r["plan_id"]) if pd.notna(r.get("plan_id")) else 1, "Normal")
         filas.append({
             "Vendedor": r["nombre_canonico"], "Plan": plan,
+            "Objetivo": fmt_clp(r.get("obj_venta")),
             "Fact-NC": fmt_clp(r.get("fact_nc")), "%PNV": fmt_pct(pct_pnv),
             "Com PNV": fmt_clp(r.get("com_pnv")), "Bono 4%": fmt_clp(r.get("bono_4pct")),
             "Máq": f"{fmt_num(r.get('maquinas_entregadas'))}/{fmt_num(r.get('obj_maquinas'))}",
@@ -239,7 +243,8 @@ def _export_comisiones(df: pd.DataFrame):
         if h:
             colores[(i, "%Efec")] = h
     filas.append({
-        "Vendedor": "TOTAL", "Plan": "", "Fact-NC": fmt_clp(df["fact_nc"].sum()), "%PNV": "",
+        "Vendedor": "TOTAL", "Plan": "", "Objetivo": fmt_clp(df["obj_venta"].sum()),
+        "Fact-NC": fmt_clp(df["fact_nc"].sum()), "%PNV": "",
         "Com PNV": fmt_clp(df["com_pnv"].sum()), "Bono 4%": fmt_clp(df["bono_4pct"].sum()),
         "Máq": "", "Com Máq": fmt_clp(df["com_maquinas"].sum()), "%Efec": "", "Cartera": "",
         "Com Efec": fmt_clp(df["com_efectividad"].sum()), "Total Com.": fmt_clp(df["total_comision"].sum()),
