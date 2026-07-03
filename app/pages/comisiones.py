@@ -144,12 +144,12 @@ def _tabla_comisiones(df: pd.DataFrame):
         "<th title='Plan de comisión'>Plan</th>"
         "<th title='Objetivo de venta mensual'>Objetivo</th>"
         "<th title='Facturación neta de NC'>Fact-NC</th>"
-        "<th title='% logro PNV (real)'>%PNV</th>"
+        "<th title='% logro PNV (real). Si gerencia forzó el tramo: original → forzado'>%PNV</th>"
         "<th title='Comisión PNV (tramo)'>Com PNV</th>"
         "<th title='Bono 4% sobre exceso del 110%'>Bono 4%</th>"
         "<th title='Máquinas entregadas / objetivo'>Máq</th>"
         "<th title='Comisión máquinas'>Com Máq</th>"
-        "<th title='% efectividad (real)'>%Efec</th>"
+        "<th title='% efectividad real (N°facturas / obj. visitas). Si se forzó el tramo: original → forzado'>%Efec</th>"
         "<th title='Clientes asignados (rango de cartera)'>Cartera</th>"
         "<th title='Comisión efectividad'>Com Efec</th>"
         "<th title='PNV + bono + máq + efec'>Total Com.</th>"
@@ -159,34 +159,39 @@ def _tabla_comisiones(df: pd.DataFrame):
     )
 
     plan_lbl = {1: "Normal", 2: "Macarena"}
+
+    def _forzado_span(txt):
+        return (f" <span style='color:#f59e0b;font-weight:600' "
+                f"title='Tramo forzado por gerencia'>→ {txt}</span>")
+
     rows = ""
     for _, r in df_sorted.iterrows():
         pct_pnv  = r.get("logro_pnv")
-        pct_ef   = r.get("logro_efectividad")
+        ov_v     = r.get("obj_visitas") or 0
+        ef_real  = (r.get("n_facturas") / ov_v) if ov_v else None   # real = N°fact/obj vis
         cls_pnv  = color_pct(pct_pnv)
-        cls_ef   = color_pct(pct_ef, umbral_ok=0.5, umbral_warn=0.3)
+        cls_ef   = color_pct(ef_real, umbral_ok=0.5, umbral_warn=0.3)
         maq_txt  = f"{fmt_num(r.get('maquinas_entregadas'))}/{fmt_num(r.get('obj_maquinas'))}"
         plan     = plan_lbl.get(int(r["plan_id"]) if pd.notna(r.get("plan_id")) else 1, "Normal")
-        # Indicador de tramo forzado por gerencia
+        # Tramo forzado por gerencia: mostrar "original → forzado" en la celda.
         pnv_over = pd.notna(r.get("pnv_logro_override"))
         maq_over = pd.notna(r.get("maq_logro_override"))
-        _pnv_ov_txt = fmt_pct(r["pnv_logro_override"]) if pnv_over else ""
-        _maq_ov_txt = fmt_pct(r["maq_logro_override"]) if maq_over else ""
-        pnv_star = (f" <span title='Tramo forzado a {_pnv_ov_txt} por gerencia' "
-                    f"style='color:#f59e0b'>★</span>") if pnv_over else ""
-        maq_star = (f" <span title='Tramo forzado a {_maq_ov_txt} por gerencia' "
+        ef_over  = pd.notna(r.get("efectividad_override"))
+        pnv_disp = fmt_pct(pct_pnv) + (_forzado_span(fmt_pct(r["pnv_logro_override"])) if pnv_over else "")
+        ef_disp  = fmt_pct(ef_real) + (_forzado_span(fmt_pct(r["efectividad_override"])) if ef_over else "")
+        maq_star = (f" <span title='Tramo forzado a {fmt_pct(r['maq_logro_override'])} por gerencia' "
                     f"style='color:#f59e0b'>★</span>") if maq_over else ""
         rows += f"""<tr>
           <td style='text-align:left'>{r['nombre_canonico']}</td>
           <td>{plan}</td>
           <td>{fmt_clp(r.get('obj_venta'))}</td>
           <td>{fmt_clp(r.get('fact_nc'))}</td>
-          <td class='{cls_pnv}'>{fmt_pct(pct_pnv)}{pnv_star}</td>
+          <td class='{cls_pnv}'>{pnv_disp}</td>
           <td>{fmt_clp(r.get('com_pnv'))}</td>
           <td>{fmt_clp(r.get('bono_4pct'))}</td>
           <td>{maq_txt}{maq_star}</td>
           <td>{fmt_clp(r.get('com_maquinas'))}</td>
-          <td class='{cls_ef}'>{fmt_pct(pct_ef)}</td>
+          <td class='{cls_ef}'>{ef_disp}</td>
           <td>{fmt_num(r.get('cartera_clientes'))}</td>
           <td>{fmt_clp(r.get('com_efectividad'))}</td>
           <td><strong>{fmt_clp(r.get('total_comision'))}</strong></td>
