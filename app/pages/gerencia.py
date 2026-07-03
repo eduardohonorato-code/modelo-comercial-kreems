@@ -7,7 +7,22 @@ from app.styles import fmt_clp, fmt_pct, fmt_num, color_pct
 from app.data import (get_resumen, get_pedidos_resumen, get_calendario,
                       get_todos_vendedores, get_objetivos, upsert_objetivo,
                       get_ultima_factura, get_maquinas_sin_factura)
-from app.export import color_hex, bloque_descarga
+from app.export import (color_hex, bloque_descarga,
+                        GRP_AZUL, GRP_VERDE, GRP_NARANJO)
+
+# Encabezados cortos + banda de grupos para el PNG (el grupo da el contexto, así
+# "Objetivo" puede repetirse en Facturación / Máquinas / Efectividad sin ambigüedad).
+_PNG_LABELS = [
+    "Vendedor", "OBJETIVO", "FACTURACIÓN-NC", "% CUMPL", "PROYECCIÓN",
+    "INGRESADOS", "FACTURADOS", "No Fact.", "% Fact.", "NC",
+    "OBJETIVO", "INGRESADA AV", "ENTREGADA", "OBJETIVO", "DOC", "% EFECT",
+]
+_PNG_GRUPOS = [
+    ("FACTURACIÓN", GRP_AZUL, 1, 4),
+    ("PEDIDOS", GRP_AZUL, 5, 8),
+    ("MÁQUINAS", GRP_VERDE, 10, 12),
+    ("EFECTIVIDAD VISITAS", GRP_NARANJO, 13, 15),
+]
 
 MESES = {
     1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",5:"Mayo",6:"Junio",
@@ -151,7 +166,8 @@ def render(client, anio: int, mes: int):
              f"Días trabajados: {cal['dias_trabajados']}  ·  Última factura: {ultima_factura}")
     _disp, _col = _export_seguimiento(df)
     bloque_descarga(_disp, _col, "Reporte Seguimiento Objetivos",
-                    _subt, f"seguimiento_{anio}_{mes:02d}")
+                    _subt, f"seguimiento_{anio}_{mes:02d}",
+                    col_labels=_PNG_LABELS, grupos=_PNG_GRUPOS)
 
     # Aviso: máquinas FL-4 ingresadas en Autoventa que aún NO tienen factura.
     # No cuentan en "Maq. Ingresadas AV" hasta facturarse; aquí quedan visibles.

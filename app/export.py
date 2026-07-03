@@ -16,6 +16,11 @@ VERDE = "#1A7F4B"
 AMBAR = "#D4881E"
 ROJO = "#C0392B"
 
+# Colores de las bandas de grupo (encabezados agrupados del PNG)
+GRP_AZUL = "#1E5FA5"    # Facturación / Pedidos
+GRP_VERDE = "#1A7F4B"   # Máquinas
+GRP_NARANJO = "#C97A16"  # Efectividad visitas
+
 
 def color_hex(pct, ok: float = 1.0, warn: float = 0.7):
     """Color de semáforo para un porcentaje (o None si no aplica)."""
@@ -38,7 +43,8 @@ def to_csv(df) -> bytes:
 
 
 def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = None,
-              resaltar_ultima: bool = False, dpi: int = 200) -> bytes:
+              resaltar_ultima: bool = False, col_labels=None, grupos=None,
+              dpi: int = 200) -> bytes:
     """
     Render de un DataFrame de STRINGS ya formateados a PNG.
 
@@ -46,19 +52,27 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     - `color_celdas`: dict {(fila_idx, nombre_col): color_hex} para texto de celda
       (ej. % Cumpl en verde/ámbar/rojo). `fila_idx` es la posición 0-based en `df`.
     - `resaltar_ultima`: pinta la última fila como TOTAL (fondo rosado, negrita).
+    - `col_labels`: lista opcional de encabezados a mostrar (default = df.columns).
+    - `grupos`: lista opcional de (titulo, color_hex, col_ini, col_fin) — dibuja una
+      banda de grupos coloreada SOBRE los encabezados (col_ini/col_fin inclusivos,
+      0-based). Las columnas fuera de todo grupo quedan sin banda.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
 
     color_celdas = color_celdas or {}
     df = df.astype(str)
     n_rows, n_cols = df.shape
+    labels = list(col_labels) if col_labels else [str(c) for c in df.columns]
 
-    widths = [max([len(str(df.columns[j]))] + [len(v) for v in df.iloc[:, j]])
+    widths = [max([len(labels[j])] + [len(v) for v in df.iloc[:, j]])
               for j in range(n_cols)]
-    fig_w = min(max(sum(widths) * 0.102 + 0.6, 6.0), 32.0)
-    fig_h = (n_rows + 1) * 0.34 + (1.35 if subtitulo else 0.85)
+    total_w = sum(widths)
+    fig_w = min(max(total_w * 0.102 + 0.6, 6.0), 32.0)
+    banda_in = 0.42 if grupos else 0.0
+    fig_h = (n_rows + 1) * 0.34 + (1.35 if subtitulo else 0.85) + banda_in
 
     fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi, facecolor="white")
     fig.text(0.006, 0.988, titulo, fontsize=15, fontweight="bold", color=NAVY, va="top")
@@ -66,18 +80,22 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
         fig.text(0.006, 0.988 - 0.95 / fig_h, subtitulo, fontsize=10.5,
                  color="#1A1A1A", fontweight="bold", va="top")
 
-    top = 1 - (1.30 if subtitulo else 0.78) / fig_h
-    ax = fig.add_axes([0.006, 0.008, 0.988, max(top, 0.4)])
+    top = max(1 - (1.30 if subtitulo else 0.78) / fig_h, 0.4)
+    ax = fig.add_axes([0.006, 0.008, 0.988, top])
     ax.axis("off")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
 
-    tbl = ax.table(cellText=df.values.tolist(), colLabels=list(df.columns),
-                   cellLoc="right", loc="upper center", bbox=[0, 0, 1, 1])
+    ax_h_in = top * fig_h
+    band_frac = (banda_in / ax_h_in) if grupos else 0.0
+
+    tbl = ax.table(cellText=df.values.tolist(), colLabels=labels,
+                   cellLoc="right", bbox=[0, 0, 1, 1 - band_frac])
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(9)
 
     # Ancho de columna proporcional al contenido (si no, matplotlib reparte igual
     # y trunca los nombres largos de vendedor).
-    total_w = sum(widths)
     for (r, c), cell in tbl.get_celld().items():
         cell.set_width(widths[c] / total_w)
         cell.set_edgecolor("#E6E6EC")
@@ -102,6 +120,26 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
         if c == 0:
             txt.set_ha("left")
 
+    # Banda de grupos sobre los encabezados
+    if grupos:
+        x_bounds = [0.0]
+        for w in widths:
+            x_bounds.append(x_bounds[-1] + w / total_w)
+        y0 = 1 - band_frac
+        for titulo_g, color_g, c0, c1 in grupos:
+            gx0, gx1 = x_bounds[c0], x_bounds[c1 + 1]
+            pad = 0.003
+            ax.add_patch(Rectangle((gx0 + pad, y0 + 0.015),
+                                   (gx1 - gx0) - 2 * pad, band_frac - 0.03,
+                                   facecolor=color_g, edgecolor="none", clip_on=False))
+            # Fuente que garantiza que el título quepa en el ancho del grupo
+            # (0.72 ≈ ancho medio de carácter en negrita; 0.90 deja margen).
+            avail_in = (gx1 - gx0) * (0.988 * fig_w)
+            fs = max(6.5, min(11.0, avail_in * 0.90 * 72 / (0.72 * max(len(titulo_g), 1))))
+            ax.text((gx0 + gx1) / 2, y0 + band_frac / 2, titulo_g,
+                    ha="center", va="center", fontsize=fs, fontweight="bold",
+                    color="white", clip_on=False)
+
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight",
                 pad_inches=0.12, facecolor="white")
@@ -110,11 +148,12 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
 
 
 def bloque_descarga(disp, colores: dict, titulo: str, subtitulo: str,
-                    nombre_base: str):
+                    nombre_base: str, col_labels=None, grupos=None):
     """
     Expander DISCRETO con descarga de imagen (PNG) y datos (CSV) de una tabla.
     El PNG se genera solo al pulsar el botón (no en cada carga de página).
     `disp` es el DataFrame de strings ya formateados (la última fila = TOTAL).
+    `col_labels`/`grupos` se pasan tal cual a tabla_png (encabezados + banda de grupos).
     """
     import streamlit as st
     with st.expander("📥 Descargar / Exportar (imagen PNG o datos)"):
@@ -125,7 +164,8 @@ def bloque_descarga(disp, colores: dict, titulo: str, subtitulo: str,
             if st.button("🖼️ Generar imagen PNG", key=f"png_{nombre_base}",
                          use_container_width=True):
                 st.session_state[f"_png_{nombre_base}"] = tabla_png(
-                    disp, titulo, subtitulo, color_celdas=colores, resaltar_ultima=True)
+                    disp, titulo, subtitulo, color_celdas=colores, resaltar_ultima=True,
+                    col_labels=col_labels, grupos=grupos)
             png = st.session_state.get(f"_png_{nombre_base}")
             if png:
                 st.download_button("⬇️ Descargar PNG", png, f"{nombre_base}.png",
