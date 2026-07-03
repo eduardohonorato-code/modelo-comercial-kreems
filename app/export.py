@@ -72,21 +72,40 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     total_w = sum(widths)
     fig_w = min(max(total_w * 0.102 + 0.6, 6.0), 32.0)
     banda_in = 0.42 if grupos else 0.0
-    fig_h = (n_rows + 1) * 0.34 + (1.35 if subtitulo else 0.85) + banda_in
+    # Encabezado: barra de título (navy) + franja de acento (magenta) + subtítulo
+    L, R = 0.006, 0.994          # bordes izq/der (coinciden con la tabla)
+    TB, STRIPE, GAP, PAD = 0.60, 0.08, 0.13, 0.10
+    SUB_H = 0.34 if subtitulo else 0.0
+    header_in = PAD + TB + STRIPE + (GAP + SUB_H if subtitulo else 0.12) + 0.06
+    fig_h = (n_rows + 1) * 0.34 + banda_in + header_in
 
     fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi, facecolor="white")
-    fig.text(0.006, 0.988, titulo, fontsize=15, fontweight="bold", color=NAVY, va="top")
-    if subtitulo:
-        fig.text(0.006, 0.988 - 0.95 / fig_h, subtitulo, fontsize=10.5,
-                 color="#1A1A1A", fontweight="bold", va="top")
 
-    top = max(1 - (1.30 if subtitulo else 0.78) / fig_h, 0.4)
-    ax = fig.add_axes([0.006, 0.008, 0.988, top])
+    def _f(inch):
+        return inch / fig_h
+
+    y0 = 1 - _f(PAD)                 # tope de la barra
+    y1 = y0 - _f(TB)                 # base de la barra (navy)
+    ys = y1 - _f(STRIPE)            # base de la franja de acento
+    fig.add_artist(Rectangle((L, y1), R - L, _f(TB), transform=fig.transFigure,
+                             facecolor=NAVY, edgecolor="none"))
+    fig.add_artist(Rectangle((L, ys), R - L, _f(STRIPE), transform=fig.transFigure,
+                             facecolor=PINK, edgecolor="none"))
+    fig.text((L + R) / 2, (y0 + y1) / 2, titulo, ha="center", va="center",
+             fontsize=17, fontweight="bold", color="white", family="DejaVu Sans")
+    if subtitulo:
+        fig.text(L, ys - _f(GAP), subtitulo, fontsize=10.5, color="#1A1A1A",
+                 fontweight="bold", va="top")
+        table_top = ys - _f(GAP) - _f(SUB_H)
+    else:
+        table_top = ys - _f(0.12)
+
+    ax = fig.add_axes([L, 0.008, R - L, table_top - 0.008])
     ax.axis("off")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
 
-    ax_h_in = top * fig_h
+    ax_h_in = (table_top - 0.008) * fig_h
     band_frac = (banda_in / ax_h_in) if grupos else 0.0
 
     tbl = ax.table(cellText=df.values.tolist(), colLabels=labels,
