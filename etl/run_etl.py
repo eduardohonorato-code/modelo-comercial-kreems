@@ -30,9 +30,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from etl.db import get_client
+from etl.db import get_client, cargar_alias
 from etl.config import DATA_DIR, FILE_MATCH, MENSUAL_DIR, FUENTES
-from etl.cleaners import construir_mapeo_vendedor
+from etl.cleaners import construir_mapeo_vendedor, agregar_alias
 from etl.upsert import upsert_tabla
 from etl.maquinas import (derivar_maquinas_obuma, aplicar_estado_despachos,
                           aplicar_override_vendedor, marcar_despachos_maquina)
@@ -289,7 +289,8 @@ def run(periodo: tuple | None = None):
     # 3. Cargar dim_vendedor para construir el mapeo nombre→id
     logger.info("\n-- Cargando dim_vendedor desde Supabase --")
     resp = client.table("dim_vendedor").select("id, nombre_canonico").execute()
-    mapeo_vendedor = construir_mapeo_vendedor(resp.data or [])
+    mapeo_vendedor = agregar_alias(construir_mapeo_vendedor(resp.data or []),
+                                   cargar_alias(client))
     logger.info("  Vendedores en dim_vendedor: %d", len(mapeo_vendedor))
 
     # Vendedor 'Sin asignar': bucket para ventas que vienen SIN vendedor en el ERP

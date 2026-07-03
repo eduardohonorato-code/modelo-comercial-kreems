@@ -31,8 +31,8 @@ from datetime import date
 
 import pandas as pd
 
-from etl.db import get_client
-from etl.cleaners import construir_mapeo_vendedor
+from etl.db import get_client, cargar_alias
+from etl.cleaners import construir_mapeo_vendedor, agregar_alias
 from etl.upsert import upsert_tabla
 from etl.loaders.obuma_api import cargar_obuma_api
 from etl.maquinas import (derivar_maquinas_obuma, aplicar_estado_despachos,
@@ -114,7 +114,8 @@ def run(periodo: tuple, dry_run: bool = False):
 
     # Mapeo de vendedores nombre→id (igual que el ETL Excel)
     resp = client.table("dim_vendedor").select("id, nombre_canonico").execute()
-    mapeo_vendedor = construir_mapeo_vendedor(resp.data or [])
+    mapeo_vendedor = agregar_alias(construir_mapeo_vendedor(resp.data or []),
+                                   cargar_alias(client))
     fallback_id = _asegurar_vendedor_sin_asignar(client)
     logger.info("Vendedores en dim_vendedor: %d | fallback 'Sin asignar' id=%s",
                 len(mapeo_vendedor), fallback_id)

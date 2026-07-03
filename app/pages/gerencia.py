@@ -511,10 +511,23 @@ def _safe_int(val, default=0) -> int:
 
 
 def _editor_objetivos(client, df: pd.DataFrame, anio: int, mes: int):
-    """Formulario de edición de objetivos para gerencia."""
-    vendedores = df[["vendedor_id", "nombre_canonico",
-                     "obj_venta", "obj_maquinas", "obj_visitas"]].copy()
-    vendedores = vendedores.sort_values("nombre_canonico")
+    """
+    Formulario de edición de objetivos para gerencia.
+    Lista TODOS los vendedores activos (dim_vendedor), no solo los que ya vendieron
+    este mes — así se pueden asignar objetivos a inicio de mes aunque aún no facturen.
+    """
+    vend = get_todos_vendedores(client)
+    if vend.empty:
+        st.info("No hay vendedores registrados.")
+        return
+    vend = vend[(vend["activo"].fillna(True) != False)
+                & (vend["nombre_canonico"] != "Sin asignar")].copy()
+    obj = get_objetivos(client, anio, mes)
+    if obj is None or obj.empty:
+        obj = pd.DataFrame(columns=["vendedor_id", "obj_venta", "obj_maquinas", "obj_visitas"])
+    vendedores = (vend.rename(columns={"id": "vendedor_id"})
+                      .merge(obj, on="vendedor_id", how="left")
+                      .sort_values("nombre_canonico"))
 
     nombre_sel = st.selectbox(
         "Seleccionar vendedor",

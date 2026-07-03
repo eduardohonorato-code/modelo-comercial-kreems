@@ -64,6 +64,20 @@ def construir_mapeo_vendedor(dim_vendedor_rows: list[dict]) -> dict[str, int]:
     }
 
 
+def agregar_alias(mapeo: dict[str, int], alias_rows: list[dict]) -> dict[str, int]:
+    """
+    Agrega alias (nombre tal como llega del ERP → vendedor_id) al mapeo. Los alias
+    SOBREESCRIBEN el match por nombre_canonico: sirve para reemplazos de vendedor
+    (ej. Carlos factura bajo el nombre de Diego mientras no está en el ERP).
+    `alias_rows` = [{'alias': 'Diego...', 'vendedor_id': N}, ...].
+    """
+    for a in alias_rows or []:
+        alias, vid = a.get("alias"), a.get("vendedor_id")
+        if alias and vid:
+            mapeo[_normalizar_nombre(alias)] = vid
+    return mapeo
+
+
 def mapear_vendedor_id(
     serie: pd.Series,
     mapeo: dict[str, int],
