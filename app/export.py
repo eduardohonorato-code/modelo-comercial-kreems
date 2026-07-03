@@ -72,12 +72,11 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     total_w = sum(widths)
     fig_w = min(max(total_w * 0.102 + 0.6, 6.0), 32.0)
     banda_in = 0.42 if grupos else 0.0
-    # Encabezado: título navy a la izquierda + subrayado magenta (del ancho del
-    # texto) + subtítulo. Sin barra de fondo ni icono.
+    # Encabezado: título navy a la izquierda + subtítulo (sin barra ni subrayado).
     L, R = 0.006, 0.994
-    PAD, TITLE_H, UND_GAP, UND_TH, GAP = 0.12, 0.46, 0.06, 0.065, 0.17
+    PAD, TITLE_H, GAP = 0.12, 0.46, 0.16
     SUB_H = 0.34 if subtitulo else 0.0
-    header_in = PAD + TITLE_H + UND_GAP + UND_TH + (GAP + SUB_H if subtitulo else 0.14) + 0.05
+    header_in = PAD + TITLE_H + (GAP + SUB_H if subtitulo else 0.14) + 0.05
     fig_h = (n_rows + 1) * 0.34 + banda_in + header_in
 
     fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi, facecolor="white")
@@ -86,24 +85,15 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
         return inch / fig_h
 
     y_top = 1 - _f(PAD)
-    t = fig.text(L, y_top, titulo, fontsize=20, fontweight="bold", color=NAVY,
-                 va="top", ha="left")
-    # Subrayado magenta del ancho REAL del título (se mide tras un draw rápido).
-    fig.canvas.draw()
-    bb = t.get_window_extent()
-    inv = fig.transFigure.inverted()
-    x0f, y0f = inv.transform((bb.x0, bb.y0))
-    x1f, _y1f = inv.transform((bb.x1, bb.y1))
-    und_y = y0f - _f(UND_GAP) - _f(UND_TH)
-    und_w = min(max((x1f - L) + 0.008, 0.12), R - L)
-    fig.add_artist(Rectangle((L, und_y), und_w, _f(UND_TH), transform=fig.transFigure,
-                             facecolor=PINK, edgecolor="none"))
+    fig.text(L, y_top, titulo, fontsize=20, fontweight="bold", color=NAVY,
+             va="top", ha="left")
+    y_after = y_top - _f(TITLE_H)
     if subtitulo:
-        fig.text(L, und_y - _f(GAP), subtitulo, fontsize=10.5, color="#1A1A1A",
+        fig.text(L, y_after - _f(GAP), subtitulo, fontsize=10.5, color="#1A1A1A",
                  fontweight="bold", va="top")
-        table_top = und_y - _f(GAP) - _f(SUB_H)
+        table_top = y_after - _f(GAP) - _f(SUB_H)
     else:
-        table_top = und_y - _f(0.14)
+        table_top = y_after - _f(0.14)
 
     ax = fig.add_axes([L, 0.008, R - L, table_top - 0.008])
     ax.axis("off")
