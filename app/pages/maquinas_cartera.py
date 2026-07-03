@@ -132,6 +132,8 @@ def _construir(hist: pd.DataFrame, maq: pd.DataFrame, yms, t4_iso: str) -> pd.Da
             return "Retiro rechazado (máquina puede seguir)"
         return "Con despacho, retiro no marcado Entregada"
     df["confianza"] = df.apply(conf, axis=1)
+    # Flag: retiro confirmado por despacho pero sigue activo (los "49")
+    df["retiro_conf_activo"] = ((df["retiros_conf"] >= 1) & (df["activo_t4"])).map({True: "Sí", False: ""})
     df["ult_retiro"] = pd.to_datetime(df["ult_retiro"]).dt.date
     return df.reset_index(drop=True).sort_values("compra_12m", ascending=False)
 
@@ -168,6 +170,27 @@ def render(client, anio: int, mes: int):
     st.markdown(f"**Venta 12M en riesgo (grupo que retiene máquina y dejó de comprar): "
                 f"{fmt_clp(riesgo['compra_12m'].sum())}**")
 
+    # ── Retiros confirmados por despacho: 80 = (ido) + (sigue activo) ──
+    conf_cli = df[df["retiros_conf"] >= 1]
+    conf_activo = conf_cli[conf_cli["activo_t4"]]
+    conf_ido = conf_cli[~conf_cli["activo_t4"]]
+    kk1, kk2, kk3 = st.columns(3)
+    kk1.metric("Retiros confirmados por despacho", fmt_num(len(conf_cli)),
+               help="Clientes con retiro 'Entregada' (retiro físico confirmado). Solo existe desde feb-2026.")
+    kk2.metric("↳ Confirmado y se fue", fmt_num(len(conf_ido)),
+               help="Máquina recuperada y además dejó de comprar.")
+    kk3.metric("↳ Confirmado pero sigue activo", fmt_num(len(conf_activo)),
+               help="Retiraron UNA máquina pero siguen comprando → no son baja (tenían más de una máquina).")
+    st.caption(f"Los **{len(conf_cli)}** retiros confirmados = **{len(conf_ido)}** que se fueron (Estado "
+               f"'Máquina recuperada') + **{len(conf_activo)}** que siguen activos. Por eso el conteo de "
+               "'confirmados' y el de 'recuperada — ido' no coinciden: miden cosas distintas.")
+
+    with st.expander("Ver cruce Estado de máquina × Confianza de despacho"):
+        ct = pd.crosstab(df["estado_maquina"], df["confianza"], margins=True, margins_name="TOTAL")
+        st.dataframe(ct, use_container_width=True)
+        st.caption("Fila 'Activo' × columna 'Confirmado despacho (Entregada)' = los que retiraron una máquina "
+                   "pero siguen comprando.")
+
     # ── Filtros ──
     c1, c2 = st.columns([2, 2])
     estados = sorted(df["estado_maquina"].unique())
@@ -186,7 +209,7 @@ def render(client, anio: int, mes: int):
     tabla = vista[["razon_social", "comuna", "t1", "t2", "t3", "t4", "compra_12m",
                    "ultima_compra", "nuevas", "cambios", "retiros", "retiros_conf",
                    "retiros_rech", "ult_retiro", "compra_post_retiro",
-                   "estado_maquina", "confianza"]].copy()
+                   "estado_maquina", "confianza", "retiro_conf_activo"]].copy()
 
     st.markdown('<div class="seccion-titulo">Estado de máquina por cliente</div>',
                 unsafe_allow_html=True)
@@ -213,6 +236,8 @@ def render(client, anio: int, mes: int):
                 help="Ventas después del último retiro. Si es >0, el cliente siguió comprando (no es baja)."),
             "estado_maquina": st.column_config.TextColumn("Estado de máquina", width="large"),
             "confianza": st.column_config.TextColumn("Confianza (despacho)", width="medium"),
+            "retiro_conf_activo": st.column_config.TextColumn("Retiro conf. + activo", width="small",
+                help="Retiro confirmado por despacho pero el cliente sigue comprando (no es baja)."),
         })
     st.caption(f"{len(tabla)} clientes en la vista.")
 
@@ -225,7 +250,7 @@ def render(client, anio: int, mes: int):
         "retiros": "Retiros FL-2", "retiros_conf": "Retiros conf",
         "retiros_rech": "Retiros rechaz", "ult_retiro": "Ult retiro",
         "compra_post_retiro": "Compra post-retiro", "estado_maquina": "Estado maquina",
-        "confianza": "Confianza despacho",
+        "confianza": "Confianza despacho", "retiro_conf_activo": "Retiro conf + activo",
     }).to_excel(buf, index=False, sheet_name="Estado maquinas")
     st.download_button("⬇️ Descargar Excel (vista actual)", buf.getvalue(),
                        file_name="estado_maquinas_clientes_12m.xlsx",
