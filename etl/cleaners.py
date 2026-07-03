@@ -78,6 +78,32 @@ def agregar_alias(mapeo: dict[str, int], alias_rows: list[dict]) -> dict[str, in
     return mapeo
 
 
+def aplicar_reasignacion(df: pd.DataFrame, reglas: list[dict]) -> pd.DataFrame:
+    """
+    Reasigna vendedor_id POR FECHA sobre un fact DataFrame: las filas de `origen_id`
+    con `fecha >= desde` pasan a `destino_id`. Para reemplazos de vendedor que
+    facturan bajo el nombre de otro (ej. Carlos factura como Diego desde jul-2026):
+    lo de Diego desde julio → Carlos, y lo anterior queda con Diego. Es date-aware
+    (a diferencia del alias por nombre), así el histórico no se toca.
+
+    `reglas` = [{'origen_id': 9, 'destino_id': 14, 'desde': '2026-07-01'}, ...].
+    El df debe tener columnas 'vendedor_id' y 'fecha'.
+    """
+    if df is None or getattr(df, "empty", True) or not reglas:
+        return df
+    if "vendedor_id" not in df.columns or "fecha" not in df.columns:
+        return df
+    f = pd.to_datetime(df["fecha"], errors="coerce")
+    for r in reglas:
+        try:
+            mask = (df["vendedor_id"] == r["origen_id"]) & (f >= pd.Timestamp(r["desde"]))
+            if int(mask.sum()):
+                df.loc[mask, "vendedor_id"] = r["destino_id"]
+        except Exception:
+            continue
+    return df
+
+
 def mapear_vendedor_id(
     serie: pd.Series,
     mapeo: dict[str, int],

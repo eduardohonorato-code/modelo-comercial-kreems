@@ -31,8 +31,8 @@ from datetime import date
 
 import pandas as pd
 
-from etl.db import get_client, cargar_alias
-from etl.cleaners import construir_mapeo_vendedor, agregar_alias
+from etl.db import get_client, cargar_alias, cargar_reasignaciones
+from etl.cleaners import construir_mapeo_vendedor, agregar_alias, aplicar_reasignacion
 from etl.upsert import upsert_tabla
 from etl.loaders.obuma_api import cargar_obuma_api
 from etl.maquinas import (derivar_maquinas_obuma, aplicar_estado_despachos,
@@ -129,6 +129,11 @@ def run(periodo: tuple, dry_run: bool = False):
         logger.warning("Sin ventas para %d-%02d. Nada que cargar.", *periodo)
         return
 
+    # Reasignación por fecha (reemplazos de vendedor): ej. lo de Diego desde
+    # jul-2026 → Carlos, sin tocar el histórico anterior.
+    reasignaciones = cargar_reasignaciones(client)
+    fact_ventas = aplicar_reasignacion(fact_ventas, reasignaciones)
+
     # dim_cliente: solo columnas seguras (NO pisar comuna/tipo del Excel con
     # códigos/nulos de la API). region ya viene como nombre.
     dim_cliente = (obuma["dim_cliente"]
@@ -144,6 +149,7 @@ def run(periodo: tuple, dry_run: bool = False):
         fact_maquinas, _leer_despachos_periodo(client, periodo))
     fact_maquinas = aplicar_override_vendedor(
         fact_maquinas, _leer_overrides_maquina(client))
+    fact_maquinas = aplicar_reasignacion(fact_maquinas, reasignaciones)
 
     if dry_run:
         logger.info("\n-- DRY-RUN: resumen sin escribir --")

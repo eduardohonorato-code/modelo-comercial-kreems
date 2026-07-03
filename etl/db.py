@@ -24,3 +24,17 @@ def cargar_alias(client: Client) -> list[dict]:
         return r.data or []
     except Exception:
         return []
+
+
+def cargar_reasignaciones(client: Client) -> list[dict]:
+    """
+    Lee vendedor_reasignacion (id origen → id destino desde una fecha) para
+    reasignar por FECHA la facturación de reemplazos de vendedor. Fail-soft si la
+    tabla no existe.
+    """
+    try:
+        r = (client.table("vendedor_reasignacion")
+             .select("origen_id,destino_id,desde").execute())
+        return r.data or []
+    except Exception:
+        return []

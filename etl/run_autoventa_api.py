@@ -35,8 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from etl.db import get_client, cargar_alias
-from etl.cleaners import construir_mapeo_vendedor, agregar_alias
+from etl.db import get_client, cargar_alias, cargar_reasignaciones
+from etl.cleaners import construir_mapeo_vendedor, agregar_alias, aplicar_reasignacion
 from etl.config import SOCIEDAD_ID
 from etl.upsert import upsert_tabla
 from etl.loaders.autoventa_api import cargar_autoventa_api
@@ -169,6 +169,9 @@ def run(periodo: tuple, dry_run: bool = False):
     if fact_pedidos.empty:
         logger.warning("Sin pedidos para %d-%02d. Nada que cargar.", *periodo)
         return
+
+    # Reasignación por fecha (reemplazos de vendedor): ej. Diego desde jul → Carlos.
+    fact_pedidos = aplicar_reasignacion(fact_pedidos, cargar_reasignaciones(client))
 
     dim_cliente = av["dim_cliente"].rename(columns={"cliente_rut": "rut"})
 
