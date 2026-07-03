@@ -7,6 +7,7 @@ from app.styles import fmt_clp, fmt_pct, fmt_num, color_pct
 from app.data import (get_resumen, get_pedidos_resumen, get_calendario,
                       get_todos_vendedores, get_objetivos, upsert_objetivo,
                       get_ultima_factura, get_maquinas_sin_factura)
+from app.export import color_hex, bloque_descarga
 
 MESES = {
     1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",5:"Mayo",6:"Junio",
@@ -144,6 +145,13 @@ def render(client, anio: int, mes: int):
             unsafe_allow_html=True,
         )
     _tabla_gerencia(df)
+
+    # Export discreto (PNG para WhatsApp / CSV) con el contexto del período.
+    _subt = (f"{MESES[mes]} {anio}  ·  Días del mes: {cal['dias_totales']}  ·  "
+             f"Días trabajados: {cal['dias_trabajados']}  ·  Última factura: {ultima_factura}")
+    _disp, _col = _export_seguimiento(df)
+    bloque_descarga(_disp, _col, f"Seguimiento por vendedor — {MESES[mes]} {anio}",
+                    _subt, f"seguimiento_{anio}_{mes:02d}")
 
     # Aviso: máquinas FL-4 ingresadas en Autoventa que aún NO tienen factura.
     # No cuentan en "Maq. Ingresadas AV" hasta facturarse; aquí quedan visibles.
@@ -391,6 +399,60 @@ def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
     </table>
     </div>
     """, unsafe_allow_html=True)
+
+
+def _export_seguimiento(df: pd.DataFrame):
+    """
+    Arma el DataFrame de STRINGS para exportar la tabla de seguimiento (mismo
+    orden y formato que la tabla en pantalla) + el mapa de colores de los %.
+    Devuelve (df_display, color_celdas).
+    """
+    d = (df.assign(_sa=(df["nombre_canonico"] == "Sin asignar").astype(int))
+           .sort_values(["_sa", "fact_nc"], ascending=[True, False], na_position="last"))
+    filas, colores = [], {}
+    for i, (_, r) in enumerate(d.iterrows()):
+        pct_c = r.get("pct_cumplimiento")
+        pct_e = r.get("pct_efectividad")
+        pct_p = pd.to_numeric(r.get("pct_proyeccion"), errors="coerce")
+        ped_tot = r.get("pedidos_neto") or 0
+        pct_f = (r.get("pedidos_facturado") / ped_tot) if ped_tot else None
+        filas.append({
+            "Vendedor": r["nombre_canonico"], "Objetivo": fmt_clp(r.get("obj_venta")),
+            "Fact-NC": fmt_clp(r.get("fact_nc")), "%Cumpl": fmt_pct(pct_c),
+            "Proy.": fmt_clp(r.get("proyeccion_cierre")), "Pedidos": fmt_clp(r.get("pedidos_neto")),
+            "Ped.Fact": fmt_clp(r.get("pedidos_facturado")), "No Fact": fmt_clp(r.get("no_facturado_monto")),
+            "%Fact": fmt_pct(pct_f) if pct_f is not None else "—", "NC": fmt_clp(r.get("monto_notas_credito")),
+            "ObjMaq": fmt_num(r.get("obj_maquinas")), "MaqIng": fmt_num(r.get("maquinas_gestionadas")),
+            "MaqEnt": fmt_num(r.get("maquinas_entregadas")), "ObjVis": fmt_num(r.get("obj_visitas")),
+            "Docs": fmt_num(r.get("n_documentos")), "%Efec": fmt_pct(pct_e),
+        })
+        for col, val, kw in [("%Cumpl", pct_c, {}), ("%Efec", pct_e, {"ok": 0.5, "warn": 0.3})]:
+            h = color_hex(val, **kw)
+            if h:
+                colores[(i, col)] = h
+        if pd.notna(pct_p):
+            h = color_hex(float(pct_p))
+            if h:
+                colores[(i, "Proy.")] = h
+
+    # Fila TOTAL
+    n = len(df)
+    tot_obj = df["obj_venta"].sum()
+    tot_fnc = df["fact_nc"].sum()
+    tot_ped = df["pedidos_neto"].sum() if "pedidos_neto" in df else 0
+    tot_pedf = df["pedidos_facturado"].sum() if "pedidos_facturado" in df else 0
+    pf = (tot_pedf / tot_ped) if tot_ped else None
+    filas.append({
+        "Vendedor": "TOTAL", "Objetivo": fmt_clp(tot_obj), "Fact-NC": fmt_clp(tot_fnc),
+        "%Cumpl": fmt_pct(tot_fnc / tot_obj if tot_obj else None),
+        "Proy.": fmt_clp(df["proyeccion_cierre"].sum()), "Pedidos": fmt_clp(tot_ped),
+        "Ped.Fact": fmt_clp(tot_pedf), "No Fact": fmt_clp(df["no_facturado_monto"].sum()),
+        "%Fact": fmt_pct(pf) if pf is not None else "—", "NC": fmt_clp(df["monto_notas_credito"].sum()),
+        "ObjMaq": fmt_num(df["obj_maquinas"].sum()), "MaqIng": fmt_num(df["maquinas_gestionadas"].sum()),
+        "MaqEnt": fmt_num(df["maquinas_entregadas"].sum()), "ObjVis": fmt_num(df["obj_visitas"].sum()),
+        "Docs": fmt_num(df["n_documentos"].sum()), "%Efec": "",
+    })
+    return pd.DataFrame(filas), colores
 
 
 def _grafico_ranking(df: pd.DataFrame):

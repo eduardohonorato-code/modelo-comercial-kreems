@@ -9,6 +9,7 @@ import streamlit as st
 import pandas as pd
 
 from app.styles import fmt_clp, fmt_pct, fmt_num, color_pct
+from app.export import color_hex, bloque_descarga
 from app.data import (
     get_comisiones, upsert_comision_entrada,
     get_planes_comision, update_vendedor_plan,
@@ -98,6 +99,11 @@ def _render_mes(client, anio: int, mes: int):
     st.markdown('<div class="seccion-titulo">Comisiones por vendedor</div>',
                 unsafe_allow_html=True)
     _tabla_comisiones(df)
+
+    _disp, _col = _export_comisiones(df)
+    bloque_descarga(_disp, _col, f"Comisiones por vendedor — {MESES[mes]} {anio}",
+                    f"{MESES[mes]} {anio}  ·  {estado_cierre}",
+                    f"comisiones_{anio}_{mes:02d}")
 
     with st.expander("ℹ️ Cómo se calcula", expanded=False):
         st.markdown(
@@ -206,6 +212,41 @@ def _tabla_comisiones(df: pd.DataFrame):
     <table class="kreems"><thead><tr>{header}</tr></thead>
     <tbody>{rows}</tbody></table></div>
     """, unsafe_allow_html=True)
+
+
+def _export_comisiones(df: pd.DataFrame):
+    """DataFrame de strings + colores para exportar la tabla de comisiones."""
+    plan_lbl = {1: "Normal", 2: "Macarena"}
+    d = df.sort_values("total_a_pagar", ascending=False, na_position="last")
+    filas, colores = [], {}
+    for i, (_, r) in enumerate(d.iterrows()):
+        pct_pnv, pct_ef = r.get("logro_pnv"), r.get("logro_efectividad")
+        plan = plan_lbl.get(int(r["plan_id"]) if pd.notna(r.get("plan_id")) else 1, "Normal")
+        filas.append({
+            "Vendedor": r["nombre_canonico"], "Plan": plan,
+            "Fact-NC": fmt_clp(r.get("fact_nc")), "%PNV": fmt_pct(pct_pnv),
+            "Com PNV": fmt_clp(r.get("com_pnv")), "Bono 4%": fmt_clp(r.get("bono_4pct")),
+            "Máq": f"{fmt_num(r.get('maquinas_entregadas'))}/{fmt_num(r.get('obj_maquinas'))}",
+            "Com Máq": fmt_clp(r.get("com_maquinas")), "%Efec": fmt_pct(pct_ef),
+            "Cartera": fmt_num(r.get("cartera_clientes")), "Com Efec": fmt_clp(r.get("com_efectividad")),
+            "Total Com.": fmt_clp(r.get("total_comision")), "Sem.Corr": fmt_clp(r.get("semana_corrida")),
+            "Repos": fmt_clp(r.get("bono_reposicion")), "Total Pagar": fmt_clp(r.get("total_a_pagar")),
+        })
+        h = color_hex(pct_pnv)
+        if h:
+            colores[(i, "%PNV")] = h
+        h = color_hex(pct_ef, ok=0.5, warn=0.3)
+        if h:
+            colores[(i, "%Efec")] = h
+    filas.append({
+        "Vendedor": "TOTAL", "Plan": "", "Fact-NC": fmt_clp(df["fact_nc"].sum()), "%PNV": "",
+        "Com PNV": fmt_clp(df["com_pnv"].sum()), "Bono 4%": fmt_clp(df["bono_4pct"].sum()),
+        "Máq": "", "Com Máq": fmt_clp(df["com_maquinas"].sum()), "%Efec": "", "Cartera": "",
+        "Com Efec": fmt_clp(df["com_efectividad"].sum()), "Total Com.": fmt_clp(df["total_comision"].sum()),
+        "Sem.Corr": fmt_clp(df["semana_corrida"].sum()), "Repos": fmt_clp(df["bono_reposicion"].sum()),
+        "Total Pagar": fmt_clp(df["total_a_pagar"].sum()),
+    })
+    return pd.DataFrame(filas), colores
 
 
 def _safe_int(val, default=0) -> int:

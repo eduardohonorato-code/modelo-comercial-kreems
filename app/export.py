@@ -1,0 +1,136 @@
+"""
+Exportación de tablas: CSV y PNG de alta calidad (para enviar reportes por
+WhatsApp sin sacar pantallazo).
+
+El PNG se genera server-side con matplotlib (sin navegador → funciona en
+Streamlit Cloud). matplotlib se importa DENTRO de tabla_png para no encarecer
+la carga de páginas que no exportan.
+"""
+import io
+
+NAVY = "#1B3A6B"
+PINK = "#E62984"
+PINK_TINT = "#FBEAF0"
+ZEBRA = "#F5F5F9"
+VERDE = "#1A7F4B"
+AMBAR = "#D4881E"
+ROJO = "#C0392B"
+
+
+def color_hex(pct, ok: float = 1.0, warn: float = 0.7):
+    """Color de semáforo para un porcentaje (o None si no aplica)."""
+    try:
+        v = float(pct)
+    except (TypeError, ValueError):
+        return None
+    if v != v:  # NaN
+        return None
+    if v >= ok:
+        return VERDE
+    if v >= warn:
+        return AMBAR
+    return ROJO
+
+
+def to_csv(df) -> bytes:
+    """DataFrame → CSV bytes (delimitador ';' y BOM, se abre bien en Excel)."""
+    return df.to_csv(index=False, sep=";").encode("utf-8-sig")
+
+
+def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = None,
+              resaltar_ultima: bool = False, dpi: int = 200) -> bytes:
+    """
+    Render de un DataFrame de STRINGS ya formateados a PNG.
+
+    - `subtitulo`: línea de contexto (ej. días del mes / última factura).
+    - `color_celdas`: dict {(fila_idx, nombre_col): color_hex} para texto de celda
+      (ej. % Cumpl en verde/ámbar/rojo). `fila_idx` es la posición 0-based en `df`.
+    - `resaltar_ultima`: pinta la última fila como TOTAL (fondo rosado, negrita).
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    color_celdas = color_celdas or {}
+    df = df.astype(str)
+    n_rows, n_cols = df.shape
+
+    widths = [max([len(str(df.columns[j]))] + [len(v) for v in df.iloc[:, j]])
+              for j in range(n_cols)]
+    fig_w = min(max(sum(widths) * 0.102 + 0.6, 6.0), 32.0)
+    fig_h = (n_rows + 1) * 0.34 + (1.35 if subtitulo else 0.85)
+
+    fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi, facecolor="white")
+    fig.text(0.006, 0.988, titulo, fontsize=15, fontweight="bold", color=NAVY, va="top")
+    if subtitulo:
+        fig.text(0.006, 0.988 - 0.95 / fig_h, subtitulo, fontsize=10, color="#555", va="top")
+
+    top = 1 - (1.30 if subtitulo else 0.78) / fig_h
+    ax = fig.add_axes([0.006, 0.008, 0.988, max(top, 0.4)])
+    ax.axis("off")
+
+    tbl = ax.table(cellText=df.values.tolist(), colLabels=list(df.columns),
+                   cellLoc="right", loc="upper center", bbox=[0, 0, 1, 1])
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+
+    # Ancho de columna proporcional al contenido (si no, matplotlib reparte igual
+    # y trunca los nombres largos de vendedor).
+    total_w = sum(widths)
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_width(widths[c] / total_w)
+        cell.set_edgecolor("#E6E6EC")
+        cell.set_linewidth(0.5)
+        txt = cell.get_text()
+        if r == 0:
+            cell.set_facecolor(NAVY)
+            txt.set_color("white")
+            txt.set_fontweight("bold")
+            txt.set_fontsize(8.5)
+        else:
+            i = r - 1
+            if resaltar_ultima and i == n_rows - 1:
+                cell.set_facecolor(PINK_TINT)
+                txt.set_fontweight("bold")
+            else:
+                cell.set_facecolor(ZEBRA if (r % 2 == 0) else "white")
+            col = df.columns[c]
+            if (i, col) in color_celdas:
+                txt.set_color(color_celdas[(i, col)])
+                txt.set_fontweight("bold")
+        if c == 0:
+            txt.set_ha("left")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight",
+                pad_inches=0.12, facecolor="white")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def bloque_descarga(disp, colores: dict, titulo: str, subtitulo: str,
+                    nombre_base: str):
+    """
+    Expander DISCRETO con descarga de imagen (PNG) y datos (CSV) de una tabla.
+    El PNG se genera solo al pulsar el botón (no en cada carga de página).
+    `disp` es el DataFrame de strings ya formateados (la última fila = TOTAL).
+    """
+    import streamlit as st
+    with st.expander("📥 Descargar / Exportar (imagen PNG o datos)"):
+        st.caption("La imagen PNG es ideal para enviar por WhatsApp (mejor calidad "
+                   "que un pantallazo). El botón NO aparece dentro de la imagen.")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🖼️ Generar imagen PNG", key=f"png_{nombre_base}",
+                         use_container_width=True):
+                st.session_state[f"_png_{nombre_base}"] = tabla_png(
+                    disp, titulo, subtitulo, color_celdas=colores, resaltar_ultima=True)
+            png = st.session_state.get(f"_png_{nombre_base}")
+            if png:
+                st.download_button("⬇️ Descargar PNG", png, f"{nombre_base}.png",
+                                   "image/png", key=f"dl_png_{nombre_base}",
+                                   use_container_width=True)
+        with c2:
+            st.download_button("📄 Descargar datos (CSV)", to_csv(disp),
+                               f"{nombre_base}.csv", "text/csv",
+                               key=f"dl_csv_{nombre_base}", use_container_width=True)

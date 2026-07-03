@@ -9,6 +9,7 @@ supabase==2.7.4        # versión probada con Python 3.14; >=2.30 requiere C++ B
 streamlit>=1.35
 plotly>=5.22
 reportlab>=4.0         # export PDF de comisiones (Anexo Cierre de Ventas)
+matplotlib>=3.8        # export PNG de tablas (reportes por WhatsApp)
 
 # Utilidades
 python-dateutil>=2.9
