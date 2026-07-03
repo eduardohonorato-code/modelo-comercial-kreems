@@ -224,16 +224,26 @@ def _anexo_vendedor(r, anio, mes, detalle, h_title, h_sub, normal, small):
                     str(d.get("razon_social", ""))[:38],
                     _clp(d.get("neto")),
                 ])
+            # Total al pie, en la columna Neto: facturas − NC (el neto ya viene
+            # con signo, las NC restan → la suma es el Fact-NC del vendedor).
+            total_neto = pd.to_numeric(sub["neto"], errors="coerce").fillna(0).sum()
+            data.append(["", "", "", "TOTAL FACTURACIÓN NETA (Fact − NC)", _clp(total_neto)])
             dt = Table(data, colWidths=[20 * mm, 14 * mm, 24 * mm, 80 * mm, 27 * mm],
                        repeatRows=1)
             dt.setStyle(TableStyle([
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D0D0D0")),
+                ("GRID", (0, 0), (-1, -2), 0.4, colors.HexColor("#D0D0D0")),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#C01E6E")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("FONTSIZE", (0, 0), (-1, -1), 7),
                 ("ALIGN", (4, 1), (4, -1), "RIGHT"),
                 ("TOPPADDING", (0, 0), (-1, -1), 1.5),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 1.5),
+                # Fila TOTAL
+                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F2F5FA")),
+                ("LINEABOVE", (0, -1), (-1, -1), 0.8, colors.HexColor("#C01E6E")),
+                ("ALIGN", (3, -1), (3, -1), "RIGHT"),
+                ("SPAN", (0, -1), (2, -1)),
             ]))
             el.append(dt)
 
