@@ -104,6 +104,7 @@ def sidebar():
         nav_items.append(("clientes", "🧾", "Clientes"))
         if es_gerencia():
             nav_items.append(("cartera", "📇", "Cartera Directa"))
+            nav_items.append(("maquinas_cartera", "🧊", "Estado Máquinas"))
             nav_items.append(("presupuesto", "🎯", "Presupuesto"))
             nav_items.append(("comisiones", "💰", "Comisiones"))
             nav_items.append(("carga",  "📤", "Carga de archivos"))
@@ -355,7 +356,7 @@ def main():
           else contextlib.nullcontext()):
         from app.pages import (vendedor, gerencia, analisis, carga,
                                 inicio, admin, comisiones, clientes,
-                                presupuesto, cartera)
+                                presupuesto, cartera, maquinas_cartera)
 
         client = get_client_auth()
         if client is None:
@@ -397,6 +398,13 @@ def main():
                 st.rerun()
             st.markdown("## 📇 Cartera Directa — últimos 12 meses")
             cartera.render(client, anio, mes)
+
+        elif pagina == "maquinas_cartera":
+            if not es_gerencia():
+                st.session_state.pagina = "inicio"
+                st.rerun()
+            st.markdown("## 🧊 Estado de Máquinas — últimos 12 meses")
+            maquinas_cartera.render(client, anio, mes)
 
         elif pagina == "presupuesto":
             if not es_gerencia():
