@@ -100,10 +100,10 @@ def _render_mes(client, anio: int, mes: int):
                 unsafe_allow_html=True)
     _tabla_comisiones(df)
 
-    _disp, _col = _export_comisiones(df)
+    _disp, _col, _csv = _export_comisiones(df)
     bloque_descarga(_disp, _col, f"Comisiones por vendedor — {MESES[mes]} {anio}",
                     f"{MESES[mes]} {anio}  ·  {estado_cierre}",
-                    f"comisiones_{anio}_{mes:02d}")
+                    f"comisiones_{anio}_{mes:02d}", disp_csv=_csv)
 
     with st.expander("ℹ️ Cómo se calcula", expanded=False):
         st.markdown(
@@ -218,10 +218,20 @@ def _tabla_comisiones(df: pd.DataFrame):
 
 
 def _export_comisiones(df: pd.DataFrame):
-    """DataFrame de strings + colores para exportar la tabla de comisiones."""
+    """
+    Exporta la tabla de comisiones. Devuelve (disp, colores, disp_csv):
+      - disp: versión compacta para el PNG (imagen).
+      - disp_csv: versión detallada para el CSV, con el tramo ORIGINAL (real) y el
+        FORZADO por gerencia para PNV, Máquinas y Efectividad (para ver cuánto se
+        forzó). La comisión ya se calcula sobre el forzado cuando aplica.
+    """
     plan_lbl = {1: "Normal", 2: "Macarena"}
     d = df.sort_values("total_a_pagar", ascending=False, na_position="last")
-    filas, colores = [], {}
+
+    def _ov(x):  # override: número o None
+        return float(x) if pd.notna(x) else None
+
+    filas, filas_csv, colores = [], [], {}
     for i, (_, r) in enumerate(d.iterrows()):
         pct_pnv, pct_ef = r.get("logro_pnv"), r.get("logro_efectividad")
         plan = plan_lbl.get(int(r["plan_id"]) if pd.notna(r.get("plan_id")) else 1, "Normal")
@@ -242,16 +252,41 @@ def _export_comisiones(df: pd.DataFrame):
         h = color_hex(pct_ef, ok=0.5, warn=0.3)
         if h:
             colores[(i, "%Efec")] = h
-    filas.append({
+
+        # CSV detallado: tramo original (real) vs forzado por métrica.
+        ov_v = r.get("obj_visitas") or 0
+        ef_real = (r.get("n_facturas") / ov_v) if ov_v else None   # N°facturas / obj visitas
+        filas_csv.append({
+            "Vendedor": r["nombre_canonico"], "Plan": plan,
+            "Objetivo": fmt_clp(r.get("obj_venta")), "Fact-NC": fmt_clp(r.get("fact_nc")),
+            "%PNV original": fmt_pct(r.get("logro_pnv")),
+            "%PNV forzado": fmt_pct(_ov(r.get("pnv_logro_override"))),
+            "Com PNV": fmt_clp(r.get("com_pnv")), "Bono 4%": fmt_clp(r.get("bono_4pct")),
+            "Máq (entr/obj)": f"{fmt_num(r.get('maquinas_entregadas'))}/{fmt_num(r.get('obj_maquinas'))}",
+            "%Máq original": fmt_pct(r.get("logro_maquinas")),
+            "%Máq forzado": fmt_pct(_ov(r.get("maq_logro_override"))),
+            "Com Máq": fmt_clp(r.get("com_maquinas")),
+            "%Efec original": fmt_pct(ef_real),
+            "%Efec forzado": fmt_pct(_ov(r.get("efectividad_override"))),
+            "Cartera": fmt_num(r.get("cartera_clientes")), "Com Efec": fmt_clp(r.get("com_efectividad")),
+            "Total Com.": fmt_clp(r.get("total_comision")), "Sem.Corr": fmt_clp(r.get("semana_corrida")),
+            "Repos": fmt_clp(r.get("bono_reposicion")), "Total Pagar": fmt_clp(r.get("total_a_pagar")),
+        })
+
+    total = {
         "Vendedor": "TOTAL", "Plan": "", "Objetivo": fmt_clp(df["obj_venta"].sum()),
-        "Fact-NC": fmt_clp(df["fact_nc"].sum()), "%PNV": "",
+        "Fact-NC": fmt_clp(df["fact_nc"].sum()),
         "Com PNV": fmt_clp(df["com_pnv"].sum()), "Bono 4%": fmt_clp(df["bono_4pct"].sum()),
-        "Máq": "", "Com Máq": fmt_clp(df["com_maquinas"].sum()), "%Efec": "", "Cartera": "",
-        "Com Efec": fmt_clp(df["com_efectividad"].sum()), "Total Com.": fmt_clp(df["total_comision"].sum()),
-        "Sem.Corr": fmt_clp(df["semana_corrida"].sum()), "Repos": fmt_clp(df["bono_reposicion"].sum()),
-        "Total Pagar": fmt_clp(df["total_a_pagar"].sum()),
-    })
-    return pd.DataFrame(filas), colores
+        "Com Máq": fmt_clp(df["com_maquinas"].sum()), "Com Efec": fmt_clp(df["com_efectividad"].sum()),
+        "Total Com.": fmt_clp(df["total_comision"].sum()), "Sem.Corr": fmt_clp(df["semana_corrida"].sum()),
+        "Repos": fmt_clp(df["bono_reposicion"].sum()), "Total Pagar": fmt_clp(df["total_a_pagar"].sum()),
+    }
+    filas.append({**{"%PNV": "", "Máq": "", "%Efec": "", "Cartera": ""}, **total})
+    filas_csv.append(total)
+
+    disp = pd.DataFrame(filas)
+    disp_csv = pd.DataFrame(filas_csv).reindex(columns=list(filas_csv[0].keys()))
+    return disp, colores, disp_csv
 
 
 def _safe_int(val, default=0) -> int:

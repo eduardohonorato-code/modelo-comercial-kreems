@@ -162,14 +162,17 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
 
 
 def bloque_descarga(disp, colores: dict, titulo: str, subtitulo: str,
-                    nombre_base: str, col_labels=None, grupos=None):
+                    nombre_base: str, col_labels=None, grupos=None, disp_csv=None):
     """
     Expander DISCRETO con descarga de imagen (PNG) y datos (CSV) de una tabla.
     El PNG se genera solo al pulsar el botón (no en cada carga de página).
     `disp` es el DataFrame de strings ya formateados (la última fila = TOTAL).
     `col_labels`/`grupos` se pasan tal cual a tabla_png (encabezados + banda de grupos).
+    `disp_csv`: si se entrega, el CSV usa este DataFrame (más detallado) en vez de
+    `disp` — así la imagen puede ser compacta y el CSV traer más columnas.
     """
     import streamlit as st
+    csv_df = disp_csv if disp_csv is not None else disp
     with st.expander("📥 Descargar / Exportar (imagen PNG o datos)"):
         st.caption("La imagen PNG es ideal para enviar por WhatsApp (mejor calidad "
                    "que un pantallazo). El botón NO aparece dentro de la imagen.")
@@ -186,6 +189,6 @@ def bloque_descarga(disp, colores: dict, titulo: str, subtitulo: str,
                                    "image/png", key=f"dl_png_{nombre_base}",
                                    use_container_width=True)
         with c2:
-            st.download_button("📄 Descargar datos (CSV)", to_csv(disp),
+            st.download_button("📄 Descargar datos (CSV)", to_csv(csv_df),
                                f"{nombre_base}.csv", "text/csv",
                                key=f"dl_csv_{nombre_base}", use_container_width=True)
