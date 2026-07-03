@@ -165,7 +165,7 @@ def render(client, anio: int, mes: int):
     _subt = (f"{MESES[mes]} {anio}  ·  Días del mes: {cal['dias_totales']}  ·  "
              f"Días trabajados: {cal['dias_trabajados']}  ·  Última factura: {ultima_factura}")
     _disp, _col = _export_seguimiento(df)
-    bloque_descarga(_disp, _col, "Reporte Seguimiento Objetivos",
+    bloque_descarga(_disp, _col, "REPORTE DE SEGUIMIENTO DE OBJETIVOS",
                     _subt, f"seguimiento_{anio}_{mes:02d}",
                     col_labels=_PNG_LABELS, grupos=_PNG_GRUPOS)
 
