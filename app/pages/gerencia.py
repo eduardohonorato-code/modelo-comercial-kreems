@@ -130,35 +130,20 @@ def render(client, anio: int, mes: int):
     </div>
     """, unsafe_allow_html=True)
 
-    # Separar vendedores CON y SIN objetivo
-    df_con_obj = df[df["obj_venta"] > 0].copy()
-    df_sin_obj = df[df["obj_venta"] == 0].copy()
-
-    if df_con_obj.empty and not df_sin_obj.empty:
-        # Aún no se asignan objetivos del período (típico a inicio de mes): mostrar
-        # la tabla COMPLETA como principal (con totales y la tira de días/última
-        # factura arriba), para poder enviar el reporte sin esperar los objetivos.
+    # UNA sola tabla con TODOS los vendedores (con y sin objetivo juntos). A quien
+    # aún no tiene objetivo del mes, los % dependientes (% Cumpl, % Efec) le salen
+    # "—". "Sin asignar" (facturación sin vendedor mapeado en Obuma) se fija al
+    # final de la tabla (ver _tabla_gerencia), no se cuenta como vendedor.
+    sin_obj = df[(df["obj_venta"] == 0) & (df["nombre_canonico"] != "Sin asignar")]
+    if not sin_obj.empty:
         st.markdown(
-            '<div class="estado-vacio" style="margin-bottom:.75rem">'
-            'ℹ️ Aún no hay objetivos asignados para este período — la tabla muestra '
-            'el avance real (los % que dependen del objetivo saldrán al asignarlos '
-            'en <strong>Editar objetivos</strong>).</div>',
+            f'<div class="estado-vacio" style="margin-bottom:.75rem">'
+            f'ℹ️ {len(sin_obj)} vendedor(es) aún sin objetivo del período — aparecen '
+            f'en la tabla con "—" en los % que dependen del objetivo. Asígnalos en '
+            f'<strong>Editar objetivos</strong>.</div>',
             unsafe_allow_html=True,
         )
-        _tabla_gerencia(df_sin_obj)
-    else:
-        _tabla_gerencia(df_con_obj)
-
-        if not df_sin_obj.empty:
-            with st.expander(f"{len(df_sin_obj)} vendedor(es) sin objetivo asignado"):
-                st.markdown(
-                    '<div class="estado-vacio" style="margin-bottom:.75rem">'
-                    'Estos vendedores aún no tienen objetivo definido para el período. '
-                    'Asígnalos en la sección <strong>Editar objetivos</strong>.'
-                    '</div>',
-                    unsafe_allow_html=True,
-                )
-                _tabla_gerencia(df_sin_obj, mostrar_total=False)
+    _tabla_gerencia(df)
 
     # Aviso: máquinas FL-4 ingresadas en Autoventa que aún NO tienen factura.
     # No cuentan en "Maq. Ingresadas AV" hasta facturarse; aquí quedan visibles.
@@ -305,8 +290,11 @@ def render(client, anio: int, mes: int):
 
 def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
     """Tabla completa de vendedores con colores por cumplimiento."""
-    # Ordenar por fact_nc desc, poner totales al final
-    df_sorted = df.sort_values("fact_nc", ascending=False, na_position="last")
+    # Ordenar por fact_nc desc, pero "Sin asignar" (residual, no es vendedor) va
+    # SIEMPRE al final, para no aparecer arriba en el ranking del reporte.
+    df_sorted = df.assign(
+        _sa=(df["nombre_canonico"] == "Sin asignar").astype(int)
+    ).sort_values(["_sa", "fact_nc"], ascending=[True, False], na_position="last")
 
     header = (
         "<th style='text-align:left'>Vendedor</th>"
