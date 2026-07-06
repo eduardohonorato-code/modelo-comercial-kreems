@@ -127,7 +127,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
 
     base = base.merge(métricas, on="vendedor_id", how="left")
     for c in ["nuevos_react", "clientes_activos", "amplitud_prom",
-              "ny_clientes", "ny_pct"]:
+              "ny_clientes", "ny_pct", "cartera_hist"]:
         if c not in base.columns:
             base[c] = 0
         base[c] = base[c].fillna(0)
@@ -146,7 +146,14 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     for _, r in base.iterrows():
         m_venta   = _coalesce(r, "meta_venta", "obj_venta")
         m_visitas = _coalesce(r, "meta_visitas", "obj_visitas")
-        m_cober   = _coalesce(r, "meta_cobertura", "cartera_clientes")
+        # Cobertura: meta v1 → cartera cargada (modelo actual) → proxy histórico
+        # (clientes distintos de los últimos 3 meses). Se ignoran valores ≤0.
+        m_cober = None
+        for src in ("meta_cobertura", "cartera_clientes", "cartera_hist"):
+            v = r.get(src)
+            if v is not None and pd.notna(v) and float(v) > 0:
+                m_cober = float(v)
+                break
         m_nuevos  = _coalesce(r, "meta_nuevos_react", "__none__", DEFAULT_META_NUEVOS)
         m_amplit  = _coalesce(r, "meta_amplitud", "__none__", DEFAULT_META_AMPLITUD)
 
@@ -195,7 +202,7 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int) -> pd.Da
     - ny_clientes / ny_pct: clientes que compraron Galletas NY (foco de la línea nueva).
     La atribución del cliente es al vendedor que más le facturó en el mes."""
     cols = ["vendedor_id", "clientes_activos", "nuevos_react",
-            "amplitud_prom", "ny_clientes", "ny_pct"]
+            "amplitud_prom", "ny_clientes", "ny_pct", "cartera_hist"]
     if hist is None or hist.empty:
         return pd.DataFrame(columns=cols)
 
@@ -227,6 +234,13 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int) -> pd.Da
     first_ym = por_cli_ym.min()
     # Última compra ANTERIOR al mes seleccionado, por cliente.
     prev = (fac[fac["ym"] < sel].groupby("cliente_rut")["ym"].max())
+
+    # Proxy de cartera asignada: clientes distintos que el vendedor facturó en
+    # los últimos 3 meses (default cuando gerencia no cargó la cartera real).
+    win = [sel - 2, sel - 1, sel]
+    tri = fac[fac["ym"].isin(win)]
+    cartera_hist = (tri.groupby("vendedor_id")["cliente_rut"].nunique()
+                      .rename("cartera_hist").reset_index())
 
     cur = fac[fac["ym"] == sel].copy()
     if cur.empty:
@@ -271,6 +285,8 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int) -> pd.Da
     agg["ny_pct"] = agg.apply(
         lambda x: (x["ny_clientes"] / x["clientes_activos"]) if x["clientes_activos"] else 0,
         axis=1)
+    agg = agg.merge(cartera_hist, on="vendedor_id", how="left")
+    agg["cartera_hist"] = agg["cartera_hist"].fillna(0)
     return agg
 
 
@@ -334,7 +350,8 @@ def render_tab(client, anio: int, mes: int):
             <li><strong>Cuota</strong> = Fact-NC / meta de venta. &nbsp;
                 <strong>Nuevos+react</strong> = clientes de 1ª compra o que vuelven tras
                 {GAP_REACTIVACION}+ meses. &nbsp;
-                <strong>Cobertura</strong> = clientes que compraron / cartera asignada.</li>
+                <strong>Cobertura</strong> = clientes que compraron / cartera asignada
+                (si no hay cartera cargada, usa los clientes distintos de los últimos 3 meses).</li>
             <li><strong>Amplitud</strong> = promedio de líneas (categorías) distintas por
                 cliente; se destaca la penetración de <strong>Galletas NY</strong> (línea nueva).</li>
             <li><strong>Efectividad</strong> = N°facturas / objetivo de visitas
@@ -427,7 +444,8 @@ def _safe_num(val, default=0):
 
 def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
     st.caption("Las metas en blanco usan el default: Cuota→objetivo de venta, "
-               "Efectividad→objetivo de visitas, Cobertura→cartera asignada. "
+               "Efectividad→objetivo de visitas, Cobertura→cartera asignada "
+               "(o clientes de los últimos 3 meses si no hay cartera cargada). "
                "Nuevos+reactivados y Amplitud parten de un default editable.")
 
     vendedores = df[["vendedor_id", "nombre_canonico"]].sort_values("nombre_canonico")
