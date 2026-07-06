@@ -51,6 +51,13 @@ _EXPANDS_INVOICES = "&".join(
      "r_invoice_lines", "line_detail"]
 )
 
+# Expands para /requests (pedidos): cliente + líneas con producto/neto.
+_EXPANDS_REQUESTS = "&".join(
+    f"expand[]={g}" for g in
+    ["request_detail", "r_request_client", "client_detail",
+     "r_request_lines", "line_detail"]
+)
+
 
 def _headers() -> dict:
     key = os.environ.get("AUTOVENTA_API_KEY_ADMIN", "").strip()
@@ -156,6 +163,44 @@ def cargar_autoventa_api(
 
     if tipos_desconocidos:
         logger.warning("  [AV-API] doc_type no reconocidos (revisar): %s", tipos_desconocidos)
+
+    # ── 2. Pedidos PENDIENTES (aún sin facturar) desde /requests ────────────
+    # /invoices solo trae los FACTURADOS (+ no_dte). Los pedidos que aún no se
+    # facturan (Sin DTE) viven en /requests. Se agregan los que NO estén ya como
+    # factura (dedup por correlativo de pedido y por el flag `billed`), así no se
+    # pierden a inicio de mes cuando muchos pedidos siguen pendientes. Filtra por
+    # dispatch_date dentro del mes.
+    pedidos_en_facturas = {f["n_pedido"] for f in filas}
+    reqs = []
+    for dia in _dias(anio, mes):
+        reqs.extend(_get(f"/requests?dispatch_date={dia}&{_EXPANDS_REQUESTS}") or [])
+    n_req = 0
+    for req in reqs:
+        fdes = str(req.get("dispatch_date") or "")
+        if fdes[:7] != mes_prefijo:
+            continue
+        if str(req.get("status") or "").lower() in (
+                "cancelled", "canceled", "rejected", "voided", "annulled"):
+            continue
+        cli = req.get("client") or {}
+        rut = cli.get("rut")
+        for ln in req.get("lines") or []:
+            corr = str(ln.get("request_correlative") or req.get("correlative") or "SIN_PEDIDO")
+            if corr in pedidos_en_facturas or bool(ln.get("billed")):
+                continue  # ya está como factura / ya facturado → no duplicar
+            n_req += 1
+            filas.append({
+                "n_pedido": corr,
+                "num_documento": pd.NA,
+                "doc_venta": "Sin DTE",
+                "fecha": fdes[:10],
+                "vendedor_nombre": ln.get("created_by_name") or req.get("created_by_name"),
+                "cliente_rut_raw": rut,
+                "producto_codigo": str(ln.get("product_code") or "").strip(),
+                "neto": float(ln.get("net_amount") or 0),
+                "neto_nc": 0.0,
+            })
+    logger.info("  [AV-API] pedidos pendientes (Sin DTE) desde /requests: %d líneas nuevas", n_req)
 
     if not filas:
         logger.warning("  [AV-API] Sin pedidos para %s.", mes_prefijo)
