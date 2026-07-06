@@ -9,8 +9,9 @@ tasa total topa en 5%.
   1. Cuota de venta                50%    2,50%       Fact-NC / meta_venta
   2. Clientes nuevos + react.      15%    0,75%       fact_ventas (historia) por vendedor
   3. Cobertura de cartera          15%    0,75%       clientes activos / cartera asignada
-  4. Penetración Galletas NY       15%    0,75%       % de clientes que compran la línea nueva vs meta
-  5. Efectividad de visita          5%    0,25%       N°facturas / obj_visitas (mismo proxy actual)
+  4. Penetración Galletas NY       10%    0,50%       % de clientes que compran la línea nueva vs meta
+  5. Amplitud de portafolio         5%    0,25%       promedio de líneas distintas por cliente vs meta
+  6. Efectividad de visita          5%    0,25%       N°facturas / obj_visitas (mismo proxy actual)
 
 El cálculo se hace acá en pandas (no en SQL) para reusar el detalle de
 fact_ventas y la lógica de clientes/productos. Solo las metas se persisten
@@ -42,7 +43,8 @@ KPIS = [
     ("cuota",       "Cuota de venta",              0.50),
     ("nuevos",      "Nuevos + reactivados",        0.15),
     ("cobertura",   "Cobertura de cartera",        0.15),
-    ("amplitud",    "Penetración Galletas NY",     0.15),
+    ("galletas",    "Penetración Galletas NY",     0.10),
+    ("amplitud",    "Amplitud de portafolio",      0.05),
     ("efectividad", "Efectividad de visita",       0.05),
 ]
 PESO   = {k: p for k, _, p in KPIS}
@@ -50,9 +52,10 @@ PCT    = {k: p * TASA_MAX for k, _, p in KPIS}   # % sobre venta de cada KPI
 
 # Defaults de metas cuando no hay valor cargado ni fuente previa.
 DEFAULT_META_NUEVOS   = 3
-# El KPI "amplitud" mide penetración de Galletas NY = % de clientes del vendedor
-# que compraron la línea nueva. La meta es una FRACCIÓN (0.30 = 30% de clientes).
-DEFAULT_META_AMPLITUD = 0.30
+# "galletas" = penetración Galletas NY = % de clientes con la línea nueva
+# (meta FRACCIÓN: 0.30 = 30%). "amplitud" = promedio de líneas x cliente (meta 2).
+DEFAULT_META_GALLETAS = 0.30
+DEFAULT_META_LINEAS   = 2.0
 
 GAP_REACTIVACION = 3   # meses sin comprar para considerar "reactivado" (≈90 días)
 
@@ -158,20 +161,21 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
                 m_cober = float(v)
                 cober_src = src
                 break
-        m_nuevos  = _coalesce(r, "meta_nuevos_react", "__none__", DEFAULT_META_NUEVOS)
-        m_amplit  = _coalesce(r, "meta_amplitud", "__none__", DEFAULT_META_AMPLITUD)
+        m_nuevos   = _coalesce(r, "meta_nuevos_react", "__none__", DEFAULT_META_NUEVOS)
+        m_galletas = _coalesce(r, "meta_amplitud", "__none__", DEFAULT_META_GALLETAS)
+        m_lineas   = _coalesce(r, "meta_lineas", "__none__", DEFAULT_META_LINEAS)
 
         reales = {
             "cuota":       r.get("fact_nc") or 0,
             "nuevos":      r.get("nuevos_react") or 0,
             "cobertura":   r.get("clientes_activos") or 0,
-            # Amplitud reformulada: penetración de Galletas NY (% de clientes).
-            "amplitud":    r.get("ny_pct") or 0,
+            "galletas":    r.get("ny_pct") or 0,          # penetración Galletas NY
+            "amplitud":    r.get("amplitud_prom") or 0,   # promedio de líneas x cliente
             "efectividad": r.get("n_facturas") or 0,
         }
         metas_ef = {
             "cuota": m_venta, "nuevos": m_nuevos, "cobertura": m_cober,
-            "amplitud": m_amplit, "efectividad": m_visitas,
+            "galletas": m_galletas, "amplitud": m_lineas, "efectividad": m_visitas,
         }
 
         fila = {
@@ -301,7 +305,7 @@ def render_tab(client, anio: int, mes: int):
         '<div class="estado-vacio" style="margin-bottom:.75rem">'
         '<strong>Propuesta de Comisiones v1</strong> — modelo alternativo (en '
         'evaluación, NO reemplaza el actual). La comisión es una <strong>tasa '
-        'efectiva de hasta 5% sobre la venta real</strong>, repartida en 5 KPIs '
+        'efectiva de hasta 5% sobre la venta real</strong>, repartida en 6 KPIs '
         'ponderados. Cada KPI paga proporcional desde el 80% de su meta.</div>',
         unsafe_allow_html=True,
     )
@@ -374,7 +378,8 @@ def render_tab(client, anio: int, mes: int):
             <li><strong>Comisión $ = tasa efectiva × venta real (Fact-NC)</strong>.
                 La tasa efectiva es la suma de los 5 KPIs y topa en 5,00%.</li>
             <li>Cada KPI aporta <em>peso × 5%</em> como máximo: Cuota 2,50%,
-                Nuevos+react 0,75%, Cobertura 0,75%, Galletas NY 0,75%, Efectividad 0,25%.</li>
+                Nuevos+react 0,75%, Cobertura 0,75%, Galletas NY 0,50%, Amplitud 0,25%,
+                Efectividad 0,25%.</li>
             <li><strong>Pago proporcional desde el 80%</strong>: si el logro (real/meta)
                 es &lt;80% el KPI paga $0; entre 80% y 100% sube lineal; al 100% o más paga completo.
                 Ej: logro 90% → paga la mitad del KPI.</li>
@@ -387,6 +392,8 @@ def render_tab(client, anio: int, mes: int):
                 clientes del vendedor que compraron Galletas NY, contra una meta de %.
                 Premia colocar la línea nueva; no castiga al cliente que solo lleva paletas
                 (que las paletas no caigan lo cuida la Cuota).</li>
+            <li><strong>Amplitud</strong> = promedio de líneas (categorías) distintas por
+                cliente, contra una meta (ej. 2). Empuja la variedad general del portafolio.</li>
             <li><strong>Efectividad</strong> = N°facturas / objetivo de visitas
                 (mismo proxy del modelo actual; no hay captura de visitas reales).</li>
           </ul>
@@ -416,6 +423,8 @@ def _celda_kpi(r, k) -> str:
     cls   = _cls_factor(r.get(f"{k}_factor"))
     if k in ("cuota",):
         detalle = f"{fmt_clp(real)} / {fmt_clp(meta)}"
+    elif k == "amplitud":
+        detalle = f"{(real or 0):.1f} / {fmt_num(meta)} líneas x cli"
     else:
         detalle = f"{fmt_num(real)} / {fmt_num(meta)}"
     return f"<td class='{cls}' title='{detalle}'>{fmt_pct(logro)}</td>"
@@ -429,17 +438,18 @@ def _tabla(df: pd.DataFrame):
         "<th title='Clientes nuevos + reactivados / meta'>Nuevos+React</th>"
         "<th title='Clientes activos / cartera asignada'>Cobertura</th>"
         "<th title='N° clientes con Galletas NY (penetración) — coloreado según logro vs meta'>Galletas NY</th>"
+        "<th title='Promedio de líneas (categorías) distintas por cliente / meta'>Amplitud</th>"
         "<th title='N°facturas / objetivo de visitas'>Efectividad</th>"
-        "<th title='Suma de los 5 KPIs (tope 5%)'>Tasa Efec.</th>"
+        "<th title='Suma de los 6 KPIs (tope 5%)'>Tasa Efec.</th>"
         "<th title='Tasa efectiva × venta real'>Comisión $</th>"
     )
     rows = ""
     for _, r in df.iterrows():
         # Galletas NY: N° clientes + penetración, coloreado por el factor del KPI.
-        ny_cls = _cls_factor(r.get("amplitud_factor"))
-        ny_meta = r.get("amplitud_meta")
+        ny_cls = _cls_factor(r.get("galletas_factor"))
+        ny_meta = r.get("galletas_meta")
         ny_tip = (f"Penetración {fmt_pct(r.get('ny_pct'))} de {fmt_num(r.get('clientes_activos'))} "
-                  f"clientes · meta {fmt_pct(ny_meta)} · logro {fmt_pct(r.get('amplitud_logro'))}")
+                  f"clientes · meta {fmt_pct(ny_meta)} · logro {fmt_pct(r.get('galletas_logro'))}")
         ny = f"{fmt_num(r.get('ny_clientes'))} ({fmt_pct(r.get('ny_pct'))})"
         rows += f"""<tr>
           <td style='text-align:left'>{r['nombre_canonico']}</td>
@@ -448,6 +458,7 @@ def _tabla(df: pd.DataFrame):
           {_celda_kpi(r, 'nuevos')}
           {_celda_kpi(r, 'cobertura')}
           <td class='{ny_cls}' title='{ny_tip}'>{ny}</td>
+          {_celda_kpi(r, 'amplitud')}
           {_celda_kpi(r, 'efectividad')}
           <td><strong>{fmt_pct(r.get('tasa_efectiva'))}</strong></td>
           <td><strong>{fmt_clp(r.get('comision_total'))}</strong></td>
@@ -456,7 +467,7 @@ def _tabla(df: pd.DataFrame):
     rows += f"""<tr class='total-row'>
       <td style='text-align:left'>TOTAL</td>
       <td>{fmt_clp(df['fact_nc'].sum())}</td>
-      <td></td><td></td><td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td></td>
       <td></td>
       <td>{fmt_clp(df['comision_total'].sum())}</td>
     </tr>"""
@@ -480,7 +491,7 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
     st.caption("Las metas en blanco usan el default: Cuota→objetivo de venta, "
                "Efectividad→objetivo de visitas, Cobertura→cartera asignada "
                "(o clientes de los últimos 3 meses si no hay cartera cargada). "
-               "Nuevos+reactivados y Galletas NY parten de un default editable.")
+               "Nuevos+reactivados, Galletas NY y Amplitud parten de un default editable.")
 
     vendedores = df[["vendedor_id", "nombre_canonico"]].sort_values("nombre_canonico")
     nombre_sel = st.selectbox("Seleccionar vendedor",
@@ -503,12 +514,16 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
             "Meta cobertura (n° clientes)", min_value=0, step=1,
             value=int(_safe_num(fila.get("cobertura_meta"))),
             help="Default = cartera asignada del modelo actual.")
-        c4, c5 = st.columns(2)
-        m_amplit_pct = c4.number_input(
+        c4, c5, c6 = st.columns(3)
+        m_galletas_pct = c4.number_input(
             "Meta Galletas NY (% de clientes)", min_value=0.0, max_value=100.0, step=5.0,
-            value=round(float(_safe_num(fila.get("amplitud_meta"), DEFAULT_META_AMPLITUD)) * 100, 1),
+            value=round(float(_safe_num(fila.get("galletas_meta"), DEFAULT_META_GALLETAS)) * 100, 1),
             help="% de tus clientes que deberían llevar Galletas NY (ej. 30%).")
-        m_visitas = c5.number_input(
+        m_lineas = c5.number_input(
+            "Meta amplitud (líneas x cliente)", min_value=0.0, step=0.5,
+            value=float(_safe_num(fila.get("amplitud_meta"), DEFAULT_META_LINEAS)),
+            help="Promedio de líneas (categorías) distintas por cliente (ej. 2).")
+        m_visitas = c6.number_input(
             "Meta visitas", min_value=0, step=1,
             value=int(_safe_num(fila.get("efectividad_meta"))),
             help="Default = objetivo de visitas del mes.")
@@ -522,8 +537,9 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
                 meta_venta=m_venta or None,
                 meta_nuevos_react=m_nuevos,
                 meta_cobertura=m_cober or None,
-                meta_amplitud=round(m_amplit_pct / 100, 4),
+                meta_amplitud=round(m_galletas_pct / 100, 4),
                 meta_visitas=m_visitas or None,
+                meta_lineas=m_lineas,
             )
             st.success(f"✅ Metas de **{nombre_sel}** guardadas.")
             st.rerun()
