@@ -653,6 +653,45 @@ def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: in
     }, on_conflict="vendedor_id,anio,mes").execute()
 
 
+# ── Propuesta de Comisiones v1 (scorecard 5 KPIs) ───────────────────────────
+
+def get_comision_v1_meta(client: Client, anio: int, mes: int) -> pd.DataFrame:
+    """Metas editables del modelo v1 por vendedor/mes (tabla comision_v1_meta).
+    Columnas NULL caen al default de otras tablas en el cálculo de la página."""
+    try:
+        r = (client.table("comision_v1_meta")
+             .select("vendedor_id,meta_venta,meta_nuevos_react,"
+                     "meta_cobertura,meta_amplitud,meta_visitas")
+             .eq("anio", anio).eq("mes", mes)
+             .execute())
+        return pd.DataFrame(r.data) if r.data else pd.DataFrame()
+    except Exception:
+        # Tabla aún no creada (sql/022 sin correr): fail-soft.
+        return pd.DataFrame()
+
+
+def upsert_comision_v1_meta(client: Client, vendedor_id: int, anio: int, mes: int,
+                            meta_venta=None, meta_nuevos_react=None,
+                            meta_cobertura=None, meta_amplitud=None,
+                            meta_visitas=None):
+    """Crea/actualiza las metas v1 de un vendedor. Valores None quedan NULL
+    (el cálculo usa el default de objetivos_mensuales / cartera)."""
+    def _i(v):
+        return int(v) if v is not None and pd.notna(v) else None
+    def _f(v):
+        return float(v) if v is not None and pd.notna(v) else None
+    client.table("comision_v1_meta").upsert({
+        "vendedor_id": int(vendedor_id),
+        "anio": int(anio),
+        "mes": int(mes),
+        "meta_venta": _f(meta_venta),
+        "meta_nuevos_react": _i(meta_nuevos_react),
+        "meta_cobertura": _i(meta_cobertura),
+        "meta_amplitud": _f(meta_amplitud),
+        "meta_visitas": _i(meta_visitas),
+    }, on_conflict="vendedor_id,anio,mes").execute()
+
+
 def get_planes_comision(client: Client) -> pd.DataFrame:
     r = client.table("comision_plan").select("id,codigo,nombre").execute()
     return pd.DataFrame(r.data) if r.data else pd.DataFrame()

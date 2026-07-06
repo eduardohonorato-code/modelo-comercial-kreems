@@ -40,11 +40,15 @@ def _coerce(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def render(client, anio: int, mes: int):
-    tab_mes, tab_cfg = st.tabs(["📅 Cálculo del mes", "⚙️ Escalas y parámetros"])
+    tab_mes, tab_cfg, tab_v1 = st.tabs(
+        ["📅 Cálculo del mes", "⚙️ Escalas y parámetros", "🧪 Propuesta de Comisiones v1"])
     with tab_mes:
         _render_mes(client, anio, mes)
     with tab_cfg:
         _render_escalas(client)
+    with tab_v1:
+        from app.pages import comisiones_v1
+        comisiones_v1.render_tab(client, anio, mes)
 
 
 def _render_mes(client, anio: int, mes: int):
