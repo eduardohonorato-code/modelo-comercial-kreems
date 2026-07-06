@@ -188,6 +188,9 @@ def render(client, anio: int, mes: int):
         </div>
         """, unsafe_allow_html=True)
 
+    # Alerta de pipeline: venta ingresada (pedidos) aún sin facturar.
+    _alerta_pipeline(df)
+
     # Nota explicativa: de dónde sale cada columna (colapsable)
     with st.expander("ℹ️ Cómo leer la tabla y de dónde sale cada columna", expanded=False):
         st.markdown(
@@ -469,6 +472,46 @@ def _export_seguimiento(df: pd.DataFrame):
         "Docs": fmt_num(df["n_documentos"].sum()), "%Efec": "",
     })
     return pd.DataFrame(filas), colores
+
+
+def _alerta_pipeline(df: pd.DataFrame):
+    """
+    Pipeline pendiente de facturar: venta ya ingresada como pedido en Autoventa
+    que aún NO se factura (Sin DTE) → todavía no entra a caja (Fact-NC). Destaca a
+    los vendedores con más monto pendiente, para seguimiento comercial.
+    """
+    if "no_facturado_monto" not in df.columns or "pedidos_neto" not in df.columns:
+        return
+    d = df.copy()
+    d["no_fact"] = pd.to_numeric(d["no_facturado_monto"], errors="coerce").fillna(0)
+    d["ped"]     = pd.to_numeric(d["pedidos_neto"], errors="coerce").fillna(0)
+    d = d[(d["no_fact"] > 0) & (d["nombre_canonico"] != "Sin asignar")]
+    if d.empty:
+        return
+
+    total = d["no_fact"].sum()
+    with st.expander(f"📦 Pipeline pendiente de facturar — {fmt_clp(total)} "
+                     f"en {len(d)} vendedor(es)", expanded=False):
+        st.caption("Venta ya ingresada como **pedido** (Autoventa) que **aún no se "
+                   "factura** → todavía no entra a caja (Fact-NC). Sube el umbral "
+                   "para ver solo los casos relevantes.")
+        umbral = st.number_input("Umbral mínimo de No Facturado ($)", min_value=0,
+                                 value=300000, step=100000, key="umbral_pipeline")
+        dd = d[d["no_fact"] >= umbral].sort_values("no_fact", ascending=False)
+        if dd.empty:
+            st.info("Ningún vendedor sobre el umbral.")
+            return
+        dd["pct"] = dd.apply(
+            lambda r: (r["no_fact"] / r["ped"]) if r["ped"] else None, axis=1)
+        tabla = pd.DataFrame({
+            "Vendedor": dd["nombre_canonico"],
+            "No Facturado": dd["no_fact"].apply(fmt_clp),
+            "% de sus pedidos": dd["pct"].apply(fmt_pct),
+            "Fact-NC": pd.to_numeric(dd["fact_nc"], errors="coerce").apply(fmt_clp),
+        })
+        st.dataframe(tabla, use_container_width=True, hide_index=True)
+        st.caption("El % alto = casi toda su venta del mes sigue pendiente de "
+                   "facturar (típico a inicio de mes). Baja sola cuando se emiten las facturas.")
 
 
 def _grafico_ranking(df: pd.DataFrame):
