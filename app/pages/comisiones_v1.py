@@ -149,10 +149,12 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
         # Cobertura: meta v1 → cartera cargada (modelo actual) → proxy histórico
         # (clientes distintos de los últimos 3 meses). Se ignoran valores ≤0.
         m_cober = None
+        cober_src = None
         for src in ("meta_cobertura", "cartera_clientes", "cartera_hist"):
             v = r.get(src)
             if v is not None and pd.notna(v) and float(v) > 0:
                 m_cober = float(v)
+                cober_src = src
                 break
         m_nuevos  = _coalesce(r, "meta_nuevos_react", "__none__", DEFAULT_META_NUEVOS)
         m_amplit  = _coalesce(r, "meta_amplitud", "__none__", DEFAULT_META_AMPLITUD)
@@ -171,7 +173,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
 
         fila = {
             "vendedor_id": r["vendedor_id"], "nombre_canonico": r["nombre_canonico"],
-            "fact_nc": r.get("fact_nc") or 0,
+            "fact_nc": r.get("fact_nc") or 0, "cobertura_source": cober_src,
             "ny_clientes": r.get("ny_clientes") or 0, "ny_pct": r.get("ny_pct") or 0,
         }
         tasa = 0.0
@@ -335,6 +337,32 @@ def render_tab(client, anio: int, mes: int):
     st.markdown('<div class="seccion-titulo">Scorecard por vendedor</div>',
                 unsafe_allow_html=True)
     _tabla(df)
+
+    # Aviso: vendedores sin cartera asignada (cobertura usa proxy → no paga).
+    if "cobertura_source" in df.columns:
+        proxy = df[df["cobertura_source"] == "cartera_hist"]
+        sin_cober = df[df["cobertura_source"].isna()]
+        if not proxy.empty or not sin_cober.empty:
+            partes = []
+            if not proxy.empty:
+                nombres = ", ".join(proxy["nombre_canonico"].tolist())
+                partes.append(
+                    f"<strong>{len(proxy)} vendedor(es) con cartera SIN asignar</strong>: "
+                    f"se está usando una cartera estimada (clientes distintos de los "
+                    f"últimos 3 meses) como denominador. Mientras no se cargue la cartera "
+                    f"real asignada, el KPI de cobertura no paga. → {nombres}.")
+            if not sin_cober.empty:
+                nombres2 = ", ".join(sin_cober["nombre_canonico"].tolist())
+                partes.append(
+                    f"<strong>{len(sin_cober)} sin cartera ni ventas recientes</strong> "
+                    f"(cobertura “—”): {nombres2}.")
+            st.markdown(
+                '<div class="nota-embudo" style="border-left-color:#f59e0b">⚠️ '
+                + " ".join(partes)
+                + " Carga la cartera de cada vendedor en el editor de metas de abajo "
+                  "(campo <em>Meta cobertura</em>) o en el modelo de comisiones actual.</div>",
+                unsafe_allow_html=True,
+            )
 
     with st.expander("ℹ️ Cómo se calcula", expanded=False):
         st.markdown(f"""
