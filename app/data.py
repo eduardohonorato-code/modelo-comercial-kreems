@@ -679,6 +679,24 @@ def get_cartera_map(client: Client) -> pd.DataFrame:
 
 # ── Propuesta de Comisiones v1 (scorecard 5 KPIs) ───────────────────────────
 
+def get_comision_v1_parametros(client: Client) -> dict:
+    """Parámetros del modelo v1 (umbrales de pago por KPI) como dict
+    clave→valor. Fail-soft: tabla inexistente → {} (la app usa defaults)."""
+    try:
+        r = client.table("comision_v1_parametro").select("clave,valor").execute()
+        return {x["clave"]: float(x["valor"]) for x in (r.data or [])}
+    except Exception:
+        return {}
+
+
+def upsert_comision_v1_parametros(client: Client, valores: dict):
+    """Actualiza parámetros v1: valores = {clave: valor}."""
+    regs = [{"clave": k, "valor": float(v)} for k, v in valores.items()]
+    if regs:
+        client.table("comision_v1_parametro").upsert(
+            regs, on_conflict="clave").execute()
+
+
 def get_comision_v1_meta(client: Client, anio: int, mes: int) -> pd.DataFrame:
     """Metas editables del modelo v1 por vendedor/mes (tabla comision_v1_meta).
     Columnas NULL caen al default de otras tablas en el cálculo de la página."""
