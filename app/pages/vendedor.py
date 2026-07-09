@@ -178,6 +178,109 @@ def render(client, anio: int, mes: int, nombre: str):
                 unsafe_allow_html=True)
     _tabla_detalle_vendedor(r, cal)
 
+    # ── Clientes dormidos (lista de recuperación) ────────────────────────────
+    st.markdown('<div class="seccion-titulo">Clientes dormidos</div>',
+                unsafe_allow_html=True)
+    _seccion_dormidos(client, int(r["vendedor_id"]), anio, mes)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _dormidos_data(_client, anio: int, mes: int, cache_key: str) -> pd.DataFrame:
+    """Historia de facturas hasta el fin del mes seleccionado, para derivar
+    dormidos. Cacheada por usuario (RLS: un vendedor solo trae sus filas)."""
+    import calendar as _cal
+    from app.data import get_ventas_rango
+    ultimo = _cal.monthrange(anio, mes)[1]
+    h = get_ventas_rango(_client, "2024-01-01", f"{anio}-{mes:02d}-{ultimo:02d}")
+    if h.empty:
+        return h
+    h = h[h["tipo_dcto"].astype(str).str.contains("factura", case=False, na=False)].copy()
+    h["fecha"] = pd.to_datetime(h["fecha"], errors="coerce")
+    return h.dropna(subset=["fecha"])
+
+
+def _seccion_dormidos(client, vendedor_id: int, anio: int, mes: int):
+    """Clientes sin comprar hace ≥3 meses cuya última compra fue con este
+    vendedor: su lista para salir a recuperarlos (alimenta el KPI de
+    reactivados de la Propuesta de Comisiones v1)."""
+    from app.data import get_dim_cliente_full
+
+    cache_key = f"{st.session_state.get('user_id', '')}:{vendedor_id}"
+    with st.spinner("Buscando clientes dormidos…"):
+        h = _dormidos_data(client, anio, mes, cache_key)
+    if h is None or h.empty:
+        st.caption("Sin historial suficiente para detectar clientes dormidos.")
+        return
+
+    sel = pd.Period(f"{anio}-{mes:02d}", freq="M")
+    h = h[h["fecha"].dt.to_period("M") <= sel]
+    if h.empty:
+        st.caption("Sin historial suficiente para detectar clientes dormidos.")
+        return
+
+    last = (h.sort_values("fecha")
+             .groupby("cliente_rut")
+             .agg(last_fecha=("fecha", "max"),
+                  last_vend=("vendedor_id", "last"),
+                  monto_hist=("neto", "sum")))
+    last["last_ym"] = last["last_fecha"].dt.to_period("M")
+    dorm = last[(last["last_ym"] <= sel - 3) & (last["last_vend"] == vendedor_id)]
+    dorm = dorm.sort_values("monto_hist", ascending=False)
+
+    if dorm.empty:
+        st.markdown('<div class="estado-vacio">🎉 Sin clientes dormidos: toda tu '
+                    'cartera compró en los últimos 3 meses.</div>',
+                    unsafe_allow_html=True)
+        return
+
+    total_dorm = len(dorm)
+    monto_dorm = dorm["monto_hist"].sum()
+    st.markdown(
+        f'<div class="estado-vacio" style="margin-bottom:.5rem">😴 Tienes '
+        f'<strong>{total_dorm} clientes dormidos</strong> (sin comprar hace 3+ meses) '
+        f'que históricamente te compraron <strong>{fmt_clp(monto_dorm)}</strong>. '
+        f'Recuperarlos suma al KPI de reactivados de la propuesta de comisiones.</div>',
+        unsafe_allow_html=True)
+
+    # Enriquecer con razón social / comuna para que sirva como ruta.
+    dorm = dorm.reset_index()
+    try:
+        dfc = get_dim_cliente_full(client)
+        if not dfc.empty:
+            dorm = dorm.merge(dfc.rename(columns={"rut": "cliente_rut"}),
+                              on="cliente_rut", how="left")
+    except Exception:
+        pass
+    for col in ["razon_social", "comuna"]:
+        if col not in dorm.columns:
+            dorm[col] = None
+    dorm["razon_social"] = dorm["razon_social"].fillna(dorm["cliente_rut"])
+
+    _top = 25
+    rows = ""
+    for _, d in dorm.head(_top).iterrows():
+        meses_sin = (sel - d["last_ym"]).n
+        rows += f"""<tr>
+          <td style='text-align:left'>{d['razon_social']}</td>
+          <td>{d['cliente_rut']}</td>
+          <td>{d.get('comuna') or '—'}</td>
+          <td>{d['last_fecha'].strftime('%d-%m-%Y')}</td>
+          <td>{meses_sin}</td>
+          <td>{fmt_clp(d['monto_hist'])}</td>
+        </tr>"""
+    st.markdown(f"""
+    <div class="tabla-container">
+    <table class="kreems"><thead><tr>
+      <th style='text-align:left'>Cliente</th><th>RUT</th><th>Comuna</th>
+      <th title='Fecha de su última factura'>Última compra</th>
+      <th title='Meses desde la última compra'>Meses sin comprar</th>
+      <th title='Total facturado históricamente (ordenados de mayor a menor)'>Compra histórica</th>
+    </tr></thead><tbody>{rows}</tbody></table></div>
+    """, unsafe_allow_html=True)
+    if total_dorm > _top:
+        st.caption(f"Mostrando los {_top} de mayor compra histórica "
+                   f"(de {total_dorm} dormidos en total).")
+
 
 def _barra_cumplimiento(r, mes_activo: bool):
     pct_c = float(r.get("pct_cumplimiento") or 0)

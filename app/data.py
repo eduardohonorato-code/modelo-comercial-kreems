@@ -673,11 +673,12 @@ def get_comision_v1_meta(client: Client, anio: int, mes: int) -> pd.DataFrame:
 def upsert_comision_v1_meta(client: Client, vendedor_id: int, anio: int, mes: int,
                             meta_venta=None, meta_nuevos_react=None,
                             meta_cobertura=None, meta_amplitud=None,
-                            meta_visitas=None, meta_lineas=None):
+                            meta_visitas=None, meta_lineas=None, meta_skus=None):
     """Crea/actualiza las metas v1 de un vendedor. Valores None quedan NULL
-    (el cálculo usa el default de objetivos_mensuales / cartera).
-    meta_amplitud = penetración Galletas NY (fracción); meta_lineas = amplitud
-    (promedio de líneas x cliente)."""
+    (el cálculo usa el default: objetivos, cartera o meta automática).
+    meta_lineas = amplitud de categorías (líneas x cliente); meta_skus =
+    profundidad SKU (SKUs x categoría). meta_amplitud/meta_visitas son legacy
+    (v1.0: % Galletas NY y efectividad) y quedan sin uso en v1.1."""
     def _i(v):
         return int(v) if v is not None and pd.notna(v) else None
     def _f(v):
@@ -692,6 +693,7 @@ def upsert_comision_v1_meta(client: Client, vendedor_id: int, anio: int, mes: in
         "meta_amplitud": _f(meta_amplitud),
         "meta_visitas": _i(meta_visitas),
         "meta_lineas": _f(meta_lineas),
+        "meta_skus": _f(meta_skus),
     }, on_conflict="vendedor_id,anio,mes").execute()
 
 

@@ -1,21 +1,30 @@
-"""Propuesta de Comisiones v1 — scorecard de 5 KPIs (pestaña dentro de Comisiones).
+"""Propuesta de Comisiones v1.1 — scorecard de 5 KPIs (pestaña dentro de Comisiones).
 
 Modelo NUEVO que convive con el de tramos actual (NO lo reemplaza). La comisión
 es una **tasa efectiva 0–5% aplicada sobre la venta REAL (Fact-NC)**, repartida
 en 5 KPIs ponderados. Cada KPI paga proporcional desde el 80% de su meta y la
 tasa total topa en 5%.
 
-  KPI                              Peso   % s/venta   Fuente del dato
-  1. Cuota de venta                50%    2,50%       Fact-NC / meta_venta
-  2. Clientes nuevos + react.      15%    0,75%       fact_ventas (historia) por vendedor
-  3. Cobertura de cartera          15%    0,75%       clientes activos / cartera asignada
-  4. Penetración Galletas NY       10%    0,50%       % de clientes que compran la línea nueva vs meta
-  5. Amplitud de portafolio         5%    0,25%       promedio de líneas distintas por cliente vs meta
-  6. Efectividad de visita          5%    0,25%       N°facturas / obj_visitas (mismo proxy actual)
+  KPI                              Peso     % s/venta   Fuente del dato
+  1. Cuota de venta                50%      2,50%       Fact-NC / meta_venta
+  2. Nuevos + reactivados          15%      0,75%       historia fact_ventas; META AUTOMÁTICA
+                                                        (2% de cartera + 10% de sus dormidos)
+  3. Cobertura de cartera          11,67%   0,583%      clientes activos / cartera asignada
+                                                        (cartera completa activa = paga sí o sí)
+  4. Amplitud de categorías        11,67%   0,583%      líneas distintas x cliente vs meta (2)
+  5. Profundidad SKU               11,67%   0,583%      SKUs distintos x categoría llevada vs meta (4)
+
+Cambios v1.1 (acordados con gerencia 2026-07-09):
+  · Efectividad de visita ELIMINADA (proxy débil) — su peso se fusionó en el
+    bloque parejo Cobertura/Amplitud/SKU.
+  · Penetración Galletas NY dejó de pagar: queda como columna INDICADORA.
+  · Amplitud se abre en dos: categorías (breadth) y SKUs dentro de la categoría
+    (depth, todo el portafolio, excluye Máquinas/Servicios).
+  · Meta de Nuevos+Reactivados es automática y autorregulada: más cartera ⇒ más
+    nuevos exigidos; más dormidos ⇒ más reactivaciones exigidas.
 
 El cálculo se hace acá en pandas (no en SQL) para reusar el detalle de
-fact_ventas y la lógica de clientes/productos. Solo las metas se persisten
-(tabla comision_v1_meta, sql/022).
+fact_ventas. Solo las metas se persisten (comision_v1_meta, sql/022+023+024).
 """
 from __future__ import annotations
 
@@ -38,26 +47,31 @@ MESES = {
 TASA_MAX = 0.05      # tope de la tasa efectiva (5% sobre la venta real)
 UMBRAL   = 0.80      # cada KPI empieza a pagar desde el 80% de su meta
 
-# key, etiqueta corta, peso (fracción de la tasa máxima)
+# key, etiqueta corta, peso (fracción de la tasa máxima).
+# El 35% post Cuota/Nuevos se reparte PAREJO entre los otros tres (gerencia).
+_P3 = 0.35 / 3
 KPIS = [
-    ("cuota",       "Cuota de venta",              0.50),
-    ("nuevos",      "Nuevos + reactivados",        0.15),
-    ("cobertura",   "Cobertura de cartera",        0.15),
-    ("galletas",    "Penetración Galletas NY",     0.10),
-    ("amplitud",    "Amplitud de portafolio",      0.05),
-    ("efectividad", "Efectividad de visita",       0.05),
+    ("cuota",     "Cuota de venta",         0.50),
+    ("nuevos",    "Nuevos + reactivados",   0.15),
+    ("cobertura", "Cobertura de cartera",   _P3),
+    ("amplitud",  "Amplitud de categorías", _P3),
+    ("sku",       "Profundidad SKU",        _P3),
 ]
 PESO   = {k: p for k, _, p in KPIS}
 PCT    = {k: p * TASA_MAX for k, _, p in KPIS}   # % sobre venta de cada KPI
 
 # Defaults de metas cuando no hay valor cargado ni fuente previa.
-DEFAULT_META_NUEVOS   = 3
-# "galletas" = penetración Galletas NY = % de clientes con la línea nueva
-# (meta FRACCIÓN: 0.30 = 30%). "amplitud" = promedio de líneas x cliente (meta 2).
-DEFAULT_META_GALLETAS = 0.30
-DEFAULT_META_LINEAS   = 2.0
+DEFAULT_META_LINEAS = 2.0   # amplitud: líneas (categorías) x cliente
+DEFAULT_META_SKUS   = 4.0   # profundidad: SKUs distintos x categoría llevada
 
-GAP_REACTIVACION = 3   # meses sin comprar para considerar "reactivado" (≈90 días)
+# Meta automática de Nuevos+Reactivados (override manual en meta_nuevos_react):
+PCT_META_NUEVOS = 0.02   # nuevos: 2% de la cartera (mín. 2)
+PCT_META_REACT  = 0.10   # reactivados: 10% de sus dormidos (mín. 1 si tiene)
+
+GAP_REACTIVACION = 3   # meses sin comprar para considerar dormido/reactivado (≈90 días)
+
+# Categorías que no son "portafolio vendible": fuera de amplitud y profundidad.
+CAT_EXCLUIDAS = {"Maquinas", "Servicios", "Sin Categoria"}
 
 
 # ── Canonización de categorías (líneas) ─────────────────────────────────────
@@ -111,33 +125,34 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     # (ventas sin vendedor; no es una persona a la que se le pague comisión).
     base = base[~base["nombre_canonico"].str.startswith("Vendedor ", na=False)]
     base = base[base["nombre_canonico"] != "Sin asignar"].copy()
-    for c in ["fact_nc", "obj_venta", "obj_visitas", "n_facturas", "cartera_clientes"]:
+    for c in ["fact_nc", "obj_venta", "n_facturas", "cartera_clientes"]:
         if c in base.columns:
             base[c] = pd.to_numeric(base[c], errors="coerce")
 
-    # Metas v1 (overrides). NULL → default de la fuente previa.
+    # Metas v1 (overrides). NULL → default / meta automática.
     metas = get_comision_v1_meta(client, anio, mes)
     if not metas.empty:
         base = base.merge(metas, on="vendedor_id", how="left")
     for c in ["meta_venta", "meta_nuevos_react", "meta_cobertura",
-              "meta_amplitud", "meta_visitas"]:
+              "meta_lineas", "meta_skus"]:
         if c not in base.columns:
             base[c] = None
 
-    # Historia de ventas a nivel línea (para nuevos/reactivados, cobertura, amplitud).
+    # Historia de ventas a nivel línea (nuevos/react, cobertura, amplitud, SKU, dormidos).
     ultimo = calendar.monthrange(anio, mes)[1]
     ffin = f"{anio}-{mes:02d}-{ultimo:02d}"
     hist = get_ventas_rango(client, "2024-01-01", ffin)
     métricas = _metricas_historia(hist, client, anio, mes)
 
     base = base.merge(métricas, on="vendedor_id", how="left")
-    for c in ["nuevos_react", "clientes_activos", "amplitud_prom",
-              "ny_clientes", "ny_pct", "cartera_hist"]:
+    for c in ["nuevos_react", "nuevos_solo", "react_solo", "clientes_activos",
+              "amplitud_prom", "sku_prom", "ny_clientes", "ny_pct",
+              "cartera_hist", "dormidos"]:
         if c not in base.columns:
             base[c] = 0
         base[c] = base[c].fillna(0)
 
-    # ── Metas efectivas (override v1 → fuente previa → default) ──────────────
+    # ── Metas efectivas (override v1 → fuente previa → default/auto) ─────────
     def _coalesce(row, override, fallback, default=None):
         v = row.get(override)
         if v is not None and pd.notna(v):
@@ -149,8 +164,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
 
     filas = []
     for _, r in base.iterrows():
-        m_venta   = _coalesce(r, "meta_venta", "obj_venta")
-        m_visitas = _coalesce(r, "meta_visitas", "obj_visitas")
+        m_venta = _coalesce(r, "meta_venta", "obj_venta")
         # Cobertura: meta v1 → cartera cargada (modelo actual) → proxy histórico
         # (clientes distintos de los últimos 3 meses). Se ignoran valores ≤0.
         m_cober = None
@@ -161,27 +175,43 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
                 m_cober = float(v)
                 cober_src = src
                 break
-        m_nuevos   = _coalesce(r, "meta_nuevos_react", "__none__", DEFAULT_META_NUEVOS)
-        m_galletas = _coalesce(r, "meta_amplitud", "__none__", DEFAULT_META_GALLETAS)
-        m_lineas   = _coalesce(r, "meta_lineas", "__none__", DEFAULT_META_LINEAS)
+        # Nuevos+Reactivados: override manual → META AUTOMÁTICA autorregulada
+        # (2% de la cartera para nuevos + 10% de sus dormidos para reactivar).
+        dorm = float(r.get("dormidos") or 0)
+        ov_nr = r.get("meta_nuevos_react")
+        if ov_nr is not None and pd.notna(ov_nr):
+            m_nuevos = float(ov_nr)
+        else:
+            parte_nuevos = max(2.0, round(PCT_META_NUEVOS * (m_cober or 0)))
+            parte_react  = max(1.0, round(PCT_META_REACT * dorm)) if dorm > 0 else 0.0
+            m_nuevos = parte_nuevos + parte_react
+        m_lineas = _coalesce(r, "meta_lineas", "__none__", DEFAULT_META_LINEAS)
+        m_skus   = _coalesce(r, "meta_skus", "__none__", DEFAULT_META_SKUS)
 
         reales = {
-            "cuota":       r.get("fact_nc") or 0,
-            "nuevos":      r.get("nuevos_react") or 0,
-            "cobertura":   r.get("clientes_activos") or 0,
-            "galletas":    r.get("ny_pct") or 0,          # penetración Galletas NY
-            "amplitud":    r.get("amplitud_prom") or 0,   # promedio de líneas x cliente
-            "efectividad": r.get("n_facturas") or 0,
+            "cuota":     r.get("fact_nc") or 0,
+            "nuevos":    r.get("nuevos_react") or 0,
+            "cobertura": r.get("clientes_activos") or 0,
+            "amplitud":  r.get("amplitud_prom") or 0,   # líneas x cliente
+            "sku":       r.get("sku_prom") or 0,        # SKUs x categoría llevada
         }
         metas_ef = {
             "cuota": m_venta, "nuevos": m_nuevos, "cobertura": m_cober,
-            "galletas": m_galletas, "amplitud": m_lineas, "efectividad": m_visitas,
+            "amplitud": m_lineas, "sku": m_skus,
         }
 
         fila = {
             "vendedor_id": r["vendedor_id"], "nombre_canonico": r["nombre_canonico"],
             "fact_nc": r.get("fact_nc") or 0, "cobertura_source": cober_src,
             "ny_clientes": r.get("ny_clientes") or 0, "ny_pct": r.get("ny_pct") or 0,
+            "nuevos_solo": r.get("nuevos_solo") or 0, "react_solo": r.get("react_solo") or 0,
+            "dormidos": dorm, "clientes_activos": r.get("clientes_activos") or 0,
+            # Overrides crudos (para que el editor distinga manual vs automático)
+            "ov_meta_venta": r.get("meta_venta"),
+            "ov_meta_nuevos_react": r.get("meta_nuevos_react"),
+            "ov_meta_cobertura": r.get("meta_cobertura"),
+            "ov_meta_lineas": r.get("meta_lineas"),
+            "ov_meta_skus": r.get("meta_skus"),
         }
         tasa = 0.0
         for k, _lbl, _peso in KPIS:
@@ -206,12 +236,19 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
 def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int) -> pd.DataFrame:
     """Deriva por vendedor (del mes seleccionado):
     - clientes_activos: clientes distintos con factura este mes.
-    - nuevos_react: de esos, cuántos son 1ª compra (ever) o reactivados (gap ≥3m).
-    - amplitud_prom: promedio de líneas (categorías) distintas por cliente activo.
-    - ny_clientes / ny_pct: clientes que compraron Galletas NY (foco de la línea nueva).
-    La atribución del cliente es al vendedor que más le facturó en el mes."""
-    cols = ["vendedor_id", "clientes_activos", "nuevos_react",
-            "amplitud_prom", "ny_clientes", "ny_pct", "cartera_hist"]
+    - nuevos_solo / react_solo / nuevos_react: 1ª compra (ever) y reactivados
+      (gap ≥3m) entre los activos; el KPI usa la suma.
+    - amplitud_prom: promedio de líneas (categorías) distintas por cliente.
+    - sku_prom: promedio de SKUs distintos POR CATEGORÍA llevada, por cliente
+      (profundidad; todo el portafolio, excluye Máquinas/Servicios).
+    - ny_clientes / ny_pct: clientes que compraron Galletas NY (indicador).
+    - dormidos: clientes sin comprar hace ≥3 meses cuya ÚLTIMA compra fue con
+      este vendedor (alimenta la meta automática de reactivados).
+    - cartera_hist: clientes distintos de los últimos 3 meses (proxy de cartera).
+    La atribución del cliente activo es al vendedor que más le facturó en el mes."""
+    cols = ["vendedor_id", "clientes_activos", "nuevos_react", "nuevos_solo",
+            "react_solo", "amplitud_prom", "sku_prom", "ny_clientes", "ny_pct",
+            "cartera_hist", "dormidos"]
     if hist is None or hist.empty:
         return pd.DataFrame(columns=cols)
 
@@ -234,26 +271,36 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int) -> pd.Da
                   for c, cat in zip(h["producto_codigo"], h.get("categoria"))]
 
     sel = pd.Period(f"{anio}-{mes:02d}", freq="M")
-    fac = h[h["es_fac"]].copy()
+    fac = h[h["es_fac"] & (h["ym"] <= sel)].copy()
     if fac.empty:
         return pd.DataFrame(columns=cols)
 
-    # Primera compra (ever) y meses con compra por cliente.
-    por_cli_ym = fac.groupby("cliente_rut")["ym"]
-    first_ym = por_cli_ym.min()
-    # Última compra ANTERIOR al mes seleccionado, por cliente.
-    prev = (fac[fac["ym"] < sel].groupby("cliente_rut")["ym"].max())
+    # Primera compra (ever) y última compra ANTERIOR al mes, por cliente.
+    first_ym = fac.groupby("cliente_rut")["ym"].min()
+    prev = fac[fac["ym"] < sel].groupby("cliente_rut")["ym"].max()
 
-    # Proxy de cartera asignada: clientes distintos que el vendedor facturó en
-    # los últimos 3 meses (default cuando gerencia no cargó la cartera real).
-    win = [sel - 2, sel - 1, sel]
-    tri = fac[fac["ym"].isin(win)]
+    # Dormidos: última compra hace ≥3 meses, atribuidos al último vendedor que
+    # les facturó (su "dueño" natural para ir a recuperarlos).
+    last = (fac.sort_values("fecha")
+               .groupby("cliente_rut")
+               .agg(last_ym=("ym", "max"), last_vend=("vendedor_id", "last")))
+    dorm_df = (last[last["last_ym"] <= sel - GAP_REACTIVACION]
+               .groupby("last_vend").size()
+               .rename("dormidos").reset_index()
+               .rename(columns={"last_vend": "vendedor_id"}))
+
+    # Proxy de cartera asignada: clientes distintos de los últimos 3 meses.
+    tri = fac[fac["ym"].isin([sel - 2, sel - 1, sel])]
     cartera_hist = (tri.groupby("vendedor_id")["cliente_rut"].nunique()
                       .rename("cartera_hist").reset_index())
 
     cur = fac[fac["ym"] == sel].copy()
     if cur.empty:
-        return pd.DataFrame(columns=cols)
+        out = dorm_df.merge(cartera_hist, on="vendedor_id", how="outer")
+        for c in cols:
+            if c not in out.columns:
+                out[c] = 0
+        return out.fillna(0)[cols]
 
     # Atribución cliente → vendedor (el que más le facturó este mes).
     attr = (cur.groupby(["cliente_rut", "vendedor_id"])["neto"].sum()
@@ -262,50 +309,61 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int) -> pd.Da
               .drop_duplicates("cliente_rut"))
     attr = attr[["cliente_rut", "vendedor_id"]]
 
-    # Estado nuevo/reactivado por cliente activo.
-    def _estado(rut) -> bool:
-        fy = first_ym.get(rut)
-        if fy is not None and fy == sel:
-            return True                      # 1ª compra ever
+    # Estado nuevo / reactivado por cliente activo.
+    def _estado(rut):
+        if first_ym.get(rut) == sel:
+            return "nuevo"                    # 1ª compra ever
         pv = prev.get(rut)
-        if pv is None or pd.isna(pv):
-            return True                      # activo pero sin compra previa registrada
-        return (sel - pv).n >= GAP_REACTIVACION
-    clientes_cur = attr["cliente_rut"].unique()
-    estado = {rut: _estado(rut) for rut in clientes_cur}
-    attr = attr.assign(nuevo_react=attr["cliente_rut"].map(estado))
+        if pv is None or pd.isna(pv) or (sel - pv).n >= GAP_REACTIVACION:
+            return "react"                    # vuelve tras dormir ≥3 meses
+        return None
+    attr["estado"] = attr["cliente_rut"].map(_estado)
 
-    # Líneas distintas por cliente (este mes) y flag NY por cliente.
-    lineas_cli = (cur.groupby("cliente_rut")["linea"].nunique()
+    # Portafolio vendible del mes (sin Máquinas/Servicios) para amplitud y SKU.
+    cur_p = cur[~cur["linea"].isin(CAT_EXCLUIDAS)]
+    lineas_cli = (cur_p.groupby("cliente_rut")["linea"].nunique()
                     .rename("n_lineas").reset_index())
+    # Profundidad: SKUs distintos por (cliente, categoría) → promedio por cliente.
+    sku_cat = (cur_p.groupby(["cliente_rut", "linea"])["producto_codigo"]
+                    .nunique().reset_index(name="n_skus"))
+    sku_cli = (sku_cat.groupby("cliente_rut")["n_skus"].mean()
+                    .rename("skus_prof").reset_index())
     ny_cli = (cur.groupby("cliente_rut")["es_ny"].any()
                 .rename("compro_ny").reset_index())
     attr = (attr.merge(lineas_cli, on="cliente_rut", how="left")
+                 .merge(sku_cli, on="cliente_rut", how="left")
                  .merge(ny_cli, on="cliente_rut", how="left"))
     attr["n_lineas"] = attr["n_lineas"].fillna(0)
+    attr["skus_prof"] = attr["skus_prof"].fillna(0)
     attr["compro_ny"] = attr["compro_ny"].fillna(False)
 
     agg = attr.groupby("vendedor_id").agg(
         clientes_activos=("cliente_rut", "nunique"),
-        nuevos_react=("nuevo_react", "sum"),
+        nuevos_solo=("estado", lambda s: (s == "nuevo").sum()),
+        react_solo=("estado", lambda s: (s == "react").sum()),
         amplitud_prom=("n_lineas", "mean"),
+        sku_prom=("skus_prof", "mean"),
         ny_clientes=("compro_ny", "sum"),
     ).reset_index()
+    agg["nuevos_react"] = agg["nuevos_solo"] + agg["react_solo"]
     agg["ny_pct"] = agg.apply(
         lambda x: (x["ny_clientes"] / x["clientes_activos"]) if x["clientes_activos"] else 0,
         axis=1)
-    agg = agg.merge(cartera_hist, on="vendedor_id", how="left")
-    agg["cartera_hist"] = agg["cartera_hist"].fillna(0)
-    return agg
+    agg = (agg.merge(cartera_hist, on="vendedor_id", how="outer")
+              .merge(dorm_df, on="vendedor_id", how="outer"))
+    for c in cols:
+        if c not in agg.columns:
+            agg[c] = 0
+    return agg.fillna(0)[cols]
 
 
 # ── Render ───────────────────────────────────────────────────────────────────
 def render_tab(client, anio: int, mes: int):
     st.markdown(
         '<div class="estado-vacio" style="margin-bottom:.75rem">'
-        '<strong>Propuesta de Comisiones v1</strong> — modelo alternativo (en '
+        '<strong>Propuesta de Comisiones v1.1</strong> — modelo alternativo (en '
         'evaluación, NO reemplaza el actual). La comisión es una <strong>tasa '
-        'efectiva de hasta 5% sobre la venta real</strong>, repartida en 6 KPIs '
+        'efectiva de hasta 5% sobre la venta real</strong>, repartida en 5 KPIs '
         'ponderados. Cada KPI paga proporcional desde el 80% de su meta.</div>',
         unsafe_allow_html=True,
     )
@@ -378,24 +436,32 @@ def render_tab(client, anio: int, mes: int):
             <li><strong>Comisión $ = tasa efectiva × venta real (Fact-NC)</strong>.
                 La tasa efectiva es la suma de los 5 KPIs y topa en 5,00%.</li>
             <li>Cada KPI aporta <em>peso × 5%</em> como máximo: Cuota 2,50%,
-                Nuevos+react 0,75%, Cobertura 0,75%, Galletas NY 0,50%, Amplitud 0,25%,
-                Efectividad 0,25%.</li>
+                Nuevos+react 0,75%, y Cobertura / Amplitud / Profundidad SKU
+                parejos (≈0,58% cada uno).</li>
             <li><strong>Pago proporcional desde el 80%</strong>: si el logro (real/meta)
                 es &lt;80% el KPI paga $0; entre 80% y 100% sube lineal; al 100% o más paga completo.
                 Ej: logro 90% → paga la mitad del KPI.</li>
-            <li><strong>Cuota</strong> = Fact-NC / meta de venta. &nbsp;
-                <strong>Nuevos+react</strong> = clientes de 1ª compra o que vuelven tras
-                {GAP_REACTIVACION}+ meses. &nbsp;
-                <strong>Cobertura</strong> = clientes que compraron / cartera asignada
-                (si no hay cartera cargada, usa los clientes distintos de los últimos 3 meses).</li>
-            <li><strong>Galletas NY</strong> = penetración de la línea nueva = % de los
-                clientes del vendedor que compraron Galletas NY, contra una meta de %.
-                Premia colocar la línea nueva; no castiga al cliente que solo lleva paletas
-                (que las paletas no caigan lo cuida la Cuota).</li>
-            <li><strong>Amplitud</strong> = promedio de líneas (categorías) distintas por
-                cliente, contra una meta (ej. 2). Empuja la variedad general del portafolio.</li>
-            <li><strong>Efectividad</strong> = N°facturas / objetivo de visitas
-                (mismo proxy del modelo actual; no hay captura de visitas reales).</li>
+            <li><strong>Cuota</strong> = Fact-NC / meta de venta.</li>
+            <li><strong>Nuevos + reactivados</strong> = clientes de 1ª compra + clientes
+                que vuelven tras {GAP_REACTIVACION}+ meses dormidos. La <strong>meta es
+                automática y autorregulada</strong>: 2% de la cartera (mín. 2) + 10% de
+                los dormidos del vendedor (mín. 1). Quien deja dormir su cartera recibe
+                una meta de reactivación más alta al mes siguiente. Gerencia puede fijar
+                una meta manual que reemplaza a la automática.</li>
+            <li><strong>Cobertura</strong> = clientes que compraron / cartera asignada
+                (si no hay cartera cargada, usa los clientes distintos de los últimos 3
+                meses). <strong>Bono de mantención</strong>: si la cartera completa está
+                activa (100%), el KPI paga completo sí o sí.</li>
+            <li><strong>Amplitud de categorías</strong> = promedio de líneas (categorías)
+                distintas por cliente, contra una meta (ej. 2). Empuja abrir líneas nuevas
+                en cada cliente. Excluye Máquinas y Servicios.</li>
+            <li><strong>Profundidad SKU</strong> = de las categorías que el cliente ya
+                lleva, cuántos SKUs distintos compra en cada una (promedio), contra una
+                meta (ej. 4). Empuja vender más variedades dentro de la línea
+                («variable sobre variable» con la amplitud: abrir la línea Y profundizarla).</li>
+            <li><strong>Galletas NY</strong> es columna indicadora (no paga directo):
+                % de clientes del vendedor que llevan la línea nueva. La línea empuja
+                igual la Amplitud (categoría nueva) y la Profundidad (sus 13 SKUs).</li>
           </ul>
         </div>
         """, unsafe_allow_html=True)
@@ -421,10 +487,12 @@ def _celda_kpi(r, k) -> str:
     real  = r.get(f"{k}_real")
     meta  = r.get(f"{k}_meta")
     cls   = _cls_factor(r.get(f"{k}_factor"))
-    if k in ("cuota",):
+    if k == "cuota":
         detalle = f"{fmt_clp(real)} / {fmt_clp(meta)}"
     elif k == "amplitud":
-        detalle = f"{(real or 0):.1f} / {fmt_num(meta)} líneas x cli"
+        detalle = f"{(real or 0):.1f} / {fmt_num(meta)} líneas x cliente"
+    elif k == "sku":
+        detalle = f"{(real or 0):.1f} / {fmt_num(meta)} SKUs x categoría"
     else:
         detalle = f"{fmt_num(real)} / {fmt_num(meta)}"
     return f"<td class='{cls}' title='{detalle}'>{fmt_pct(logro)}</td>"
@@ -435,31 +503,34 @@ def _tabla(df: pd.DataFrame):
         "<th style='text-align:left'>Vendedor</th>"
         "<th title='Venta neta de NC del mes'>Venta Real</th>"
         "<th title='Fact-NC / meta de venta'>Cuota</th>"
-        "<th title='Clientes nuevos + reactivados / meta'>Nuevos+React</th>"
-        "<th title='Clientes activos / cartera asignada'>Cobertura</th>"
-        "<th title='N° clientes con Galletas NY (penetración) — coloreado según logro vs meta'>Galletas NY</th>"
+        "<th title='Clientes de 1ª compra + reactivados / meta automática (2% cartera + 10% dormidos)'>Nuevos+React</th>"
+        "<th title='Clientes activos / cartera asignada. Cartera completa activa = paga completo'>Cobertura</th>"
         "<th title='Promedio de líneas (categorías) distintas por cliente / meta'>Amplitud</th>"
-        "<th title='N°facturas / objetivo de visitas'>Efectividad</th>"
-        "<th title='Suma de los 6 KPIs (tope 5%)'>Tasa Efec.</th>"
+        "<th title='Promedio de SKUs distintos por categoría llevada / meta'>Prof. SKU</th>"
+        "<th title='Indicador (no paga directo): clientes con Galletas NY y % de penetración'>Galletas NY</th>"
+        "<th title='Suma de los 5 KPIs (tope 5%)'>Tasa Efec.</th>"
         "<th title='Tasa efectiva × venta real'>Comisión $</th>"
     )
     rows = ""
     for _, r in df.iterrows():
-        # Galletas NY: N° clientes + penetración, coloreado por el factor del KPI.
-        ny_cls = _cls_factor(r.get("galletas_factor"))
-        ny_meta = r.get("galletas_meta")
-        ny_tip = (f"Penetración {fmt_pct(r.get('ny_pct'))} de {fmt_num(r.get('clientes_activos'))} "
-                  f"clientes · meta {fmt_pct(ny_meta)} · logro {fmt_pct(r.get('galletas_logro'))}")
+        # Nuevos+React con desglose en tooltip.
+        nv_cls = _cls_factor(r.get("nuevos_factor"))
+        nv_tip = (f"{fmt_num(r.get('nuevos_solo'))} nuevos + "
+                  f"{fmt_num(r.get('react_solo'))} reactivados / meta "
+                  f"{fmt_num(r.get('nuevos_meta'))} · dormidos: {fmt_num(r.get('dormidos'))}")
+        # Galletas NY: indicador informativo.
+        ny_tip = (f"Penetración {fmt_pct(r.get('ny_pct'))} de "
+                  f"{fmt_num(r.get('clientes_activos'))} clientes activos — indicador, no paga directo")
         ny = f"{fmt_num(r.get('ny_clientes'))} ({fmt_pct(r.get('ny_pct'))})"
         rows += f"""<tr>
           <td style='text-align:left'>{r['nombre_canonico']}</td>
           <td>{fmt_clp(r.get('fact_nc'))}</td>
           {_celda_kpi(r, 'cuota')}
-          {_celda_kpi(r, 'nuevos')}
+          <td class='{nv_cls}' title='{nv_tip}'>{fmt_pct(r.get('nuevos_logro'))}</td>
           {_celda_kpi(r, 'cobertura')}
-          <td class='{ny_cls}' title='{ny_tip}'>{ny}</td>
           {_celda_kpi(r, 'amplitud')}
-          {_celda_kpi(r, 'efectividad')}
+          {_celda_kpi(r, 'sku')}
+          <td title='{ny_tip}'>{ny}</td>
           <td><strong>{fmt_pct(r.get('tasa_efectiva'))}</strong></td>
           <td><strong>{fmt_clp(r.get('comision_total'))}</strong></td>
         </tr>"""
@@ -488,10 +559,11 @@ def _safe_num(val, default=0):
 
 
 def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
-    st.caption("Las metas en blanco usan el default: Cuota→objetivo de venta, "
-               "Efectividad→objetivo de visitas, Cobertura→cartera asignada "
-               "(o clientes de los últimos 3 meses si no hay cartera cargada). "
-               "Nuevos+reactivados, Galletas NY y Amplitud parten de un default editable.")
+    st.caption("**0 = automático**: Cuota→objetivo de venta del mes; "
+               "Nuevos+react→meta automática (2% cartera + 10% dormidos); "
+               "Cobertura→cartera asignada (o clientes de últimos 3 meses); "
+               "Amplitud→2 líneas; Prof. SKU→4 SKUs. "
+               "Cualquier valor distinto de 0 reemplaza al automático.")
 
     vendedores = df[["vendedor_id", "nombre_canonico"]].sort_values("nombre_canonico")
     nombre_sel = st.selectbox("Seleccionar vendedor",
@@ -500,33 +572,35 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
     fila = df[df["nombre_canonico"] == nombre_sel].iloc[0]
     vendedor_id = int(fila["vendedor_id"])
 
-    st.markdown(f"**Editando: {nombre_sel}** — {MESES[mes]} {anio}")
+    # Contexto de la meta automática del vendedor seleccionado.
+    st.markdown(
+        f"**Editando: {nombre_sel}** — {MESES[mes]} {anio} &nbsp;·&nbsp; "
+        f"meta automática Nuevos+React del mes: **{fmt_num(fila.get('nuevos_meta'))}** "
+        f"(dormidos: {fmt_num(fila.get('dormidos'))})")
+
     with st.form("form_comision_v1_meta", clear_on_submit=False):
         c1, c2, c3 = st.columns(3)
         m_venta = c1.number_input(
             "Meta de venta ($)", min_value=0, step=100000,
-            value=int(_safe_num(fila.get("cuota_meta"))),
-            help="Default = objetivo de venta del mes.")
+            value=int(_safe_num(fila.get("ov_meta_venta"))),
+            help="0 = objetivo de venta del mes.")
         m_nuevos = c2.number_input(
             "Meta nuevos + reactivados", min_value=0, step=1,
-            value=int(_safe_num(fila.get("nuevos_meta"), DEFAULT_META_NUEVOS)))
+            value=int(_safe_num(fila.get("ov_meta_nuevos_react"))),
+            help="0 = automática (2% de cartera + 10% de sus dormidos).")
         m_cober = c3.number_input(
             "Meta cobertura (n° clientes)", min_value=0, step=1,
-            value=int(_safe_num(fila.get("cobertura_meta"))),
-            help="Default = cartera asignada del modelo actual.")
-        c4, c5, c6 = st.columns(3)
-        m_galletas_pct = c4.number_input(
-            "Meta Galletas NY (% de clientes)", min_value=0.0, max_value=100.0, step=5.0,
-            value=round(float(_safe_num(fila.get("galletas_meta"), DEFAULT_META_GALLETAS)) * 100, 1),
-            help="% de tus clientes que deberían llevar Galletas NY (ej. 30%).")
-        m_lineas = c5.number_input(
+            value=int(_safe_num(fila.get("ov_meta_cobertura"))),
+            help="0 = cartera asignada (o clientes de los últimos 3 meses).")
+        c4, c5 = st.columns(2)
+        m_lineas = c4.number_input(
             "Meta amplitud (líneas x cliente)", min_value=0.0, step=0.5,
-            value=float(_safe_num(fila.get("amplitud_meta"), DEFAULT_META_LINEAS)),
-            help="Promedio de líneas (categorías) distintas por cliente (ej. 2).")
-        m_visitas = c6.number_input(
-            "Meta visitas", min_value=0, step=1,
-            value=int(_safe_num(fila.get("efectividad_meta"))),
-            help="Default = objetivo de visitas del mes.")
+            value=float(_safe_num(fila.get("ov_meta_lineas"))),
+            help=f"0 = default ({DEFAULT_META_LINEAS:.0f} líneas).")
+        m_skus = c5.number_input(
+            "Meta profundidad (SKUs x categoría)", min_value=0.0, step=0.5,
+            value=float(_safe_num(fila.get("ov_meta_skus"))),
+            help=f"0 = default ({DEFAULT_META_SKUS:.0f} SKUs).")
         submitted = st.form_submit_button("💾 Guardar metas", type="primary",
                                           use_container_width=True)
 
@@ -535,11 +609,10 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
             upsert_comision_v1_meta(
                 client, vendedor_id, anio, mes,
                 meta_venta=m_venta or None,
-                meta_nuevos_react=m_nuevos,
+                meta_nuevos_react=m_nuevos or None,
                 meta_cobertura=m_cober or None,
-                meta_amplitud=round(m_galletas_pct / 100, 4),
-                meta_visitas=m_visitas or None,
-                meta_lineas=m_lineas,
+                meta_lineas=m_lineas or None,
+                meta_skus=m_skus or None,
             )
             st.success(f"✅ Metas de **{nombre_sel}** guardadas.")
             st.rerun()
