@@ -105,15 +105,19 @@ def main():
         print("\n[cartera] --dry-run: no se escribe nada.")
         return
 
+    def _s(v):
+        """str o None — pandas convierte None→NaN en columnas object."""
+        return str(v) if pd.notna(v) else None
+
     regs = []
     for _, r in cart.iterrows():
         regs.append({
             "cliente_rut": r["cliente_rut"],
             "vendedor_id": int(r["vendedor_id"]) if pd.notna(r["vendedor_id"]) else None,
-            "cod_vendedor": r["cod_vendedor"],
-            "codigo_cliente": r["codigo_cliente"],
-            "nombre": r["nombre"],
-            "ruta": r["ruta"] if pd.notna(r.get("ruta")) else None,
+            "cod_vendedor": _s(r["cod_vendedor"]),
+            "codigo_cliente": _s(r["codigo_cliente"]),
+            "nombre": _s(r["nombre"]),
+            "ruta": _s(r.get("ruta")),
             "n_sucursales": int(r["n_sucursales"]),
         })
     _LOTE = 500
