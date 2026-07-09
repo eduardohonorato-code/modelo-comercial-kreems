@@ -317,11 +317,13 @@ def render(client, anio: int, mes: int):
 
 def _tabla_gerencia(df: pd.DataFrame, mostrar_total: bool = True):
     """Tabla completa de vendedores con colores por cumplimiento."""
-    # Ordenar por fact_nc desc, pero "Sin asignar" (residual, no es vendedor) va
-    # SIEMPRE al final, para no aparecer arriba en el ranking del reporte.
+    # Ordenar por % Cumplimiento desc, pero "Sin asignar" (residual, no es vendedor)
+    # va SIEMPRE al final, para no aparecer arriba en el ranking del reporte. Los
+    # vendedores sin objetivo (% Cumpl = NaN) quedan al final del grupo (na_position).
     df_sorted = df.assign(
-        _sa=(df["nombre_canonico"] == "Sin asignar").astype(int)
-    ).sort_values(["_sa", "fact_nc"], ascending=[True, False], na_position="last")
+        _sa=(df["nombre_canonico"] == "Sin asignar").astype(int),
+        _pct=pd.to_numeric(df["pct_cumplimiento"], errors="coerce"),
+    ).sort_values(["_sa", "_pct"], ascending=[True, False], na_position="last")
 
     header = (
         "<th style='text-align:left'>Vendedor</th>"
@@ -426,8 +428,9 @@ def _export_seguimiento(df: pd.DataFrame):
     orden y formato que la tabla en pantalla) + el mapa de colores de los %.
     Devuelve (df_display, color_celdas).
     """
-    d = (df.assign(_sa=(df["nombre_canonico"] == "Sin asignar").astype(int))
-           .sort_values(["_sa", "fact_nc"], ascending=[True, False], na_position="last"))
+    d = (df.assign(_sa=(df["nombre_canonico"] == "Sin asignar").astype(int),
+                   _pct=pd.to_numeric(df["pct_cumplimiento"], errors="coerce"))
+           .sort_values(["_sa", "_pct"], ascending=[True, False], na_position="last"))
     filas, colores = [], {}
     for i, (_, r) in enumerate(d.iterrows()):
         pct_c = r.get("pct_cumplimiento")
