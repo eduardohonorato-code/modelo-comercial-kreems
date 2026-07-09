@@ -653,6 +653,30 @@ def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: in
     }, on_conflict="vendedor_id,anio,mes").execute()
 
 
+# ── Cartera oficial de clientes por vendedor ────────────────────────────────
+
+def get_cartera_map(client: Client) -> pd.DataFrame:
+    """Cartera oficial (tabla cartera_cliente, cargada del reporte Autoventa):
+    cliente_rut → vendedor_id (+ ruta, n_sucursales). RLS: vendedor ve solo
+    la suya. Fail-soft (tabla aún no creada → DataFrame vacío)."""
+    try:
+        _PAGE, offset, rows = 1000, 0, []
+        while True:
+            r = (client.table("cartera_cliente")
+                 .select("cliente_rut,vendedor_id,ruta,n_sucursales")
+                 .order("cliente_rut")
+                 .range(offset, offset + _PAGE - 1).execute())
+            if not r.data:
+                break
+            rows.extend(r.data)
+            if len(r.data) < _PAGE:
+                break
+            offset += _PAGE
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
 # ── Propuesta de Comisiones v1 (scorecard 5 KPIs) ───────────────────────────
 
 def get_comision_v1_meta(client: Client, anio: int, mes: int) -> pd.DataFrame:

@@ -200,10 +200,11 @@ def _dormidos_data(_client, anio: int, mes: int, cache_key: str) -> pd.DataFrame
 
 
 def _seccion_dormidos(client, vendedor_id: int, anio: int, mes: int):
-    """Clientes sin comprar hace ≥3 meses cuya última compra fue con este
-    vendedor: su lista para salir a recuperarlos (alimenta el KPI de
-    reactivados de la Propuesta de Comisiones v1)."""
-    from app.data import get_dim_cliente_full
+    """Clientes sin comprar hace ≥3 meses que pertenecen a este vendedor:
+    los de su CARTERA OFICIAL (cartera_cliente, del reporte Autoventa) y, si
+    un cliente no está asignado a nadie, el último vendedor que le facturó.
+    Es su lista para salir a recuperarlos (KPI de reactivados, Comisiones v1)."""
+    from app.data import get_dim_cliente_full, get_cartera_map
 
     cache_key = f"{st.session_state.get('user_id', '')}:{vendedor_id}"
     with st.spinner("Buscando clientes dormidos…"):
@@ -224,7 +225,17 @@ def _seccion_dormidos(client, vendedor_id: int, anio: int, mes: int):
                   last_vend=("vendedor_id", "last"),
                   monto_hist=("neto", "sum")))
     last["last_ym"] = last["last_fecha"].dt.to_period("M")
-    dorm = last[(last["last_ym"] <= sel - 3) & (last["last_vend"] == vendedor_id)]
+    # Dueño del cliente: cartera oficial si está asignado; si no, el último
+    # vendedor que le facturó (fallback para clientes sin asignar).
+    cart = get_cartera_map(client)
+    asignado = {}
+    if not cart.empty:
+        asignado = {r["cliente_rut"]: int(r["vendedor_id"])
+                    for _, r in cart.dropna(subset=["vendedor_id"]).iterrows()}
+    dueno = pd.Series([asignado.get(rut, lv)
+                       for rut, lv in zip(last.index, last["last_vend"])],
+                      index=last.index)
+    dorm = last[(last["last_ym"] <= sel - 3) & (dueno == vendedor_id)]
     dorm = dorm.sort_values("monto_hist", ascending=False)
 
     if dorm.empty:

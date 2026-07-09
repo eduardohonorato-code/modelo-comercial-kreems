@@ -35,7 +35,7 @@ import streamlit as st
 from app.styles import fmt_clp, fmt_pct, fmt_num
 from app.data import (
     get_comisiones, get_ventas_rango, get_dim_producto_all,
-    get_comision_v1_meta, upsert_comision_v1_meta,
+    get_comision_v1_meta, upsert_comision_v1_meta, get_cartera_map,
 )
 
 MESES = {
@@ -138,11 +138,22 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
         if c not in base.columns:
             base[c] = None
 
+    # Cartera OFICIAL (tabla cartera_cliente, del reporte Autoventa): meta real
+    # de cobertura y dueño de los clientes dormidos.
+    cart_map = get_cartera_map(client)
+    if not cart_map.empty:
+        cart_counts = (cart_map.dropna(subset=["vendedor_id"])
+                       .groupby("vendedor_id").size()
+                       .rename("cartera_real").reset_index())
+        base = base.merge(cart_counts, on="vendedor_id", how="left")
+    if "cartera_real" not in base.columns:
+        base["cartera_real"] = None
+
     # Historia de ventas a nivel línea (nuevos/react, cobertura, amplitud, SKU, dormidos).
     ultimo = calendar.monthrange(anio, mes)[1]
     ffin = f"{anio}-{mes:02d}-{ultimo:02d}"
     hist = get_ventas_rango(client, "2024-01-01", ffin)
-    métricas = _metricas_historia(hist, client, anio, mes)
+    métricas = _metricas_historia(hist, client, anio, mes, cart_map)
 
     base = base.merge(métricas, on="vendedor_id", how="left")
     for c in ["nuevos_react", "nuevos_solo", "react_solo", "clientes_activos",
@@ -165,11 +176,11 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     filas = []
     for _, r in base.iterrows():
         m_venta = _coalesce(r, "meta_venta", "obj_venta")
-        # Cobertura: meta v1 → cartera cargada (modelo actual) → proxy histórico
-        # (clientes distintos de los últimos 3 meses). Se ignoran valores ≤0.
+        # Cobertura: meta v1 → CARTERA OFICIAL (reporte Autoventa) → cartera del
+        # modelo de tramos → proxy histórico (clientes de los últimos 3 meses).
         m_cober = None
         cober_src = None
-        for src in ("meta_cobertura", "cartera_clientes", "cartera_hist"):
+        for src in ("meta_cobertura", "cartera_real", "cartera_clientes", "cartera_hist"):
             v = r.get(src)
             if v is not None and pd.notna(v) and float(v) > 0:
                 m_cober = float(v)
@@ -233,7 +244,8 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     return out.sort_values("comision_total", ascending=False, na_position="last")
 
 
-def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int) -> pd.DataFrame:
+def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
+                       cart_map: pd.DataFrame = None) -> pd.DataFrame:
     """Deriva por vendedor (del mes seleccionado):
     - clientes_activos: clientes distintos con factura este mes.
     - nuevos_solo / react_solo / nuevos_react: 1ª compra (ever) y reactivados
@@ -279,15 +291,22 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int) -> pd.Da
     first_ym = fac.groupby("cliente_rut")["ym"].min()
     prev = fac[fac["ym"] < sel].groupby("cliente_rut")["ym"].max()
 
-    # Dormidos: última compra hace ≥3 meses, atribuidos al último vendedor que
-    # les facturó (su "dueño" natural para ir a recuperarlos).
+    # Dormidos: última compra hace ≥3 meses, atribuidos al DUEÑO de la cartera
+    # oficial si existe; si el cliente no está asignado, al último vendedor que
+    # le facturó (así los huérfanos de ex-vendedores pasan al dueño actual).
+    asignado = {}
+    if cart_map is not None and not cart_map.empty:
+        asignado = {r_["cliente_rut"]: int(r_["vendedor_id"])
+                    for _, r_ in cart_map.dropna(subset=["vendedor_id"]).iterrows()}
     last = (fac.sort_values("fecha")
                .groupby("cliente_rut")
                .agg(last_ym=("ym", "max"), last_vend=("vendedor_id", "last")))
-    dorm_df = (last[last["last_ym"] <= sel - GAP_REACTIVACION]
-               .groupby("last_vend").size()
+    dorm = last[last["last_ym"] <= sel - GAP_REACTIVACION].copy()
+    dorm["dueno"] = [asignado.get(rut, lv)
+                     for rut, lv in zip(dorm.index, dorm["last_vend"])]
+    dorm_df = (dorm.groupby("dueno").size()
                .rename("dormidos").reset_index()
-               .rename(columns={"last_vend": "vendedor_id"}))
+               .rename(columns={"dueno": "vendedor_id"}))
 
     # Proxy de cartera asignada: clientes distintos de los últimos 3 meses.
     tri = fac[fac["ym"].isin([sel - 2, sel - 1, sel])]
@@ -448,10 +467,12 @@ def render_tab(client, anio: int, mes: int):
                 los dormidos del vendedor (mín. 1). Quien deja dormir su cartera recibe
                 una meta de reactivación más alta al mes siguiente. Gerencia puede fijar
                 una meta manual que reemplaza a la automática.</li>
-            <li><strong>Cobertura</strong> = clientes que compraron / cartera asignada
-                (si no hay cartera cargada, usa los clientes distintos de los últimos 3
-                meses). <strong>Bono de mantención</strong>: si la cartera completa está
-                activa (100%), el KPI paga completo sí o sí.</li>
+            <li><strong>Cobertura</strong> = clientes que compraron / cartera asignada.
+                La cartera sale de la <strong>cartera oficial</strong> (reporte de clientes
+                de Autoventa, campo Vend. exclusivo); si un vendedor no aparece ahí, se
+                estima con sus clientes de los últimos 3 meses. <strong>Bono de
+                mantención</strong>: si la cartera completa está activa (100%), el KPI
+                paga completo sí o sí.</li>
             <li><strong>Amplitud de categorías</strong> = promedio de líneas (categorías)
                 distintas por cliente, contra una meta (ej. 2). Empuja abrir líneas nuevas
                 en cada cliente. Excluye Máquinas y Servicios.</li>
@@ -561,7 +582,8 @@ def _safe_num(val, default=0):
 def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
     st.caption("**0 = automático**: Cuota→objetivo de venta del mes; "
                "Nuevos+react→meta automática (2% cartera + 10% dormidos); "
-               "Cobertura→cartera asignada (o clientes de últimos 3 meses); "
+               "Cobertura→cartera oficial del reporte Autoventa "
+               "(o clientes de últimos 3 meses si el vendedor no está en ella); "
                "Amplitud→2 líneas; Prof. SKU→4 SKUs. "
                "Cualquier valor distinto de 0 reemplaza al automático.")
 
