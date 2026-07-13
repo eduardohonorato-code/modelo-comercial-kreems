@@ -124,7 +124,7 @@ def _ratio(real, meta):
 def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     base = get_comisiones(client, anio, mes)
     if base.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
     # Excluir vendedores demo del seed y el bucket residual "Sin asignar"
     # (ventas sin vendedor; no es una persona a la que se le pague comisión).
@@ -162,7 +162,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     ultimo = calendar.monthrange(anio, mes)[1]
     ffin = f"{anio}-{mes:02d}-{ultimo:02d}"
     hist = get_ventas_rango(client, "2024-01-01", ffin)
-    métricas = _metricas_historia(hist, client, anio, mes, cart_map)
+    métricas, detalle_cli = _metricas_historia(hist, client, anio, mes, cart_map)
 
     base = base.merge(métricas, on="vendedor_id", how="left")
     for c in ["nuevos_react", "nuevos_solo", "react_solo", "clientes_activos",
@@ -251,7 +251,8 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
         filas.append(fila)
 
     out = pd.DataFrame(filas)
-    return out.sort_values("comision_total", ascending=False, na_position="last")
+    out = out.sort_values("comision_total", ascending=False, na_position="last")
+    return out, detalle_cli
 
 
 def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
@@ -267,12 +268,18 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
     - dormidos: clientes sin comprar hace ≥3 meses cuya ÚLTIMA compra fue con
       este vendedor (alimenta la meta automática de reactivados).
     - cartera_hist: clientes distintos de los últimos 3 meses (proxy de cartera).
-    La atribución del cliente activo es al vendedor que más le facturó en el mes."""
+    La atribución del cliente activo es al vendedor que más le facturó en el mes.
+
+    Devuelve (agg, detalle_cli): agg por vendedor y el detalle a nivel CLIENTE
+    (tipo ∈ {nuevo, reactivado, activo, dormido}) para la vista de gerencia."""
     cols = ["vendedor_id", "clientes_activos", "nuevos_react", "nuevos_solo",
             "react_solo", "amplitud_prom", "sku_prom", "ny_clientes", "ny_pct",
             "cartera_hist", "dormidos"]
+    det_cols = ["cliente_rut", "vendedor_id", "tipo", "monto", "ultima_ym",
+                "meses_sin", "n_lineas", "compro_ny"]
+    vacio = (pd.DataFrame(columns=cols), pd.DataFrame(columns=det_cols))
     if hist is None or hist.empty:
-        return pd.DataFrame(columns=cols)
+        return vacio
 
     h = hist.copy()
     h["fecha"] = pd.to_datetime(h["fecha"], errors="coerce")
@@ -295,7 +302,7 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
     sel = pd.Period(f"{anio}-{mes:02d}", freq="M")
     fac = h[h["es_fac"] & (h["ym"] <= sel)].copy()
     if fac.empty:
-        return pd.DataFrame(columns=cols)
+        return vacio
 
     # Primera compra (ever) y última compra ANTERIOR al mes, por cliente.
     first_ym = fac.groupby("cliente_rut")["ym"].min()
@@ -323,13 +330,26 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
     cartera_hist = (tri.groupby("vendedor_id")["cliente_rut"].nunique()
                       .rename("cartera_hist").reset_index())
 
+    # Detalle de dormidos (para la vista por vendedor): última compra, meses
+    # sin comprar y compra histórica, atribuidos a su dueño.
+    monto_hist = fac.groupby("cliente_rut")["neto"].sum()
+    det_dorm = pd.DataFrame({
+        "cliente_rut": dorm.index,
+        "vendedor_id": dorm["dueno"].values,
+        "tipo": "dormido",
+        "monto": monto_hist.reindex(dorm.index).fillna(0).values,
+        "ultima_ym": [str(y) for y in dorm["last_ym"]],
+        "meses_sin": [(sel - y).n for y in dorm["last_ym"]],
+    })
+
     cur = fac[fac["ym"] == sel].copy()
     if cur.empty:
         out = dorm_df.merge(cartera_hist, on="vendedor_id", how="outer")
         for c in cols:
             if c not in out.columns:
                 out[c] = 0
-        return out.fillna(0)[cols]
+        det = det_dorm.reindex(columns=det_cols)
+        return out.fillna(0)[cols], det
 
     # Atribución cliente → vendedor (el que más le facturó este mes).
     attr = (cur.groupby(["cliente_rut", "vendedor_id"])["neto"].sum()
@@ -383,7 +403,19 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
     for c in cols:
         if c not in agg.columns:
             agg[c] = 0
-    return agg.fillna(0)[cols]
+
+    # Detalle de activos del mes (nuevo/reactivado/activo) con su compra.
+    monto_mes = cur.groupby("cliente_rut")["neto"].sum()
+    det_act = attr.copy()
+    det_act["tipo"] = det_act["estado"].map(
+        {"nuevo": "nuevo", "react": "reactivado"}).fillna("activo")
+    det_act["monto"] = det_act["cliente_rut"].map(monto_mes).fillna(0)
+    det_act["ultima_ym"] = str(sel)
+    det_act["meses_sin"] = 0
+    detalle = pd.concat([det_act, det_dorm], ignore_index=True)
+    detalle = detalle.reindex(columns=det_cols)
+
+    return agg.fillna(0)[cols], detalle
 
 
 # ── Render ───────────────────────────────────────────────────────────────────
@@ -397,7 +429,7 @@ def render_tab(client, anio: int, mes: int):
         unsafe_allow_html=True,
     )
 
-    df = _calcular(client, anio, mes)
+    df, detalle_cli = _calcular(client, anio, mes)
     if df.empty:
         st.info("Sin datos para el período. Verifica que existan ventas/objetivos "
                 "del mes y que tu usuario tenga rol gerencia.")
@@ -458,6 +490,10 @@ def render_tab(client, anio: int, mes: int):
                 unsafe_allow_html=True,
             )
 
+    st.markdown('<div class="seccion-titulo">Detalle por vendedor: activos y dormidos</div>',
+                unsafe_allow_html=True)
+    _detalle_clientes(client, df, detalle_cli)
+
     with st.expander("ℹ️ Cómo se calcula", expanded=False):
         st.markdown(f"""
         <div class="nota-embudo">
@@ -506,6 +542,97 @@ def render_tab(client, anio: int, mes: int):
     st.markdown('<div class="seccion-titulo">Umbrales de pago por KPI</div>',
                 unsafe_allow_html=True)
     _editor_umbrales(client)
+
+
+def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame):
+    """Para responder al instante '¿quiénes son los activos/dormidos de X?':
+    listas nominadas de clientes del vendedor elegido, con estado y montos."""
+    if detalle is None or detalle.empty:
+        st.caption("Sin detalle de clientes para el período.")
+        return
+
+    vendedores = df[["vendedor_id", "nombre_canonico"]].sort_values("nombre_canonico")
+    nombre_sel = st.selectbox("Ver clientes de", vendedores["nombre_canonico"].tolist(),
+                              key="sel_vend_detalle_v1")
+    vid = int(vendedores[vendedores["nombre_canonico"] == nombre_sel]
+              .iloc[0]["vendedor_id"])
+    d = detalle[detalle["vendedor_id"] == vid].copy()
+
+    # Enriquecer con razón social y comuna.
+    try:
+        from app.data import get_dim_cliente_full
+        dfc = get_dim_cliente_full(client)
+        if not dfc.empty:
+            d = d.merge(dfc.rename(columns={"rut": "cliente_rut"}),
+                        on="cliente_rut", how="left")
+    except Exception:
+        pass
+    for col in ["razon_social", "comuna"]:
+        if col not in d.columns:
+            d[col] = None
+    d["razon_social"] = d["razon_social"].fillna(d["cliente_rut"])
+
+    act  = d[d["tipo"] != "dormido"].sort_values("monto", ascending=False)
+    dorm = d[d["tipo"] == "dormido"].sort_values("monto", ascending=False)
+    n_nuevo = int((act["tipo"] == "nuevo").sum())
+    n_react = int((act["tipo"] == "reactivado").sum())
+
+    st.markdown(
+        f'<div class="estado-vacio" style="margin-bottom:.5rem"><strong>{nombre_sel}</strong>: '
+        f'✅ <strong>{len(act)} clientes activos</strong> este mes '
+        f'({n_nuevo} nuevos · {n_react} reactivados) &nbsp;·&nbsp; '
+        f'😴 <strong>{len(dorm)} dormidos</strong> por recuperar '
+        f'({fmt_clp(dorm["monto"].sum())} de compra histórica).</div>',
+        unsafe_allow_html=True)
+
+    tab_a, tab_d = st.tabs([f"✅ Activos ({len(act)})", f"😴 Dormidos ({len(dorm)})"])
+    _BADGE = {"nuevo": "<span class='chip-estado' style='color:#1A7F4B'>● Nuevo</span>",
+              "reactivado": "<span class='chip-estado' style='color:#a36a10'>● Reactivado</span>",
+              "activo": ""}
+
+    with tab_a:
+        rows = ""
+        for _, r in act.iterrows():
+            ny = "🍪" if r.get("compro_ny") else ""
+            rows += f"""<tr>
+              <td style='text-align:left'>{r['razon_social']}</td>
+              <td>{r.get('comuna') or '—'}</td>
+              <td style='text-align:left'>{_BADGE.get(r['tipo'], '')}</td>
+              <td>{fmt_clp(r['monto'])}</td>
+              <td>{fmt_num(r.get('n_lineas'))}</td>
+              <td title='Compró Galletas NY'>{ny}</td>
+            </tr>"""
+        st.markdown(f"""
+        <div class="tabla-container"><table class="kreems"><thead><tr>
+          <th style='text-align:left'>Cliente</th><th>Comuna</th>
+          <th style='text-align:left'>Estado</th>
+          <th title='Compra neta del mes'>Compra del mes</th>
+          <th title='Líneas (categorías) distintas'>Líneas</th><th>NY</th>
+        </tr></thead><tbody>{rows}</tbody></table></div>
+        """, unsafe_allow_html=True)
+
+    with tab_d:
+        _top = 40
+        rows = ""
+        for _, r in dorm.head(_top).iterrows():
+            rows += f"""<tr>
+              <td style='text-align:left'>{r['razon_social']}</td>
+              <td>{r.get('comuna') or '—'}</td>
+              <td>{r.get('ultima_ym') or '—'}</td>
+              <td>{fmt_num(r.get('meses_sin'))}</td>
+              <td>{fmt_clp(r['monto'])}</td>
+            </tr>"""
+        st.markdown(f"""
+        <div class="tabla-container"><table class="kreems"><thead><tr>
+          <th style='text-align:left'>Cliente</th><th>Comuna</th>
+          <th>Última compra</th><th>Meses sin comprar</th>
+          <th title='Total facturado históricamente'>Compra histórica</th>
+        </tr></thead><tbody>{rows}</tbody></table></div>
+        """, unsafe_allow_html=True)
+        if len(dorm) > _top:
+            st.caption(f"Mostrando los {_top} de mayor compra histórica "
+                       f"(de {len(dorm)} dormidos). La lista completa la ve el "
+                       f"vendedor en su panel.")
 
 
 def _editor_umbrales(client):
