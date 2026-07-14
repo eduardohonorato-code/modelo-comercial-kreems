@@ -40,6 +40,9 @@ from etl.cleaners import construir_mapeo_vendedor, agregar_alias, aplicar_reasig
 from etl.config import SOCIEDAD_ID
 from etl.upsert import upsert_tabla
 from etl.loaders.autoventa_api import cargar_autoventa_api
+from etl.direcciones import (cargar_dim_direccion, mapas_periodo,
+                             actualizar_direcciones, direcciones_faltantes,
+                             ruts_dim_cliente)
 from etl.maquinas import reatribuir_vendedor_autoventa, aplicar_override_vendedor
 
 logging.basicConfig(
@@ -209,6 +212,25 @@ def run(periodo: tuple, dry_run: bool = False):
             logger.info("  fact_maquinas GN: vendedor actualizado desde Autoventa.")
         else:
             logger.info("  fact_maquinas GN: sin cambios de vendedor.")
+
+    # ── Sucursales: dirección de despacho de cada factura/pedido ────────────
+    # Un RUT puede comprar en varias direcciones (Sodexo). Ver etl/direcciones.py.
+    try:
+        # dim_direccion primero: una sucursal nueva del mes debe existir antes de
+        # que fact_ventas.direccion_id la referencie (FK).
+        ruts = ruts_dim_cliente(client)
+        dim_dir = cargar_dim_direccion(ruts_validos=ruts)
+        upsert_tabla(client, "dim_direccion", dim_dir, on_conflict="id")
+        doc_dir, pedido_dir, stats_dir, vistas = mapas_periodo(periodo)
+        extra = direcciones_faltantes(vistas, set(dim_dir["id"].astype(int)), ruts)
+        if not extra.empty:
+            upsert_tabla(client, "dim_direccion", extra, on_conflict="id")
+        res_dir = actualizar_direcciones(client, periodo, doc_dir, pedido_dir)
+        logger.info("  direcciones: %s | %s", res_dir, stats_dir)
+    except Exception as exc:
+        logger.error("  direcciones: paso omitido por error (%s). "
+                     "Correr aparte: python -m etl.run_direcciones --periodo %d-%02d",
+                     exc, *periodo)
 
     if log_no_mapeados:
         unicos = sorted({r["nombre_original"] for r in log_no_mapeados})

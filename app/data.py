@@ -565,11 +565,40 @@ def get_clientes_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
     return out
 
 
+def get_direcciones_cliente(client: Client, cliente_rut: str,
+                            ids: list | None = None) -> pd.DataFrame:
+    """
+    Sucursales/direcciones de un cliente (dim_direccion). Un RUT puede comprar en
+    varias (Sodexo: casa matriz + Hospital Naval + Clínica Alemana de Temuco...).
+
+    `ids`: direcciones que aparecen en sus ventas. Se consultan además del RUT
+    porque una dirección dada de baja en Autoventa se reconstruye del pedido y
+    puede quedar sin cliente_rut (ver etl/direcciones.py).
+
+    Fail-soft: si la tabla aún no existe (sql/027 sin correr), devuelve vacío y la
+    ficha simplemente no muestra el desglose por sucursal.
+    """
+    _COLS = "id,cliente_rut,nombre,direccion,comuna,ciudad,ruta,es_principal"
+    try:
+        r = (client.table("dim_direccion").select(_COLS)
+             .eq("cliente_rut", cliente_rut).order("id").range(0, 999).execute())
+        df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
+        faltan = [i for i in (ids or []) if df.empty or i not in set(df["id"])]
+        if faltan:
+            r2 = (client.table("dim_direccion").select(_COLS)
+                  .in_("id", faltan).order("id").range(0, 999).execute())
+            if r2.data:
+                df = pd.concat([df, pd.DataFrame(r2.data)], ignore_index=True)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
 def get_cliente_detalle(client: Client, cliente_rut: str):
     """
     Detalle de un cliente para su ficha: (df_ventas, df_pedidos).
     - df_ventas: líneas de fact_ventas (fecha, neto, n_dcto, tipo_dcto,
-      producto_codigo, cantidad, categoria, nombre_producto).
+      producto_codigo, cantidad, direccion_id, categoria, nombre_producto).
     - df_pedidos: líneas de fact_pedidos (fecha, neto, facturado).
     Pagina ambas tablas. RLS aplica.
     """
@@ -587,8 +616,12 @@ def get_cliente_detalle(client: Client, cliente_rut: str):
             offset += _PAGE
         return pd.DataFrame(rows)
 
-    dfv = _paginar("fact_ventas",
-                   "fecha,neto,n_dcto,tipo_dcto,producto_codigo,cantidad")
+    _COLS_V = "fecha,neto,n_dcto,tipo_dcto,producto_codigo,cantidad"
+    try:
+        dfv = _paginar("fact_ventas", _COLS_V + ",direccion_id")
+    except Exception:
+        # sql/027 aún no corrido: la ficha funciona igual, sin sucursales.
+        dfv = _paginar("fact_ventas", _COLS_V)
     if not dfv.empty:
         for c in ["neto", "cantidad"]:
             dfv[c] = pd.to_numeric(dfv[c], errors="coerce").fillna(0)

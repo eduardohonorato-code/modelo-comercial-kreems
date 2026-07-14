@@ -23,7 +23,7 @@ import plotly.graph_objects as go
 
 from app.styles import fmt_clp, fmt_num, fmt_pct
 from app.data import (get_clientes_historia, get_cliente_detalle,
-                      get_dim_sociedad)
+                      get_direcciones_cliente, get_dim_sociedad)
 
 _CHART = "#E62984"
 _PALETA = ["#E62984", "#1E88E5", "#26A69A", "#D4881E", "#7C3AED",
@@ -620,6 +620,9 @@ def _tab_ficha(client, perfil, hist, current_ym):
         st.plotly_chart(_fig(fig, 230), use_container_width=True)
         st.caption("Recencia 40% · frecuencia 30% · tendencia 30%")
 
+    # Facturación por sucursal / dirección
+    _bloque_sucursales(client, rut, dfv, current_ym)
+
     # Mix de productos / categorías
     if not dfv.empty:
         c1, c2 = st.columns(2)
@@ -642,3 +645,118 @@ def _tab_ficha(client, perfil, hist, current_ym):
                                    text=[fmt_clp(v) for v in prod.values],
                                    textposition="auto"))
             st.plotly_chart(_fig(fig, 300), use_container_width=True)
+
+
+# ─── Facturación por sucursal / dirección ──────────────────────────────────────
+def _label_sucursal(r) -> str:
+    """Nombre de la sucursal; si es la genérica 'Dirección principal', usa la calle."""
+    nombre = (r.get("nombre") or "").strip()
+    calle = (r.get("direccion") or "").strip()
+    if not nombre or nombre.lower().startswith("dirección principal"):
+        nombre = "Casa matriz" if r.get("es_principal") else (calle or "Sin nombre")
+    return nombre
+
+
+def _bloque_sucursales(client, rut, dfv, current_ym):
+    """
+    Desglose de Fact-NC por sucursal (dirección de despacho del pedido).
+
+    Solo hay dirección donde la venta pasó por Autoventa (Gran Natural, facturas):
+    Acuña y las notas de crédito quedan sin sucursal y se reportan aparte en vez
+    de repartirse a ojo.
+    """
+    if dfv.empty or "direccion_id" not in dfv.columns:
+        return
+
+    v = dfv[dfv["fecha"].dt.strftime("%Y-%m") <= current_ym].copy()
+    con_dir = v[v["direccion_id"].notna()].copy()
+    if con_dir.empty:
+        return
+    con_dir["direccion_id"] = con_dir["direccion_id"].astype("int64")
+
+    # Lo que NO se puede atribuir, desglosado (no se reparte a ojo):
+    #   · NC: se emiten en Obuma sin pedido → nunca tienen dirección.
+    #   · facturas sin dirección: Acuña (no pasa por Autoventa) o sin pedido cruzado.
+    es_nc = ~v["tipo_dcto"].astype(str).str.upper().str.startswith("FACTURA")
+    nc_monto = float(v.loc[es_nc, "neto"].sum())
+    fac_sin_dir = float(v.loc[~es_nc & v["direccion_id"].isna(), "neto"].sum())
+
+    dirs = get_direcciones_cliente(
+        client, rut, ids=sorted(con_dir["direccion_id"].unique().tolist()))
+    if dirs.empty:
+        return
+
+    dirs = dirs.rename(columns={"id": "direccion_id"}).copy()
+    dirs["sucursal"] = dirs.apply(_label_sucursal, axis=1)
+    con_dir = con_dir.merge(
+        dirs[["direccion_id", "sucursal", "direccion", "comuna", "ruta"]],
+        on="direccion_id", how="left")
+    con_dir["sucursal"] = con_dir["sucursal"].fillna("Sucursal desconocida")
+    con_dir["ym"] = con_dir["fecha"].dt.strftime("%Y-%m")
+
+    g = (con_dir.groupby(["direccion_id", "sucursal"])
+         .agg(fact_nc=("neto", "sum"), n_fac=("n_dcto", "nunique"),
+              ultima=("ym", "max"), direccion=("direccion", "first"),
+              comuna=("comuna", "first"), ruta=("ruta", "first"))
+         .reset_index().sort_values("fact_nc", ascending=False))
+
+    if len(g) == 1:
+        st.caption(f"📍 Un solo punto de venta: **{g.iloc[0]['sucursal']}**"
+                   f"{' · ' + str(g.iloc[0]['comuna']) if g.iloc[0].get('comuna') else ''}")
+        return
+
+    _sec(f"Facturación por sucursal ({len(g)} puntos de venta)")
+    st.caption("Facturación **bruta** por punto de venta: no incluye notas de "
+               "crédito, que se emiten sin pedido y no tienen sucursal.")
+
+    total = g["fact_nc"].sum() or 1
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        rows = ""
+        for i, (_, r) in enumerate(g.iterrows(), start=1):
+            part = r["fact_nc"] / total
+            bar_w = int((r["fact_nc"] / (g["fact_nc"].max() or 1)) * 100)
+            sub = " · ".join(str(x) for x in [r.get("direccion"), r.get("comuna")] if x)
+            ruta = f"<span class='cl-chip' style='background:#E6298422;color:#E62984'>{r['ruta']}</span>" \
+                if r.get("ruta") else ""
+            rows += f"""<tr>
+              <td style='text-align:left'>{i}</td>
+              <td style='text-align:left'><b>{r['sucursal']}</b> {ruta}
+                  <div style='font-size:.72rem;color:#64748B'>{sub}</div></td>
+              <td>{fmt_clp(r['fact_nc'])}</td>
+              <td><div style="display:flex;align-items:center;gap:.4rem">
+                    <div class="cl-bar-wrap"><div class="cl-bar-fill" style="width:{bar_w}%"></div></div>
+                    <span style="font-size:.72rem;color:#475569">{fmt_pct(part)}</span></div></td>
+              <td>{int(r['n_fac'])}</td>
+              <td>{_ym_label(r['ultima'])}</td>
+            </tr>"""
+        st.markdown(f"""<div class="tabla-container">
+          <table class="kreems"><thead><tr>
+            <th style='text-align:left'>#</th><th style='text-align:left'>Sucursal</th>
+            <th>Facturado</th><th>Participación</th><th>N° facturas</th><th>Última compra</th>
+          </tr></thead><tbody>{rows}</tbody></table></div>""", unsafe_allow_html=True)
+
+    with c2:
+        top = g.head(6)["sucursal"].tolist()
+        ev = con_dir.copy()
+        ev["grupo"] = ev["sucursal"].where(ev["sucursal"].isin(top), "Otras")
+        piv = (ev.groupby(["ym", "grupo"])["neto"].sum().reset_index()
+               .pivot(index="ym", columns="grupo", values="neto").fillna(0).sort_index())
+        fig = go.Figure()
+        for i, col in enumerate(piv.columns):
+            fig.add_bar(x=[_ym_label(m) for m in piv.index], y=piv[col], name=col,
+                        marker_color=_PALETA[i % len(_PALETA)],
+                        hovertemplate="%{x}<br>%{y:,.0f}<extra>" + str(col) + "</extra>")
+        fig.update_layout(barmode="stack",
+                          legend=dict(orientation="h", y=-0.25, x=0, font=dict(size=10)))
+        st.plotly_chart(_fig(fig, 330), use_container_width=True)
+
+    notas = []
+    if nc_monto:
+        notas.append(f"notas de crédito por {fmt_clp(abs(nc_monto))} (se emiten en "
+                     "Obuma sin pedido, así que no tienen sucursal)")
+    if fac_sin_dir:
+        notas.append(f"{fmt_clp(fac_sin_dir)} facturados sin sucursal identificada "
+                     "(ventas de Acuña, que no pasan por Autoventa)")
+    if notas:
+        st.caption("⚠️ Fuera de este desglose: " + " · ".join(notas) + ".")
