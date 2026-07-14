@@ -23,7 +23,10 @@ import plotly.graph_objects as go
 
 from app.styles import fmt_clp, fmt_num, fmt_pct
 from app.data import (get_clientes_historia, get_cliente_detalle,
-                      get_direcciones_cliente, get_dim_sociedad)
+                      get_direcciones_cliente, get_sucursales_historia,
+                      get_dim_sociedad)
+from app.export_sucursales import (perfil_sucursales, libro_clientes_sucursales,
+                                   _nombre_sucursal)
 
 _CHART = "#E62984"
 _PALETA = ["#E62984", "#1E88E5", "#26A69A", "#D4881E", "#7C3AED",
@@ -226,7 +229,7 @@ def render(client, anio: int, mes: int):
         return
 
     tabs = st.tabs(["📋 Resumen", "🧩 Segmentación", "🚨 Alertas",
-                    "🏆 Ranking", "👤 Ficha cliente"])
+                    "🏆 Ranking", "🏪 Sucursales", "👤 Ficha cliente"])
     with tabs[0]:
         _tab_resumen(perfil, hist, current_ym)
     with tabs[1]:
@@ -236,6 +239,8 @@ def render(client, anio: int, mes: int):
     with tabs[3]:
         _tab_ranking(perfil)
     with tabs[4]:
+        _tab_sucursales(perfil, soc_key, scope, current_ym)
+    with tabs[5]:
         _tab_ficha(client, perfil, hist, current_ym)
 
 
@@ -541,7 +546,154 @@ def _tab_ranking(perfil):
       <tbody>{rows}</tbody></table></div>""", unsafe_allow_html=True)
 
 
-# ─── TAB 5 · Ficha cliente ──────────────────────────────────────────────────────
+# ─── TAB 5 · Sucursales ─────────────────────────────────────────────────────────
+@st.cache_data(ttl=300, show_spinner="Cargando sucursales…")
+def _hist_suc_cached(scope: str, soc_key: str) -> pd.DataFrame:
+    from app.auth import get_client_auth
+    cli = get_client_auth()
+    sids = None if soc_key == "all" else [int(x) for x in soc_key.split(",")]
+    return get_sucursales_historia(cli, sids)
+
+
+_ESTADO_SUC = {"Activa": "#1A7F4B", "Nueva": "#1E88E5", "Riesgo": "#D4881E",
+               "Perdida": "#C0392B", "Sin compras": "#94A3B8"}
+
+
+def _tab_sucursales(perfil_cli, soc_key, scope, current_ym):
+    """
+    Un cliente grande no es un punto de venta: es una casa matriz y sus locales,
+    cada uno con su ruta y su facturación. Esta pestaña los abre.
+    """
+    hist = _hist_suc_cached(scope, soc_key)
+    if hist.empty:
+        _empty("No hay ventas con sucursal identificada.")
+        return
+
+    p = perfil_sucursales(hist, current_ym)
+    if p.empty:
+        _empty()
+        return
+    p["sucursal"] = p.apply(_nombre_sucursal, axis=1)
+
+    multi = int((p.groupby("cliente_rut")["direccion_id"].nunique() > 1).sum())
+    k = st.columns(5)
+    k[0].metric("Sucursales", f"{len(p):,}".replace(",", "."))
+    k[1].metric("Clientes con varias", f"{multi}")
+    k[2].metric(f"Fact-NC {_ym_label(current_ym)}", fmt_clp(p["fact_nc_mes"].sum()))
+    k[3].metric("Activas este mes", int((p["fact_nc_mes"] != 0).sum()))
+    k[4].metric("En riesgo / perdidas",
+                int(p["estado"].isin(["Riesgo", "Perdida"]).sum()))
+
+    # ── Filtros ──
+    f1, f2, f3, f4 = st.columns([3, 2, 2, 2])
+    with f1:
+        clientes = ["Todos"] + (p.groupby("razon_social")["fact_nc_total"].sum()
+                                .sort_values(ascending=False).index.tolist())
+        f_cli = st.selectbox("Cliente", clientes, key="suc_cli")
+    with f2:
+        rutas = ["Todas"] + sorted({_txt(x) for x in p["ruta"] if _txt(x)})
+        f_ruta = st.selectbox("Ruta", rutas, key="suc_ruta")
+    with f3:
+        comunas = ["Todas"] + sorted({_txt(x) for x in p["comuna"] if _txt(x)})
+        f_com = st.selectbox("Comuna", comunas, key="suc_com")
+    with f4:
+        f_est = st.selectbox("Estado", ["Todos"] + list(_ESTADO_SUC), key="suc_est")
+
+    d = p.copy()
+    if f_cli != "Todos":
+        d = d[d["razon_social"] == f_cli]
+    if f_ruta != "Todas":
+        d = d[d["ruta"].map(_txt) == f_ruta]
+    if f_com != "Todas":
+        d = d[d["comuna"].map(_txt) == f_com]
+    if f_est != "Todos":
+        d = d[d["estado"] == f_est]
+    if d.empty:
+        _empty()
+        return
+
+    # ── Descarga ──
+    dl1, dl2 = st.columns([4, 2])
+    with dl2:
+        try:
+            xlsx = libro_clientes_sucursales(hist, perfil_cli, current_ym)
+            st.download_button(
+                "⬇️ Descargar Excel (Clientes y Sucursales)", xlsx,
+                f"kreems_clientes_sucursales_{current_ym}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, key="suc_dl")
+        except Exception as exc:
+            st.warning(f"No se pudo generar el Excel: {exc}")
+    with dl1:
+        st.caption("El Excel trae 7 hojas: resumen, sucursales, clientes, matriz "
+                   "sucursal × mes, rutas, comunas y lo que el ERP no permite atribuir.")
+
+    _sec(f"Sucursales ({len(d)})")
+    d = d.sort_values("fact_nc_total", ascending=False).head(200)
+    maxv = d["fact_nc_total"].max() or 1
+    rows = ""
+    for i, (_, r) in enumerate(d.iterrows(), start=1):
+        col = _ESTADO_SUC.get(r["estado"], "#94A3B8")
+        bar_w = int(max(r["fact_nc_total"], 0) / maxv * 100)
+        ruta = _txt(r.get("ruta"))
+        chip_ruta = (f"<span class='cl-chip' style='background:#E6298422;"
+                     f"color:#E62984'>{ruta}</span>") if ruta else ""
+        matriz = ("<span class='cl-chip' style='background:#1E88E522;color:#1E88E5'>"
+                  "Casa matriz</span>" if r.get("es_principal") else "")
+        sub = " · ".join(x for x in [_txt(r.get("direccion")), _txt(r.get("comuna"))] if x)
+        var = r.get("variacion")
+        if var is None or pd.isna(var):
+            tend = "<span style='color:#94A3B8'>—</span>"
+        elif var >= 0:
+            tend = f"<span style='color:#1A7F4B;font-weight:700'>▲ {fmt_pct(var)}</span>"
+        else:
+            tend = f"<span style='color:#C0392B;font-weight:700'>▼ {fmt_pct(abs(var))}</span>"
+        rows += f"""<tr>
+          <td style='text-align:left'>{i}</td>
+          <td style='text-align:left'>{r['razon_social']}
+              <div style='font-size:.72rem;color:#64748B'>{r['cliente_rut']}</div></td>
+          <td style='text-align:left'><b>{r['sucursal']}</b> {chip_ruta} {matriz}
+              <div style='font-size:.72rem;color:#64748B'>{sub}</div></td>
+          <td>{fmt_clp(r['fact_nc_total'])}
+              <div style="display:flex;align-items:center;gap:.4rem;margin-top:.2rem">
+                <div class="cl-bar-wrap"><div class="cl-bar-fill" style="width:{bar_w}%"></div></div>
+              </div></td>
+          <td>{fmt_clp(r['fact_nc_mes'])}</td>
+          <td>{tend}</td>
+          <td>{int(r['n_facturas'])}</td>
+          <td>{_ym_label(r['ultima_compra'])}</td>
+          <td><span class="cl-badge" style="background:{col}">{r['estado']}</span></td>
+        </tr>"""
+    st.markdown(f"""<div class="tabla-container">
+      <table class="kreems"><thead><tr>
+        <th style='text-align:left'>#</th><th style='text-align:left'>Cliente</th>
+        <th style='text-align:left'>Sucursal</th><th>Fact-NC acumulado</th>
+        <th>Fact-NC {_ym_label(current_ym)}</th><th>Tendencia</th>
+        <th>N° facturas</th><th>Última compra</th><th>Estado</th>
+      </tr></thead><tbody>{rows}</tbody></table></div>""", unsafe_allow_html=True)
+    if len(p) > 200 and len(d) == 200:
+        st.caption("Mostrando las 200 sucursales de mayor facturación. "
+                   "El Excel trae todas.")
+
+    # ── Locales que dejaron de comprar ──
+    dormidas = (p[p["estado"].isin(["Riesgo", "Perdida"]) & (p["fact_nc_total"] > 0)]
+                .sort_values("fact_nc_total", ascending=False).head(12))
+    if not dormidas.empty:
+        _sec("Locales que dejaron de comprar")
+        st.caption("Sucursales con facturación histórica y sin compras recientes. "
+                   "El cliente puede seguir activo en otros locales.")
+        d2 = dormidas.rename(columns={"razon_social": "cliente"})
+        d2 = d2.assign(razon_social=d2["sucursal"])
+        _lista_alertas(
+            d2, "#C0392B", "🏪",
+            lambda r: " · ".join(x for x in [
+                r["cliente"], _txt(r.get("comuna")),
+                f"{int(r['recency_meses'])} meses sin comprar"] if x),
+            lambda r: fmt_clp(r["fact_nc_total"]),
+            "Sin locales dormidos.")
+
+
+# ─── TAB 6 · Ficha cliente ──────────────────────────────────────────────────────
 def _health_score(r, n_meses):
     """0-100: combina recencia (40), frecuencia (30) y tendencia (30)."""
     rec = r["recency"]

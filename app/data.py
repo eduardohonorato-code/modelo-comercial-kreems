@@ -512,6 +512,95 @@ def get_top_clientes(client: Client, anio: int, mes: int,
     return agg.sort_values("fact_nc", ascending=False).reset_index(drop=True)
 
 
+def get_dim_direccion_full(client: Client) -> pd.DataFrame:
+    """Catálogo completo de sucursales (dim_direccion), paginado."""
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        r = (client.table("dim_direccion")
+             .select("id,cliente_rut,nombre,direccion,comuna,ciudad,ruta,"
+                     "es_principal,activa,origen")
+             .order("id").range(offset, offset + _PAGE - 1).execute())
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    return pd.DataFrame(rows)
+
+
+def get_sucursales_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
+    """
+    Matriz sucursal × mes (base de la pestaña Sucursales y de su export).
+
+    Una fila por (dirección, mes) con actividad:
+      direccion_id, cliente_rut, ym, fact_nc, n_facturas + atributos de la
+      sucursal (nombre, direccion, comuna, ciudad, ruta, es_principal, origen) y
+      la razón social del cliente.
+
+    Las líneas sin direccion_id (NC de anulación, ventas sin dirección en el ERP)
+    se devuelven aparte en el atributo `.attrs["sin_sucursal"]` para poder
+    declararlas en vez de perderlas.
+    """
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        q = (client.table("fact_ventas")
+             .select("fecha,tipo_dcto,n_dcto,cliente_rut,neto,direccion_id,sociedad_id")
+             .order("id").range(offset, offset + _PAGE - 1))
+        if sociedad_ids:
+            q = q.in_("sociedad_id", sociedad_ids)
+        r = q.execute()
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df["neto"] = pd.to_numeric(df["neto"], errors="coerce").fillna(0)
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df = df.dropna(subset=["fecha"])
+    df["ym"] = df["fecha"].dt.strftime("%Y-%m")
+    df["es_fac"] = df["tipo_dcto"].str.contains("factura", case=False, na=False)
+
+    sin = df[df["direccion_id"].isna()]
+    con = df[df["direccion_id"].notna()].copy()
+    if con.empty:
+        return pd.DataFrame()
+    con["direccion_id"] = con["direccion_id"].astype("int64")
+
+    monto = (con.groupby(["direccion_id", "cliente_rut", "ym"], dropna=False)["neto"]
+               .sum().reset_index(name="fact_nc"))
+    nfac = (con[con["es_fac"]].groupby(["direccion_id", "ym"])["n_dcto"]
+              .nunique().reset_index(name="n_facturas"))
+    out = monto.merge(nfac, on=["direccion_id", "ym"], how="left")
+    out["n_facturas"] = out["n_facturas"].fillna(0).astype(int)
+
+    dd = get_dim_direccion_full(client)
+    if not dd.empty:
+        out = out.merge(dd.rename(columns={"id": "direccion_id",
+                                           "cliente_rut": "_rut_dir"}),
+                        on="direccion_id", how="left")
+        out = out.drop(columns=[c for c in ["_rut_dir"] if c in out.columns])
+
+    dfc = get_dim_cliente_full(client)
+    if not dfc.empty:
+        out = out.merge(dfc[["rut", "razon_social", "region"]]
+                        .rename(columns={"rut": "cliente_rut",
+                                         "region": "region_cliente"}),
+                        on="cliente_rut", how="left")
+    out["razon_social"] = out.get("razon_social", pd.Series(dtype=object)).fillna(
+        out["cliente_rut"])
+
+    out.attrs["sin_sucursal"] = (
+        sin.groupby(["cliente_rut", "ym"])["neto"].sum().reset_index(name="fact_nc")
+        if not sin.empty else pd.DataFrame(columns=["cliente_rut", "ym", "fact_nc"]))
+    return out
+
+
 def get_clientes_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
     """
     Matriz cliente × mes para toda la historia disponible (base del CRM de
