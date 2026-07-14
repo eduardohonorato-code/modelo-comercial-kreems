@@ -2,8 +2,8 @@
 
 Modelo NUEVO que convive con el de tramos actual (NO lo reemplaza). La comisión
 es una **tasa efectiva 0–5% aplicada sobre la venta REAL (Fact-NC)**, repartida
-en 5 KPIs ponderados. Cada KPI paga proporcional desde el 80% de su meta y la
-tasa total topa en 5%.
+en 5 KPIs ponderados. Cada KPI paga proporcional al cumplimiento de su meta
+(logro 90% → paga el 90% del indicador) y la tasa total topa en 5%.
 
   KPI                              Peso     % s/venta   Fuente del dato
   1. Cuota de venta                50%      2,50%       Fact-NC / meta_venta
@@ -36,7 +36,6 @@ from app.styles import fmt_clp, fmt_pct, fmt_num
 from app.data import (
     get_comisiones, get_ventas_rango, get_dim_producto_all,
     get_comision_v1_meta, upsert_comision_v1_meta, get_cartera_map,
-    get_comision_v1_parametros, upsert_comision_v1_parametros,
 )
 
 MESES = {
@@ -46,8 +45,6 @@ MESES = {
 
 # ── Parámetros del modelo (diseño fijo del scorecard) ───────────────────────
 TASA_MAX = 0.05      # tope de la tasa efectiva (5% sobre la venta real)
-UMBRAL   = 0.80      # umbral de pago DEFAULT; editable por KPI desde la app
-                     # (tabla comision_v1_parametro, claves umbral_<kpi>)
 
 # key, etiqueta corta, peso (fracción de la tasa máxima).
 # El 35% post Cuota/Nuevos se reparte PAREJO entre los otros tres (gerencia).
@@ -102,16 +99,13 @@ def _es_galleta_ny(codigo, categoria) -> bool:
 
 
 # ── Motor de pago ────────────────────────────────────────────────────────────
-def _factor(ratio, umbral: float = UMBRAL) -> float | None:
-    """Fracción del peso que paga un KPI dado su logro (real/meta).
-    0 bajo el umbral, sube lineal hasta 1 en el 100%, tope en 1.
-    Umbral ≥ 100% degenera a todo-o-nada (paga completo solo al 100%)."""
+def _factor(ratio) -> float | None:
+    """Pago PROPORCIONAL al cumplimiento: cobras el mismo % que lograste de tu
+    meta, hasta el 100% (no acumula sobre 100%). Ej: logro 90% → paga el 90% del
+    indicador; 100% o más → completo. Simple, sin umbrales ni tramos."""
     if ratio is None or pd.isna(ratio):
         return None
-    if umbral >= 1.0:
-        return 1.0 if ratio >= 1.0 else 0.0
-    f = (ratio - umbral) / (1.0 - umbral)
-    return max(0.0, min(1.0, f))
+    return max(0.0, min(1.0, ratio))
 
 
 def _ratio(real, meta):
@@ -133,10 +127,6 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     for c in ["fact_nc", "obj_venta", "n_facturas", "cartera_clientes"]:
         if c in base.columns:
             base[c] = pd.to_numeric(base[c], errors="coerce")
-
-    # Umbrales de pago por KPI (editables desde la app; default 80%).
-    params = get_comision_v1_parametros(client)
-    umbrales = {k: float(params.get(f"umbral_{k}", UMBRAL)) for k, _, _ in KPIS}
 
     # Metas v1 (overrides). NULL → default / meta automática.
     metas = get_comision_v1_meta(client, anio, mes)
@@ -237,12 +227,11 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
         tasa = 0.0
         for k, _lbl, _peso in KPIS:
             rt = _ratio(reales[k], metas_ef[k])
-            f  = _factor(rt, umbrales[k])
+            f  = _factor(rt)
             fila[f"{k}_real"] = reales[k]
             fila[f"{k}_meta"] = metas_ef[k]
             fila[f"{k}_logro"] = rt
             fila[f"{k}_factor"] = f
-            fila[f"{k}_umbral"] = umbrales[k]
             aporte = (f or 0.0) * PCT[k]
             fila[f"{k}_aporte"] = aporte
             fila[f"{k}_comision"] = aporte * (r.get("fact_nc") or 0)
@@ -451,7 +440,8 @@ def render_tab(client, anio: int, mes: int):
         '<strong>Propuesta de Comisiones v1.1</strong> — modelo alternativo (en '
         'evaluación, NO reemplaza el actual). La comisión es una <strong>tasa '
         'efectiva de hasta 5% sobre la venta real</strong>, repartida en 5 KPIs '
-        'ponderados. Cada KPI paga proporcional desde el 80% de su meta.</div>',
+        'ponderados. Cada KPI paga proporcional a tu cumplimiento (logro 90% → '
+        'cobras el 90% de ese indicador).</div>',
         unsafe_allow_html=True,
     )
 
@@ -529,11 +519,10 @@ def render_tab(client, anio: int, mes: int):
             <li>Cada KPI aporta <em>peso × 5%</em> como máximo: Cuota 2,50%,
                 Nuevos+react 0,75%, y Cobertura / Amplitud / Profundidad SKU
                 parejos (≈0,58% cada uno).</li>
-            <li><strong>Pago proporcional desde el umbral</strong> (80% por defecto,
-                <em>editable por KPI</em> en la sección Umbrales de abajo): bajo el umbral
-                el KPI paga $0; del umbral al 100% sube lineal; al 100% o más paga completo.
-                Ej: umbral 80% y logro 90% → paga la mitad. El umbral vigente de cada
-                KPI se ve al pasar el mouse por su celda.</li>
+            <li><strong>Pago proporcional al cumplimiento</strong>: cobras el mismo %
+                que lograste de la meta, hasta el 100% (no acumula sobre 100%). Ej: logro
+                90% → paga el 90% del indicador (2,25% en la cuota); logro 50% → 50%
+                (1,25%). Sin umbrales ni tramos.</li>
             <li><strong>Cuota</strong> = Fact-NC / meta de venta.</li>
             <li><strong>Nuevos + reactivados</strong> = clientes de 1ª compra + clientes
                 que vuelven tras {GAP_REACTIVACION}+ meses dormidos. La <strong>meta es
@@ -564,10 +553,6 @@ def render_tab(client, anio: int, mes: int):
     st.markdown('<div class="seccion-titulo">Editar metas del período</div>',
                 unsafe_allow_html=True)
     _editor_metas(client, df, anio, mes)
-
-    st.markdown('<div class="seccion-titulo">Umbrales de pago por KPI</div>',
-                unsafe_allow_html=True)
-    _editor_umbrales(client)
 
 
 _EST_ORDEN = {"Activo": 0, "En riesgo": 1, "Dormido": 2, "Sin compras": 3}
@@ -828,42 +813,6 @@ def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame,
                    + "La lista completa también está en el panel del vendedor.")
 
 
-def _editor_umbrales(client):
-    """Edición del umbral de pago por KPI (% de la meta desde el cual el KPI
-    empieza a pagar). Bajo el umbral → $0; entre umbral y 100% sube lineal;
-    ≥100% paga completo. Afecta a TODOS los vendedores y meses no cerrados."""
-    params = get_comision_v1_parametros(client)
-    if not params:
-        st.info("Corre `sql/026_comision_v1_umbral.sql` en Supabase para "
-                "habilitar la edición de umbrales (mientras tanto rige el 80%).")
-        return
-
-    st.caption("Desde qué % de logro de la meta empieza a pagar cada KPI "
-               "(bajo el umbral $0; del umbral al 100% sube lineal; 100% paga "
-               "completo). Ej: umbral 60% y logro 80% → paga la mitad. "
-               "Afecta a todos los vendedores del mes en vivo.")
-
-    with st.form("form_v1_umbrales", clear_on_submit=False):
-        cols = st.columns(len(KPIS))
-        nuevos_vals = {}
-        for col, (k, lbl, _p) in zip(cols, KPIS):
-            actual = float(params.get(f"umbral_{k}", UMBRAL)) * 100
-            nuevos_vals[k] = col.number_input(
-                lbl, min_value=0.0, max_value=100.0, step=5.0,
-                value=round(actual, 1), key=f"umb_{k}")
-        submitted = st.form_submit_button("💾 Guardar umbrales", type="primary",
-                                          use_container_width=True)
-    if submitted:
-        try:
-            upsert_comision_v1_parametros(
-                client,
-                {f"umbral_{k}": round(v / 100, 4) for k, v in nuevos_vals.items()})
-            st.success("✅ Umbrales guardados.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Error al guardar: {e}")
-
-
 def _cls_factor(f) -> str:
     if f is None or pd.isna(f):
         return ""
@@ -888,9 +837,6 @@ def _celda_kpi(r, k) -> str:
         detalle = f"{(real or 0):.1f} / {fmt_num(meta)} SKUs x categoría"
     else:
         detalle = f"{fmt_num(real)} / {fmt_num(meta)}"
-    umb = r.get(f"{k}_umbral")
-    if umb is not None and pd.notna(umb):
-        detalle += f" · paga desde {fmt_pct(umb)}"
     return f"<td class='{cls}' title='{detalle}'>{fmt_pct(logro)}</td>"
 
 
