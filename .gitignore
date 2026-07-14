@@ -10,6 +10,7 @@
 # Material interno de comisiones (montos por vendedor — no subir al repo público)
 docs/Comisiones_v1_*.pptx
 docs/Comisiones_v1_*.docx
+docs/Comisiones_v1_*.xlsx
 
 # Logs y artefactos del ETL (pueden traer nombres de vendedores)
 etl_run.log
