@@ -94,6 +94,31 @@ def _leer_overrides_maquina(client) -> pd.DataFrame:
         return pd.DataFrame(columns=["sociedad_id", "documento", "vendedor_id"])
 
 
+def _atribuir_sucursales_api(client, periodo: tuple) -> dict:
+    """
+    Escribe fact_ventas.direccion_id de Gran Natural con la dirección de despacho
+    que la API de Obuma trae en cada documento (`venta_observacion`). Es la única
+    fuente para las NC, que no tienen pedido en Autoventa.
+    """
+    from etl.config import SOCIEDAD_ID
+    from etl.direcciones import ruts_dim_cliente
+    from etl.direcciones_obuma import (construir, actualizar_fact_ventas,
+                                       ids_existentes)
+    from etl.direcciones_obuma_api import leer_direcciones_api
+
+    df = leer_direcciones_api(periodo)
+    if df.empty:
+        return {}
+    dim, mapa = construir(df, ids_existentes(client),
+                          ruts_validos=ruts_dim_cliente(client))
+    if not dim.empty:
+        upsert_tabla(client, "dim_direccion", dim, on_conflict="id")
+    filas = actualizar_fact_ventas(client, mapa, SOCIEDAD_ID["grannatural"])
+    logger.info("  Sucursales GN: %d líneas asignadas (%d direcciones nuevas, "
+                "%d documentos)", filas, len(dim), len(mapa))
+    return {"lineas": filas, "direcciones_nuevas": len(dim)}
+
+
 def _parse_periodo(valor: str) -> tuple:
     try:
         anio, mes = valor.split("-")
@@ -173,6 +198,15 @@ def run(periodo: tuple, dry_run: bool = False):
     if not fact_maquinas.empty:
         upsert_tabla(client, "fact_maquinas", fact_maquinas,
                      on_conflict="sociedad_id,documento,cliente_rut,tipo_mov")
+
+    # Sucursal del cliente. Autoventa solo cubre las facturas que nacen de un
+    # pedido; la dirección de despacho que Obuma trae en cada documento cubre
+    # además las NOTAS DE CRÉDITO. Ver etl/direcciones_obuma_api.py.
+    try:
+        _atribuir_sucursales_api(client, periodo)
+    except Exception as exc:
+        logger.error("  Sucursales: paso omitido (%s). Correr aparte: "
+                     "python -m etl.run_direcciones_gn --periodo %d-%02d", exc, *periodo)
 
     if log_no_mapeados:
         unicos = sorted({r["nombre_original"] for r in log_no_mapeados})

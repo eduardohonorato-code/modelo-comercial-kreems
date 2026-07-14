@@ -680,10 +680,10 @@ def _bloque_sucursales(client, rut, dfv, current_ym):
         return
     con_dir["direccion_id"] = con_dir["direccion_id"].astype("int64")
 
-    # Lo que quedó SIN atribuir (no se reparte a ojo). Dos orígenes distintos:
-    #   · Acuña y sus NC: la dirección viene del export de Obuma → casi todo cubierto.
-    #   · Gran Natural: la sucursal viene del pedido de Autoventa, y las NC se emiten
-    #     en Obuma sin pedido → esas NC no tienen sucursal.
+    # Lo que quedó SIN atribuir (no se reparte a ojo). Es poco: la dirección de
+    # despacho la trae Obuma en cada documento (Excel para Acuña, API para Gran
+    # Natural) y Autoventa la trae en el pedido. Quedan fuera sobre todo las NC de
+    # anulación, cuya observación dice "Anulación venta" en vez de una dirección.
     es_nc = ~v["tipo_dcto"].astype(str).str.upper().str.startswith("FACTURA")
     sin = v[v["direccion_id"].isna()]
     nc_sin_dir = float(sin.loc[es_nc.reindex(sin.index, fill_value=False), "neto"].sum())
@@ -768,8 +768,8 @@ def _bloque_sucursales(client, rut, dfv, current_ym):
 
     notas = []
     if nc_sin_dir:
-        notas.append(f"{fmt_clp(abs(nc_sin_dir))} en notas de crédito de Gran "
-                     "Natural (se emiten sin pedido, no traen sucursal)")
+        notas.append(f"{fmt_clp(abs(nc_sin_dir))} en notas de crédito de anulación "
+                     "(el ERP no indica a qué local corresponden)")
     if fac_sin_dir:
         notas.append(f"{fmt_clp(fac_sin_dir)} facturados sin dirección en el ERP")
     if notas:
