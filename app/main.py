@@ -103,8 +103,6 @@ def sidebar():
         nav_items.append(("analisis", "📈", "Análisis"))
         nav_items.append(("clientes", "🧾", "Clientes"))
         if es_gerencia():
-            nav_items.append(("cartera", "📇", "Cartera Directa"))
-            nav_items.append(("maquinas_cartera", "🧊", "Estado Máquinas"))
             nav_items.append(("presupuesto", "🎯", "Presupuesto"))
             nav_items.append(("comisiones", "💰", "Comisiones"))
             nav_items.append(("carga",  "📤", "Carga de archivos"))
@@ -356,7 +354,7 @@ def main():
           else contextlib.nullcontext()):
         from app.pages import (vendedor, gerencia, analisis, carga,
                                 inicio, admin, comisiones, clientes,
-                                presupuesto, cartera, maquinas_cartera)
+                                presupuesto)
 
         client = get_client_auth()
         if client is None:
@@ -392,20 +390,6 @@ def main():
             st.markdown(f"## 🧾 Clientes — {nombre_mes} {anio}")
             clientes.render(client, anio, mes)
 
-        elif pagina == "cartera":
-            if not es_gerencia():
-                st.session_state.pagina = "inicio"
-                st.rerun()
-            st.markdown("## 📇 Cartera Directa — últimos 12 meses")
-            cartera.render(client, anio, mes)
-
-        elif pagina == "maquinas_cartera":
-            if not es_gerencia():
-                st.session_state.pagina = "inicio"
-                st.rerun()
-            st.markdown("## 🧊 Estado de Máquinas — últimos 12 meses")
-            maquinas_cartera.render(client, anio, mes)
-
         elif pagina == "presupuesto":
             if not es_gerencia():
                 st.session_state.pagina = "inicio"
@@ -433,6 +417,12 @@ def main():
                 st.rerun()
             st.markdown("## ⚙️ Administración de Usuarios")
             admin.render()
+
+        else:
+            # Página desconocida (p. ej. una sección eliminada que quedó en la
+            # sesión) → volver a Inicio en vez de mostrar el área en blanco.
+            st.session_state.pagina = "inicio"
+            st.rerun()
 
     st.session_state["_panel_listo"]   = True
     st.session_state["_pagina_render"] = pagina
