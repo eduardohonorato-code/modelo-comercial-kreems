@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from etl.db import get_client, cargar_alias
-from etl.config import DATA_DIR, FILE_MATCH, MENSUAL_DIR, FUENTES
+from etl.config import DATA_DIR, FILE_MATCH, MENSUAL_DIR, FUENTES, SOCIEDAD_ID
 from etl.cleaners import construir_mapeo_vendedor, agregar_alias
 from etl.upsert import upsert_tabla
 from etl.maquinas import (derivar_maquinas_obuma, aplicar_estado_despachos,
@@ -250,6 +250,27 @@ def _autoventa_vacio() -> dict:
     }
 
 
+def _atribuir_sucursales_obuma(client, path, sociedad: str):
+    """
+    Escribe fact_ventas.direccion_id usando la dirección que el export de Obuma trae
+    en cada documento. Es la única fuente de sucursal para Acuña y para las notas de
+    crédito (Autoventa solo cubre las facturas de Gran Natural que nacen de un
+    pedido). Ver etl/direcciones_obuma.py.
+    """
+    from etl.direcciones import ruts_dim_cliente
+    from etl.direcciones_obuma import (leer_direcciones_excel, construir,
+                                       actualizar_fact_ventas, ids_existentes)
+
+    df = leer_direcciones_excel(Path(path), sociedad)
+    dim, mapa = construir(df, ids_existentes(client),
+                          ruts_validos=ruts_dim_cliente(client))
+    if not dim.empty:
+        upsert_tabla(client, "dim_direccion", dim, on_conflict="id")
+    filas = actualizar_fact_ventas(client, mapa, SOCIEDAD_ID[sociedad])
+    logger.info("  Sucursales (%s): %d direcciones nuevas, %d líneas asignadas",
+                sociedad, len(dim), filas)
+
+
 def run(periodo: tuple | None = None):
     inicio = datetime.now()
     logger.info("=" * 60)
@@ -376,6 +397,16 @@ def run(periodo: tuple | None = None):
             client, "fact_maquinas", fact_maquinas,
             on_conflict="sociedad_id,documento,cliente_rut,tipo_mov",
         )
+
+    # Sucursal del cliente: el export de Obuma trae la dirección de cada documento
+    # (ver etl/direcciones_obuma.py). Es la única fuente para Acuña y para las NC.
+    for path, sociedad in obuma_files:
+        try:
+            _atribuir_sucursales_obuma(client, path, sociedad)
+        except Exception as exc:
+            logger.error("  Sucursales de %s: paso omitido (%s). Correr aparte: "
+                         "python -m etl.run_direcciones_obuma --archivos \"%s\"",
+                         Path(path).name, exc, path)
 
     # 8. Objetivos (opcional)
     if path_objetivos:

@@ -569,7 +569,7 @@ def get_direcciones_cliente(client: Client, cliente_rut: str,
                             ids: list | None = None) -> pd.DataFrame:
     """
     Sucursales/direcciones de un cliente (dim_direccion). Un RUT puede comprar en
-    varias (Sodexo: casa matriz + Hospital Naval + Clínica Alemana de Temuco...).
+    varias (una casa matriz y sus locales: casinos, sucursales, puntos de venta).
 
     `ids`: direcciones que aparecen en sus ventas. Se consultan además del RUT
     porque una dirección dada de baja en Autoventa se reconstruye del pedido y

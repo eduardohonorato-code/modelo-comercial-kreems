@@ -680,12 +680,14 @@ def _bloque_sucursales(client, rut, dfv, current_ym):
         return
     con_dir["direccion_id"] = con_dir["direccion_id"].astype("int64")
 
-    # Lo que NO se puede atribuir, desglosado (no se reparte a ojo):
-    #   · NC: se emiten en Obuma sin pedido → nunca tienen dirección.
-    #   · facturas sin dirección: Acuña (no pasa por Autoventa) o sin pedido cruzado.
+    # Lo que quedó SIN atribuir (no se reparte a ojo). Dos orígenes distintos:
+    #   · Acuña y sus NC: la dirección viene del export de Obuma → casi todo cubierto.
+    #   · Gran Natural: la sucursal viene del pedido de Autoventa, y las NC se emiten
+    #     en Obuma sin pedido → esas NC no tienen sucursal.
     es_nc = ~v["tipo_dcto"].astype(str).str.upper().str.startswith("FACTURA")
-    nc_monto = float(v.loc[es_nc, "neto"].sum())
-    fac_sin_dir = float(v.loc[~es_nc & v["direccion_id"].isna(), "neto"].sum())
+    sin = v[v["direccion_id"].isna()]
+    nc_sin_dir = float(sin.loc[es_nc.reindex(sin.index, fill_value=False), "neto"].sum())
+    fac_sin_dir = float(sin.loc[~es_nc.reindex(sin.index, fill_value=False), "neto"].sum())
 
     try:
         dirs = get_direcciones_cliente(
@@ -718,8 +720,9 @@ def _bloque_sucursales(client, rut, dfv, current_ym):
         return
 
     _sec(f"Facturación por sucursal ({len(g)} puntos de venta)")
-    st.caption("Facturación **bruta** por punto de venta: no incluye notas de "
-               "crédito, que se emiten sin pedido y no tienen sucursal.")
+    st.caption("Fact-NC por punto de venta. La sucursal sale de la dirección de "
+               "despacho del documento (Obuma para Acuña, el pedido de Autoventa "
+               "para Gran Natural).")
 
     total = g["fact_nc"].sum() or 1
     c1, c2 = st.columns([3, 2])
@@ -745,7 +748,7 @@ def _bloque_sucursales(client, rut, dfv, current_ym):
         st.markdown(f"""<div class="tabla-container">
           <table class="kreems"><thead><tr>
             <th style='text-align:left'>#</th><th style='text-align:left'>Sucursal</th>
-            <th>Facturado</th><th>Participación</th><th>N° facturas</th><th>Última compra</th>
+            <th>Fact-NC</th><th>Participación</th><th>N° facturas</th><th>Última compra</th>
           </tr></thead><tbody>{rows}</tbody></table></div>""", unsafe_allow_html=True)
 
     with c2:
@@ -764,11 +767,10 @@ def _bloque_sucursales(client, rut, dfv, current_ym):
         st.plotly_chart(_fig(fig, 330), use_container_width=True)
 
     notas = []
-    if nc_monto:
-        notas.append(f"notas de crédito por {fmt_clp(abs(nc_monto))} (se emiten en "
-                     "Obuma sin pedido, así que no tienen sucursal)")
+    if nc_sin_dir:
+        notas.append(f"{fmt_clp(abs(nc_sin_dir))} en notas de crédito de Gran "
+                     "Natural (se emiten sin pedido, no traen sucursal)")
     if fac_sin_dir:
-        notas.append(f"{fmt_clp(fac_sin_dir)} facturados sin sucursal identificada "
-                     "(ventas de Acuña, que no pasan por Autoventa)")
+        notas.append(f"{fmt_clp(fac_sin_dir)} facturados sin dirección en el ERP")
     if notas:
         st.caption("⚠️ Fuera de este desglose: " + " · ".join(notas) + ".")

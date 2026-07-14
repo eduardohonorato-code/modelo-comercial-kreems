@@ -1,9 +1,8 @@
 """
 Sucursales / direcciones de cliente (Autoventa) → dim_direccion + direccion_id.
 
-Un RUT puede comprar en varias direcciones (Sodexo: casa matriz + "Hospital
-Naval" + "Clínica Alemana de Temuco"...). Este módulo trae esas direcciones y
-atribuye cada factura y cada pedido a la suya.
+Un RUT puede comprar en varias direcciones (una casa matriz y sus locales). Este
+módulo trae esas direcciones y atribuye cada factura y cada pedido a la suya.
 
 Cadena de atribución (verificada 2026-07-14 sobre junio 2026):
     /clients   → direcciones del cliente (id estable, nombre, ruta, GPS).

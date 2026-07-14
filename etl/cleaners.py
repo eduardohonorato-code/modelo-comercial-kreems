@@ -184,3 +184,39 @@ def normalizar_columnas(df: pd.DataFrame) -> pd.DataFrame:
         for col in df.columns
     ]
     return df
+
+
+# ── Dirección de cliente (sucursal) ─────────────────────────────────────────
+
+def _sin_tildes(texto: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", str(texto))
+                   if not unicodedata.combining(c))
+
+
+def normalizar_direccion(direccion: pd.Series, comuna: pd.Series | None = None,
+                         region: pd.Series | None = None) -> pd.Series:
+    """
+    Identidad de una sucursal: la dirección física, no el código del ERP.
+
+    Obuma reutiliza la misma dirección física con códigos distintos, y a veces le
+    concatena la comuna y la región ("CALLE 123" vs "CALLE 123 - COMUNA - REGION",
+    ambos el mismo local). Para que todas esas formas
+    colapsen en una sola sucursal: mayúsculas sin tildes, se eliminan los segmentos
+    finales que repiten la comuna o la región, y se colapsa la puntuación.
+    """
+    d = direccion.fillna("").map(_sin_tildes).str.upper()
+    com = (comuna.fillna("").map(_sin_tildes).str.upper()
+           if comuna is not None else pd.Series([""] * len(d), index=d.index))
+    reg = (region.fillna("").map(_sin_tildes).str.upper()
+           if region is not None else pd.Series([""] * len(d), index=d.index))
+
+    def _limpiar(texto, c, r):
+        partes = [p.strip(" .,") for p in re.split(r"\s+-\s+", texto) if p.strip(" .,")]
+        fuera = {x.strip() for x in (c, r) if x.strip()}
+        utiles = [p for p in partes if p not in fuera] or partes
+        out = " ".join(utiles)
+        out = re.sub(r"[.,;]+", " ", out)
+        return re.sub(r"\s+", " ", out).strip()
+
+    return pd.Series([_limpiar(t, c, r) for t, c, r in zip(d, com, reg)],
+                     index=d.index).replace("", pd.NA)

@@ -214,7 +214,7 @@ def run(periodo: tuple, dry_run: bool = False):
             logger.info("  fact_maquinas GN: sin cambios de vendedor.")
 
     # ── Sucursales: dirección de despacho de cada factura/pedido ────────────
-    # Un RUT puede comprar en varias direcciones (Sodexo). Ver etl/direcciones.py.
+    # Un RUT puede comprar en varias direcciones. Ver etl/direcciones.py.
     try:
         # dim_direccion primero: una sucursal nueva del mes debe existir antes de
         # que fact_ventas.direccion_id la referencie (FK).

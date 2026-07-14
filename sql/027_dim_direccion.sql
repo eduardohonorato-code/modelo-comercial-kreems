@@ -1,8 +1,8 @@
 -- ============================================================================
 -- Kreems · Sucursales / direcciones de cliente (facturación por punto de venta)
 -- ----------------------------------------------------------------------------
--- Un mismo RUT puede comprar en varias direcciones (caso Sodexo: casa matriz en
--- Providencia + "Hospital Naval" en Talcahuano + "Clínica Alemana de Temuco"...).
+-- Un mismo RUT puede comprar en varias direcciones: una casa matriz y sus locales
+-- (cadenas, concesionarios de casinos, empresas con varias sucursales).
 -- Hasta ahora toda la app agregaba por RUT y esas sucursales quedaban sumadas en
 -- un solo número.
 --
@@ -28,7 +28,7 @@
 create table if not exists public.dim_direccion (
     id            bigint primary key,            -- address_id de Autoventa (estable)
     cliente_rut   text references public.dim_cliente(rut),
-    nombre        text,                          -- "Hospital Naval", "Dirección principal"
+    nombre        text,                          -- nombre del local, o "Dirección principal"
     direccion     text,
     comuna        text,                          -- locality en Autoventa
     ciudad        text,                          -- city (viene con la región)
