@@ -665,12 +665,18 @@ def _bloque_sucursales(client, rut, dfv, current_ym):
     Acuña y las notas de crédito quedan sin sucursal y se reportan aparte en vez
     de repartirse a ojo.
     """
-    if dfv.empty or "direccion_id" not in dfv.columns:
+    if dfv.empty:
+        return
+    if "direccion_id" not in dfv.columns:
+        st.info("No se pudo leer `fact_ventas.direccion_id` (¿falta correr "
+                "sql/027_dim_direccion.sql en Supabase?).")
         return
 
     v = dfv[dfv["fecha"].dt.strftime("%Y-%m") <= current_ym].copy()
     con_dir = v[v["direccion_id"].notna()].copy()
     if con_dir.empty:
+        st.caption("📍 Sin sucursal identificada: no hay facturas de Gran Natural "
+                   "cruzadas con un pedido de Autoventa para este cliente.")
         return
     con_dir["direccion_id"] = con_dir["direccion_id"].astype("int64")
 
@@ -681,9 +687,15 @@ def _bloque_sucursales(client, rut, dfv, current_ym):
     nc_monto = float(v.loc[es_nc, "neto"].sum())
     fac_sin_dir = float(v.loc[~es_nc & v["direccion_id"].isna(), "neto"].sum())
 
-    dirs = get_direcciones_cliente(
-        client, rut, ids=sorted(con_dir["direccion_id"].unique().tolist()))
+    try:
+        dirs = get_direcciones_cliente(
+            client, rut, ids=sorted(con_dir["direccion_id"].unique().tolist()))
+    except Exception as exc:
+        st.warning(f"No se pudo leer dim_direccion: {exc}")
+        return
     if dirs.empty:
+        st.warning("Las ventas tienen sucursal asignada, pero dim_direccion no "
+                   "devolvió filas (revisar RLS/grants de la tabla).")
         return
 
     dirs = dirs.rename(columns={"id": "direccion_id"}).copy()

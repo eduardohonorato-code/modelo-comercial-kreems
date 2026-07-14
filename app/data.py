@@ -579,19 +579,16 @@ def get_direcciones_cliente(client: Client, cliente_rut: str,
     ficha simplemente no muestra el desglose por sucursal.
     """
     _COLS = "id,cliente_rut,nombre,direccion,comuna,ciudad,ruta,es_principal"
-    try:
-        r = (client.table("dim_direccion").select(_COLS)
-             .eq("cliente_rut", cliente_rut).order("id").range(0, 999).execute())
-        df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
-        faltan = [i for i in (ids or []) if df.empty or i not in set(df["id"])]
-        if faltan:
-            r2 = (client.table("dim_direccion").select(_COLS)
-                  .in_("id", faltan).order("id").range(0, 999).execute())
-            if r2.data:
-                df = pd.concat([df, pd.DataFrame(r2.data)], ignore_index=True)
-        return df
-    except Exception:
-        return pd.DataFrame()
+    r = (client.table("dim_direccion").select(_COLS)
+         .eq("cliente_rut", cliente_rut).order("id").range(0, 999).execute())
+    df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
+    faltan = [i for i in (ids or []) if df.empty or i not in set(df["id"])]
+    if faltan:
+        r2 = (client.table("dim_direccion").select(_COLS)
+              .in_("id", faltan).order("id").range(0, 999).execute())
+        if r2.data:
+            df = pd.concat([df, pd.DataFrame(r2.data)], ignore_index=True)
+    return df
 
 
 def get_cliente_detalle(client: Client, cliente_rut: str):
