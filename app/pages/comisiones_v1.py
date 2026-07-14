@@ -124,7 +124,7 @@ def _ratio(real, meta):
 def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     base = get_comisiones(client, anio, mes)
     if base.empty:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     # Excluir vendedores demo del seed y el bucket residual "Sin asignar"
     # (ventas sin vendedor; no es una persona a la que se le pague comisión).
@@ -162,7 +162,8 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     ultimo = calendar.monthrange(anio, mes)[1]
     ffin = f"{anio}-{mes:02d}-{ultimo:02d}"
     hist = get_ventas_rango(client, "2024-01-01", ffin)
-    métricas, detalle_cli = _metricas_historia(hist, client, anio, mes, cart_map)
+    métricas, detalle_cli, estado_cli = _metricas_historia(
+        hist, client, anio, mes, cart_map)
 
     base = base.merge(métricas, on="vendedor_id", how="left")
     for c in ["nuevos_react", "nuevos_solo", "react_solo", "clientes_activos",
@@ -252,7 +253,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
 
     out = pd.DataFrame(filas)
     out = out.sort_values("comision_total", ascending=False, na_position="last")
-    return out, detalle_cli
+    return out, detalle_cli, estado_cli
 
 
 def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
@@ -277,7 +278,10 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
             "cartera_hist", "dormidos"]
     det_cols = ["cliente_rut", "vendedor_id", "tipo", "monto", "ultima_ym",
                 "meses_sin", "n_lineas", "compro_ny"]
-    vacio = (pd.DataFrame(columns=cols), pd.DataFrame(columns=det_cols))
+    est_cols = ["cliente_rut", "last_vend", "last_ym", "meses_sin",
+                "monto_hist", "monto_mes", "es_nuevo"]
+    vacio = (pd.DataFrame(columns=cols), pd.DataFrame(columns=det_cols),
+             pd.DataFrame(columns=est_cols))
     if hist is None or hist.empty:
         return vacio
 
@@ -343,13 +347,29 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
     })
 
     cur = fac[fac["ym"] == sel].copy()
+
+    # Estado por cliente sobre TODA la historia (para la vista de cartera de
+    # gerencia): última compra, meses sin comprar, compra histórica y del mes.
+    monto_mes_ser = (cur.groupby("cliente_rut")["neto"].sum()
+                     if not cur.empty else pd.Series(dtype=float))
+    estado_cli = pd.DataFrame({
+        "cliente_rut": last.index,
+        "last_vend": last["last_vend"].values,
+        "last_ym": [str(y) for y in last["last_ym"]],
+        "meses_sin": [(sel - y).n for y in last["last_ym"]],
+        "monto_hist": monto_hist.reindex(last.index).fillna(0).values,
+    })
+    estado_cli["monto_mes"] = estado_cli["cliente_rut"].map(monto_mes_ser).fillna(0)
+    estado_cli["es_nuevo"] = estado_cli["cliente_rut"].map(
+        lambda r: first_ym.get(r) == sel)
+
     if cur.empty:
         out = dorm_df.merge(cartera_hist, on="vendedor_id", how="outer")
         for c in cols:
             if c not in out.columns:
                 out[c] = 0
         det = det_dorm.reindex(columns=det_cols)
-        return out.fillna(0)[cols], det
+        return out.fillna(0)[cols], det, estado_cli
 
     # Atribución cliente → vendedor (el que más le facturó este mes).
     attr = (cur.groupby(["cliente_rut", "vendedor_id"])["neto"].sum()
@@ -415,7 +435,7 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
     detalle = pd.concat([det_act, det_dorm], ignore_index=True)
     detalle = detalle.reindex(columns=det_cols)
 
-    return agg.fillna(0)[cols], detalle
+    return agg.fillna(0)[cols], detalle, estado_cli
 
 
 # ── Render ───────────────────────────────────────────────────────────────────
@@ -429,7 +449,7 @@ def render_tab(client, anio: int, mes: int):
         unsafe_allow_html=True,
     )
 
-    df, detalle_cli = _calcular(client, anio, mes)
+    df, detalle_cli, estado_cli = _calcular(client, anio, mes)
     if df.empty:
         st.info("Sin datos para el período. Verifica que existan ventas/objetivos "
                 "del mes y que tu usuario tenga rol gerencia.")
@@ -490,9 +510,9 @@ def render_tab(client, anio: int, mes: int):
                 unsafe_allow_html=True,
             )
 
-    st.markdown('<div class="seccion-titulo">Detalle por vendedor: activos y dormidos</div>',
+    st.markdown('<div class="seccion-titulo">Detalle por vendedor: cartera, activos y dormidos</div>',
                 unsafe_allow_html=True)
-    _detalle_clientes(client, df, detalle_cli)
+    _detalle_clientes(client, df, detalle_cli, estado_cli)
 
     with st.expander("ℹ️ Cómo se calcula", expanded=False):
         st.markdown(f"""
@@ -544,9 +564,109 @@ def render_tab(client, anio: int, mes: int):
     _editor_umbrales(client)
 
 
-def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame):
-    """Para responder al instante '¿quiénes son los activos/dormidos de X?':
-    listas nominadas de clientes del vendedor elegido, con estado y montos."""
+_EST_ORDEN = {"Activo": 0, "En riesgo": 1, "Dormido": 2, "Sin compras": 3}
+_EST_COLOR = {"Activo": "#1A7F4B", "En riesgo": "#a36a10",
+              "Dormido": "#C0392B", "Sin compras": "#5a6072"}
+
+
+def _estado_recencia(meses_sin) -> str:
+    if meses_sin is None or pd.isna(meses_sin):
+        return "Sin compras"
+    m = int(meses_sin)
+    if m <= 0:
+        return "Activo"
+    if m <= 2:
+        return "En riesgo"
+    return "Dormido"
+
+
+def _cartera_estado(client, vid: int, estado_cli: pd.DataFrame,
+                    dfc: pd.DataFrame) -> pd.DataFrame:
+    """Cartera OFICIAL del vendedor (todos sus clientes asignados) con su
+    estado por recencia. Clientes asignados sin compras registradas salen
+    como 'Sin compras'."""
+    from app.data import get_cartera_map
+    cart = get_cartera_map(client)
+    if cart.empty:
+        return pd.DataFrame()
+    c = cart[cart["vendedor_id"] == vid].copy()
+    if c.empty:
+        return c
+    if estado_cli is not None and not estado_cli.empty:
+        c = c.merge(estado_cli[["cliente_rut", "last_ym", "meses_sin",
+                                "monto_hist", "monto_mes", "es_nuevo"]],
+                    on="cliente_rut", how="left")
+    for col in ["last_ym", "meses_sin", "monto_hist", "monto_mes", "es_nuevo"]:
+        if col not in c.columns:
+            c[col] = None
+    if dfc is not None and not dfc.empty:
+        c = c.merge(dfc, on="cliente_rut", how="left")
+    if "comuna" not in c.columns:
+        c["comuna"] = None
+    if "razon_social" not in c.columns:
+        c["razon_social"] = None
+    # Nombre a mostrar: razón social de dim_cliente → nombre del reporte → RUT.
+    c["cliente"] = (c["razon_social"].fillna(c.get("nombre"))
+                    .fillna(c["cliente_rut"]))
+    c["estado"] = c["meses_sin"].map(_estado_recencia)
+    c["_ord"] = c["estado"].map(_EST_ORDEN).fillna(9)
+    c["monto_hist"] = pd.to_numeric(c["monto_hist"], errors="coerce").fillna(0)
+    return c.sort_values(["_ord", "monto_hist"], ascending=[True, False])
+
+
+def _tab_cartera(cartera: pd.DataFrame):
+    if cartera.empty:
+        st.info("Este vendedor no tiene clientes en la cartera oficial cargada "
+                "(o aún no se ha corrido la carga de cartera).")
+        return
+    # Resumen por estado.
+    cuenta = cartera["estado"].value_counts()
+    chips = ""
+    for est in ["Activo", "En riesgo", "Dormido", "Sin compras"]:
+        n = int(cuenta.get(est, 0))
+        chips += (f"<span style='margin-right:1.1rem;font-weight:600;"
+                  f"color:{_EST_COLOR[est]}'>● {est}: {n}</span>")
+    st.markdown(f"<div style='margin:.2rem 0 .6rem'>{chips}</div>",
+                unsafe_allow_html=True)
+
+    rows = ""
+    for _, r in cartera.iterrows():
+        est = r["estado"]
+        chip = (f"<span style='color:{_EST_COLOR[est]};font-weight:600'>"
+                f"● {est}</span>")
+        nuevo = (" <span style='color:#1A7F4B;font-size:.8em'>(nuevo)</span>"
+                 if r.get("es_nuevo") is True and est == "Activo" else "")
+        ult = r.get("last_ym") if pd.notna(r.get("last_ym")) else "—"
+        ms  = ("—" if pd.isna(r.get("meses_sin"))
+               else ("este mes" if int(r["meses_sin"]) == 0
+                     else fmt_num(r["meses_sin"])))
+        rows += f"""<tr>
+          <td style='text-align:left'>{r['cliente']}</td>
+          <td>{r.get('comuna') or '—'}</td>
+          <td>{r.get('ruta') or '—'}</td>
+          <td style='text-align:left'>{chip}{nuevo}</td>
+          <td>{ult}</td>
+          <td>{ms}</td>
+          <td>{fmt_clp(r['monto_hist'])}</td>
+        </tr>"""
+    st.markdown(f"""
+    <div class="tabla-container"><table class="kreems"><thead><tr>
+      <th style='text-align:left'>Cliente</th><th>Comuna</th><th>Ruta</th>
+      <th style='text-align:left'>Estado</th>
+      <th>Última compra</th><th>Meses sin comprar</th>
+      <th title='Total facturado históricamente'>Compra histórica</th>
+    </tr></thead><tbody>{rows}</tbody></table></div>
+    """, unsafe_allow_html=True)
+    st.caption("Estado por recencia: Activo (compró este mes) · En riesgo "
+               "(1–2 meses) · Dormido (3+ meses) · Sin compras (asignado pero "
+               "sin facturas en el historial). Cartera oficial del reporte Autoventa.")
+
+
+def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame,
+                      estado_cli: pd.DataFrame = None):
+    """Para responder al instante '¿quiénes son los clientes de X y en qué
+    estado están?': cartera oficial completa con columna de estado, más las
+    listas de activos y dormidos del vendedor elegido."""
     if detalle is None or detalle.empty:
         st.caption("Sin detalle de clientes para el período.")
         return
@@ -558,18 +678,20 @@ def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame):
               .iloc[0]["vendedor_id"])
     d = detalle[detalle["vendedor_id"] == vid].copy()
 
-    # Enriquecer con razón social y comuna. Solo esas columnas: dim_cliente
-    # trae un "tipo" propio (tipo de cliente) que colisionaría con el "tipo"
-    # del detalle (nuevo/reactivado/dormido) → tipo_x/tipo_y y KeyError.
+    # Datos descriptivos del cliente (razón social, comuna). Solo esas columnas:
+    # dim_cliente trae un "tipo" propio que colisionaría con el "tipo" del
+    # detalle (nuevo/reactivado/dormido) → tipo_x/tipo_y y KeyError.
+    dfc = pd.DataFrame()
     try:
         from app.data import get_dim_cliente_full
-        dfc = get_dim_cliente_full(client)
-        if not dfc.empty:
-            dfc = (dfc.rename(columns={"rut": "cliente_rut"})
-                      [["cliente_rut", "razon_social", "comuna"]])
-            d = d.merge(dfc, on="cliente_rut", how="left")
+        _dfc = get_dim_cliente_full(client)
+        if not _dfc.empty:
+            dfc = (_dfc.rename(columns={"rut": "cliente_rut"})
+                       [["cliente_rut", "razon_social", "comuna"]])
     except Exception:
         pass
+    if not dfc.empty:
+        d = d.merge(dfc, on="cliente_rut", how="left")
     for col in ["razon_social", "comuna"]:
         if col not in d.columns:
             d[col] = None
@@ -580,18 +702,28 @@ def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame):
     n_nuevo = int((act["tipo"] == "nuevo").sum())
     n_react = int((act["tipo"] == "reactivado").sum())
 
+    # ── Cartera oficial completa con estado ──────────────────────────────────
+    cartera = _cartera_estado(client, vid, estado_cli, dfc)
+    n_act_c = int((cartera["estado"] == "Activo").sum()) if not cartera.empty else 0
+    n_dorm_c = int((cartera["estado"] == "Dormido").sum()) if not cartera.empty else 0
+
     st.markdown(
         f'<div class="estado-vacio" style="margin-bottom:.5rem"><strong>{nombre_sel}</strong>: '
-        f'✅ <strong>{len(act)} clientes activos</strong> este mes '
-        f'({n_nuevo} nuevos · {n_react} reactivados) &nbsp;·&nbsp; '
-        f'😴 <strong>{len(dorm)} dormidos</strong> por recuperar '
-        f'({fmt_clp(dorm["monto"].sum())} de compra histórica).</div>',
+        f'🗂️ <strong>{len(cartera)} clientes en su cartera oficial</strong> '
+        f'({n_act_c} activos este mes · {n_dorm_c} dormidos). &nbsp; La lista de '
+        f'recuperación (pestaña Dormidos) suma <strong>{len(dorm)}</strong> porque '
+        f'incluye clientes que atendió aunque no estén asignados a él.</div>',
         unsafe_allow_html=True)
 
-    tab_a, tab_d = st.tabs([f"✅ Activos ({len(act)})", f"😴 Dormidos ({len(dorm)})"])
+    tab_c, tab_a, tab_d = st.tabs([
+        f"🗂️ Cartera completa ({len(cartera)})",
+        f"✅ Activos ({len(act)})", f"😴 Dormidos ({len(dorm)})"])
     _BADGE = {"nuevo": "<span class='chip-estado' style='color:#1A7F4B'>● Nuevo</span>",
               "reactivado": "<span class='chip-estado' style='color:#a36a10'>● Reactivado</span>",
               "activo": ""}
+
+    with tab_c:
+        _tab_cartera(cartera)
 
     with tab_a:
         rows = ""
@@ -632,10 +764,13 @@ def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame):
           <th title='Total facturado históricamente'>Compra histórica</th>
         </tr></thead><tbody>{rows}</tbody></table></div>
         """, unsafe_allow_html=True)
-        if len(dorm) > _top:
-            st.caption(f"Mostrando los {_top} de mayor compra histórica "
-                       f"(de {len(dorm)} dormidos). La lista completa la ve el "
-                       f"vendedor en su panel.")
+        st.caption(f"Lista de recuperación (alimenta el KPI de reactivados): "
+                   f"clientes sin comprar hace 3+ meses que este vendedor debe ir "
+                   f"a buscar, incluidos los que atendió aunque no estén en su "
+                   f"cartera oficial. "
+                   + (f"Mostrando los {_top} de mayor compra histórica de {len(dorm)}. "
+                      if len(dorm) > _top else "")
+                   + "La lista completa también está en el panel del vendedor.")
 
 
 def _editor_umbrales(client):

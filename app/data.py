@@ -663,7 +663,7 @@ def get_cartera_map(client: Client) -> pd.DataFrame:
         _PAGE, offset, rows = 1000, 0, []
         while True:
             r = (client.table("cartera_cliente")
-                 .select("cliente_rut,vendedor_id,ruta,n_sucursales")
+                 .select("cliente_rut,vendedor_id,nombre,ruta,n_sucursales")
                  .order("cliente_rut")
                  .range(offset, offset + _PAGE - 1).execute())
             if not r.data:
