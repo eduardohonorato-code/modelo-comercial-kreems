@@ -127,6 +127,28 @@ def _sincronizar_estado_maquinas(client, anio: int, mes: int) -> dict | None:
     }
 
 
+def _atribuir_sucursales(client, path, sociedad: str) -> str:
+    """
+    Escribe fact_ventas.direccion_id con la dirección que el export de Obuma trae en
+    cada documento (ver etl/direcciones_obuma.py). Devuelve un resumen para el
+    reporte de la carga.
+    """
+    from etl.config import SOCIEDAD_ID
+    from etl.upsert import upsert_tabla
+    from etl.direcciones import ruts_dim_cliente
+    from etl.direcciones_obuma import (leer_direcciones_excel, construir,
+                                       actualizar_fact_ventas, ids_existentes)
+
+    df = leer_direcciones_excel(Path(path), sociedad)
+    dim, mapa = construir(df, ids_existentes(client),
+                          ruts_validos=ruts_dim_cliente(client))
+    if not dim.empty:
+        upsert_tabla(client, "dim_direccion", dim, on_conflict="id")
+    filas = actualizar_fact_ventas(client, mapa, SOCIEDAD_ID[sociedad])
+    return (f"{sociedad}: {filas} líneas con sucursal "
+            f"({len(dim)} direcciones nuevas)")
+
+
 def _ejecutar_carga(anio: int, mes: int, uploads: dict) -> dict:
     """Guarda los archivos subidos en un temp, arma las listas y llama al núcleo."""
     # Import diferido: el ETL usa la service-role key (server-side, nunca al browser)
@@ -163,6 +185,16 @@ def _ejecutar_carga(anio: int, mes: int, uploads: dict) -> dict:
     fallback = _asegurar_vendedor_sin_asignar(client)
 
     rep = procesar_carga(client, obuma_files, av_pares, mapeo, fallback)
+
+    # Sucursal del cliente: el export de Obuma trae la dirección de cada documento.
+    # Es la única fuente para Acuña y para las NC, y solo existe mientras el archivo
+    # subido está en el temp (en Streamlit Cloud no hay disco persistente).
+    rep["sucursales"] = []
+    for path, sociedad in obuma_files:
+        try:
+            rep["sucursales"].append(_atribuir_sucursales(client, path, sociedad))
+        except Exception as exc:
+            rep["sucursales"].append(f"{sociedad}: sin sucursales ({exc})")
 
     # Si se subieron despachos, sincronizar el estado de las máquinas de TODO el
     # mes (incluye las de Gran Natural cargadas por API).
@@ -262,6 +294,10 @@ def _mostrar_reporte(rep: dict):
     m2.metric("Pedidos", f"{c['fact_pedidos']:,}".replace(",", "."))
     m3.metric("Despachos", f"{c['fact_despachos']:,}".replace(",", "."))
     m4.metric("Máquinas", f"{c['fact_maquinas']:,}".replace(",", "."))
+
+    if rep.get("sucursales"):
+        st.caption("Sucursales (dirección del cliente en cada documento): " +
+                   " · ".join(rep["sucursales"]))
 
     sync = rep.get("maquinas_sync")
     if sync:
