@@ -648,10 +648,16 @@ def _tab_ficha(client, perfil, hist, current_ym):
 
 
 # ─── Facturación por sucursal / dirección ──────────────────────────────────────
+def _txt(v) -> str:
+    """Texto limpio de un campo que puede venir None o NaN (las direcciones que
+    vienen de Obuma no traen `nombre`, y `NaN or ''` devuelve NaN, no '')."""
+    return "" if v is None or pd.isna(v) else str(v).strip()
+
+
 def _label_sucursal(r) -> str:
     """Nombre de la sucursal; si es la genérica 'Dirección principal', usa la calle."""
-    nombre = (r.get("nombre") or "").strip()
-    calle = (r.get("direccion") or "").strip()
+    nombre = _txt(r.get("nombre"))
+    calle = _txt(r.get("direccion"))
     if not nombre or nombre.lower().startswith("dirección principal"):
         nombre = "Casa matriz" if r.get("es_principal") else (calle or "Sin nombre")
     return nombre
@@ -715,8 +721,9 @@ def _bloque_sucursales(client, rut, dfv, current_ym):
          .reset_index().sort_values("fact_nc", ascending=False))
 
     if len(g) == 1:
+        com = _txt(g.iloc[0].get("comuna"))
         st.caption(f"📍 Un solo punto de venta: **{g.iloc[0]['sucursal']}**"
-                   f"{' · ' + str(g.iloc[0]['comuna']) if g.iloc[0].get('comuna') else ''}")
+                   + (f" · {com}" if com else ""))
         return
 
     _sec(f"Facturación por sucursal ({len(g)} puntos de venta)")
@@ -731,9 +738,10 @@ def _bloque_sucursales(client, rut, dfv, current_ym):
         for i, (_, r) in enumerate(g.iterrows(), start=1):
             part = r["fact_nc"] / total
             bar_w = int((r["fact_nc"] / (g["fact_nc"].max() or 1)) * 100)
-            sub = " · ".join(str(x) for x in [r.get("direccion"), r.get("comuna")] if x)
-            ruta = f"<span class='cl-chip' style='background:#E6298422;color:#E62984'>{r['ruta']}</span>" \
-                if r.get("ruta") else ""
+            sub = " · ".join(x for x in [_txt(r.get("direccion")), _txt(r.get("comuna"))] if x)
+            _ruta = _txt(r.get("ruta"))
+            ruta = (f"<span class='cl-chip' style='background:#E6298422;"
+                    f"color:#E62984'>{_ruta}</span>") if _ruta else ""
             rows += f"""<tr>
               <td style='text-align:left'>{i}</td>
               <td style='text-align:left'><b>{r['sucursal']}</b> {ruta}
