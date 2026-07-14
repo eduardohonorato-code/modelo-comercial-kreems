@@ -225,16 +225,18 @@ def _seccion_dormidos(client, vendedor_id: int, anio: int, mes: int):
                   last_vend=("vendedor_id", "last"),
                   monto_hist=("neto", "sum")))
     last["last_ym"] = last["last_fecha"].dt.to_period("M")
-    # Dueño del cliente: cartera oficial si está asignado; si no, el último
-    # vendedor que le facturó (fallback para clientes sin asignar).
+    # Dueño del cliente: la cartera oficial manda (un cliente dormido es de
+    # quien lo tiene asignado, no de quien le vendió por última vez). Solo si
+    # aún no se cargó la cartera se cae al último vendedor que facturó.
     cart = get_cartera_map(client)
     asignado = {}
     if not cart.empty:
         asignado = {r["cliente_rut"]: int(r["vendedor_id"])
                     for _, r in cart.dropna(subset=["vendedor_id"]).iterrows()}
-    dueno = pd.Series([asignado.get(rut, lv)
-                       for rut, lv in zip(last.index, last["last_vend"])],
-                      index=last.index)
+    if asignado:
+        dueno = pd.Series([asignado.get(rut) for rut in last.index], index=last.index)
+    else:
+        dueno = pd.Series(last["last_vend"].values, index=last.index)
     dorm = last[(last["last_ym"] <= sel - 3) & (dueno == vendedor_id)]
     dorm = dorm.sort_values("monto_hist", ascending=False)
 

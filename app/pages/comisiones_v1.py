@@ -312,9 +312,11 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
     first_ym = fac.groupby("cliente_rut")["ym"].min()
     prev = fac[fac["ym"] < sel].groupby("cliente_rut")["ym"].max()
 
-    # Dormidos: última compra hace ≥3 meses, atribuidos al DUEÑO de la cartera
-    # oficial si existe; si el cliente no está asignado, al último vendedor que
-    # le facturó (así los huérfanos de ex-vendedores pasan al dueño actual).
+    # Dormidos: última compra hace ≥3 meses. El dormido pertenece al DUEÑO de la
+    # cartera oficial — un solo número, consistente en todos lados (cartera, tab
+    # dormidos, KPI, panel del vendedor). Clientes sin comprar que NO están en la
+    # cartera oficial (viejos/retiros/promos) no son de nadie y no se cuentan.
+    # Si aún no se cargó la cartera, se cae al último vendedor que facturó.
     asignado = {}
     if cart_map is not None and not cart_map.empty:
         asignado = {r_["cliente_rut"]: int(r_["vendedor_id"])
@@ -323,8 +325,12 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
                .groupby("cliente_rut")
                .agg(last_ym=("ym", "max"), last_vend=("vendedor_id", "last")))
     dorm = last[last["last_ym"] <= sel - GAP_REACTIVACION].copy()
-    dorm["dueno"] = [asignado.get(rut, lv)
-                     for rut, lv in zip(dorm.index, dorm["last_vend"])]
+    if asignado:
+        dorm["dueno"] = dorm.index.map(lambda r: asignado.get(r))
+        dorm = dorm[dorm["dueno"].notna()].copy()
+        dorm["dueno"] = dorm["dueno"].astype(int)
+    else:
+        dorm["dueno"] = dorm["last_vend"].values
     dorm_df = (dorm.groupby("dueno").size()
                .rename("dormidos").reset_index()
                .rename(columns={"dueno": "vendedor_id"}))
@@ -512,7 +518,7 @@ def render_tab(client, anio: int, mes: int):
 
     st.markdown('<div class="seccion-titulo">Detalle por vendedor: cartera, activos y dormidos</div>',
                 unsafe_allow_html=True)
-    _detalle_clientes(client, df, detalle_cli, estado_cli)
+    _detalle_clientes(client, df, detalle_cli, estado_cli, anio, mes)
 
     with st.expander("ℹ️ Cómo se calcula", expanded=False):
         st.markdown(f"""
@@ -614,11 +620,59 @@ def _cartera_estado(client, vid: int, estado_cli: pd.DataFrame,
     return c.sort_values(["_ord", "monto_hist"], ascending=[True, False])
 
 
-def _tab_cartera(cartera: pd.DataFrame):
+def _cartera_export_df(cartera: pd.DataFrame) -> pd.DataFrame:
+    """Versión limpia y ordenada de la cartera para exportar a Excel."""
+    d = cartera.copy()
+    d["Meses sin comprar"] = d["meses_sin"].map(
+        lambda m: 0 if pd.notna(m) else None)
+    out = pd.DataFrame({
+        "Cliente": d["cliente"],
+        "RUT": d["cliente_rut"],
+        "Comuna": d.get("comuna"),
+        "Ruta": d.get("ruta"),
+        "Estado": d["estado"],
+        "Última compra": d["last_ym"].where(d["last_ym"].notna(), "—"),
+        "Meses sin comprar": pd.to_numeric(d["meses_sin"], errors="coerce"),
+        "Compra histórica": pd.to_numeric(d["monto_hist"], errors="coerce").fillna(0),
+        "Compra del mes": pd.to_numeric(d.get("monto_mes"), errors="coerce").fillna(0),
+    })
+    return out
+
+
+def _cartera_to_xlsx(cartera: pd.DataFrame, nombre_sel: str, anio: int, mes: int) -> bytes:
+    import io
+    df = _cartera_export_df(cartera)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xl:
+        df.to_excel(xl, index=False, sheet_name="Cartera")
+        ws = xl.sheets["Cartera"]
+        anchos = {"A": 42, "B": 14, "C": 16, "D": 12, "E": 12,
+                  "F": 13, "G": 16, "H": 16, "I": 15}
+        for col, w in anchos.items():
+            ws.column_dimensions[col].width = w
+        for cell in ws[1]:
+            cell.font = cell.font.copy(bold=True)
+    return buf.getvalue()
+
+
+def _tab_cartera(cartera: pd.DataFrame, nombre_sel: str = "", anio: int = 0, mes: int = 0):
     if cartera.empty:
         st.info("Este vendedor no tiene clientes en la cartera oficial cargada "
                 "(o aún no se ha corrido la carga de cartera).")
         return
+
+    # Exportar a Excel (nombre de archivo por vendedor y período).
+    try:
+        suf = nombre_sel.split()[0].lower() if nombre_sel else "vendedor"
+        xlsx = _cartera_to_xlsx(cartera, nombre_sel, anio, mes)
+        st.download_button(
+            "⬇️ Exportar cartera a Excel", data=xlsx,
+            file_name=f"cartera_{suf}_{anio}_{mes:02d}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_cartera_{suf}")
+    except Exception as e:
+        st.caption(f"No se pudo generar el Excel: {e}")
+
     # Resumen por estado.
     cuenta = cartera["estado"].value_counts()
     chips = ""
@@ -663,7 +717,7 @@ def _tab_cartera(cartera: pd.DataFrame):
 
 
 def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame,
-                      estado_cli: pd.DataFrame = None):
+                      estado_cli: pd.DataFrame = None, anio: int = 0, mes: int = 0):
     """Para responder al instante '¿quiénes son los clientes de X y en qué
     estado están?': cartera oficial completa con columna de estado, más las
     listas de activos y dormidos del vendedor elegido."""
@@ -705,14 +759,15 @@ def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame,
     # ── Cartera oficial completa con estado ──────────────────────────────────
     cartera = _cartera_estado(client, vid, estado_cli, dfc)
     n_act_c = int((cartera["estado"] == "Activo").sum()) if not cartera.empty else 0
-    n_dorm_c = int((cartera["estado"] == "Dormido").sum()) if not cartera.empty else 0
+    n_riesgo = int((cartera["estado"] == "En riesgo").sum()) if not cartera.empty else 0
 
     st.markdown(
         f'<div class="estado-vacio" style="margin-bottom:.5rem"><strong>{nombre_sel}</strong>: '
-        f'🗂️ <strong>{len(cartera)} clientes en su cartera oficial</strong> '
-        f'({n_act_c} activos este mes · {n_dorm_c} dormidos). &nbsp; La lista de '
-        f'recuperación (pestaña Dormidos) suma <strong>{len(dorm)}</strong> porque '
-        f'incluye clientes que atendió aunque no estén asignados a él.</div>',
+        f'🗂️ <strong>{len(cartera)} clientes en su cartera oficial</strong> &nbsp;·&nbsp; '
+        f'✅ <strong>{n_act_c} activos</strong> este mes &nbsp;·&nbsp; '
+        f'🟡 <strong>{n_riesgo} en riesgo</strong> (1–2 meses) &nbsp;·&nbsp; '
+        f'😴 <strong>{len(dorm)} dormidos</strong> por recuperar '
+        f'({fmt_clp(dorm["monto"].sum())} de compra histórica).</div>',
         unsafe_allow_html=True)
 
     tab_c, tab_a, tab_d = st.tabs([
@@ -723,7 +778,7 @@ def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame,
               "activo": ""}
 
     with tab_c:
-        _tab_cartera(cartera)
+        _tab_cartera(cartera, nombre_sel, anio, mes)
 
     with tab_a:
         rows = ""
@@ -764,10 +819,10 @@ def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame,
           <th title='Total facturado históricamente'>Compra histórica</th>
         </tr></thead><tbody>{rows}</tbody></table></div>
         """, unsafe_allow_html=True)
-        st.caption(f"Lista de recuperación (alimenta el KPI de reactivados): "
-                   f"clientes sin comprar hace 3+ meses que este vendedor debe ir "
-                   f"a buscar, incluidos los que atendió aunque no estén en su "
-                   f"cartera oficial. "
+        st.caption(f"Lista de recuperación (alimenta el KPI de reactivados): los "
+                   f"clientes de su cartera oficial sin comprar hace 3+ meses que "
+                   f"debe ir a buscar. Es el mismo número que ves como “Dormido” en "
+                   f"la Cartera completa. "
                    + (f"Mostrando los {_top} de mayor compra histórica de {len(dorm)}. "
                       if len(dorm) > _top else "")
                    + "La lista completa también está en el panel del vendedor.")
