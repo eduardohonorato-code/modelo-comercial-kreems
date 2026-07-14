@@ -228,6 +228,11 @@ def render(client, anio: int, mes: int):
         _empty()
         return
 
+    if hist.attrs.get("fuente") == "fallback":
+        st.info("Corriendo sin las vistas de agregación (falta correr "
+                "`sql/029_vistas_cliente_sucursal.sql` en Supabase). Los números "
+                "son correctos, pero la carga es lenta y no escala con el histórico.")
+
     tabs = st.tabs(["📋 Resumen", "🧩 Segmentación", "🚨 Alertas",
                     "🏆 Ranking", "🏪 Sucursales", "👤 Ficha cliente"])
     with tabs[0]:

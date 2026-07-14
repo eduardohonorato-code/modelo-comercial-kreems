@@ -529,24 +529,16 @@ def get_dim_direccion_full(client: Client) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def get_sucursales_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
+def _leer_vista_mes(client: Client, vista: str, sociedad_ids=None) -> pd.DataFrame:
     """
-    Matriz sucursal × mes (base de la pestaña Sucursales y de su export).
-
-    Una fila por (dirección, mes) con actividad:
-      direccion_id, cliente_rut, ym, fact_nc, n_facturas + atributos de la
-      sucursal (nombre, direccion, comuna, ciudad, ruta, es_principal, origen) y
-      la razón social del cliente.
-
-    Las líneas sin direccion_id (NC de anulación, ventas sin dirección en el ERP)
-    se devuelven aparte en el atributo `.attrs["sin_sucursal"]` para poder
-    declararlas en vez de perderlas.
+    Lee una vista de agregación mensual (v_cliente_mes / v_sucursal_mes /
+    v_sin_sucursal_mes), paginando. Devuelve ~10K filas ya agregadas en Postgres,
+    en vez de traerse fact_ventas entera: es lo que permite que el histórico crezca
+    sin que la app se degrade (ver sql/029).
     """
     _PAGE, offset, rows = 1000, 0, []
     while True:
-        q = (client.table("fact_ventas")
-             .select("fecha,tipo_dcto,n_dcto,cliente_rut,neto,direccion_id,sociedad_id")
-             .order("id").range(offset, offset + _PAGE - 1))
+        q = client.table(vista).select("*").range(offset, offset + _PAGE - 1)
         if sociedad_ids:
             q = q.in_("sociedad_id", sociedad_ids)
         r = q.execute()
@@ -556,29 +548,50 @@ def get_sucursales_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
         if len(r.data) < _PAGE:
             break
         offset += _PAGE
-    if not rows:
-        return pd.DataFrame()
-
     df = pd.DataFrame(rows)
-    df["neto"] = pd.to_numeric(df["neto"], errors="coerce").fillna(0)
-    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
-    df = df.dropna(subset=["fecha"])
-    df["ym"] = df["fecha"].dt.strftime("%Y-%m")
-    df["es_fac"] = df["tipo_dcto"].str.contains("factura", case=False, na=False)
+    if not df.empty:
+        df["fact_nc"] = pd.to_numeric(df["fact_nc"], errors="coerce").fillna(0)
+        if "n_facturas" in df.columns:
+            df["n_facturas"] = pd.to_numeric(
+                df["n_facturas"], errors="coerce").fillna(0).astype(int)
+    return df
 
-    sin = df[df["direccion_id"].isna()]
-    con = df[df["direccion_id"].notna()].copy()
-    if con.empty:
-        return pd.DataFrame()
-    con["direccion_id"] = con["direccion_id"].astype("int64")
 
-    monto = (con.groupby(["direccion_id", "cliente_rut", "ym"], dropna=False)["neto"]
-               .sum().reset_index(name="fact_nc"))
-    nfac = (con[con["es_fac"]].groupby(["direccion_id", "ym"])["n_dcto"]
-              .nunique().reset_index(name="n_facturas"))
-    out = monto.merge(nfac, on=["direccion_id", "ym"], how="left")
-    out["n_facturas"] = out["n_facturas"].fillna(0).astype(int)
+def get_sucursales_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
+    """
+    Matriz sucursal × mes (base de la pestaña Sucursales y de su export).
 
+    Una fila por (dirección, mes) con actividad:
+      direccion_id, cliente_rut, ym, fact_nc, n_facturas + atributos de la
+      sucursal (nombre, direccion, comuna, ciudad, ruta, es_principal, origen) y
+      la razón social del cliente.
+
+    Lee v_sucursal_mes (agregación en Postgres). Si la vista todavía no existe
+    (sql/029 sin correr), cae al camino antiguo —traerse fact_ventas entera y
+    agregar en pandas— y lo DECLARA en df.attrs["fuente"]="fallback" para que la
+    página lo muestre: es correcto pero lento, y con el histórico grande no sirve.
+
+    Lo no atribuible (NC de anulación, ventas sin dirección en el ERP) viaja en
+    df.attrs["sin_sucursal"], para declararlo en vez de perderlo.
+    """
+    fuente = "vista"
+    try:
+        out = _leer_vista_mes(client, "v_sucursal_mes", sociedad_ids)
+        sin_df = _leer_vista_mes(client, "v_sin_sucursal_mes", sociedad_ids)
+        if out.empty:
+            return pd.DataFrame()
+        out = (out.groupby(["direccion_id", "cliente_rut", "ym"], as_index=False)
+               .agg(fact_nc=("fact_nc", "sum"), n_facturas=("n_facturas", "sum")))
+        sin_df = (sin_df.groupby(["cliente_rut", "ym"], as_index=False)["fact_nc"].sum()
+                  if not sin_df.empty
+                  else pd.DataFrame(columns=["cliente_rut", "ym", "fact_nc"]))
+    except Exception:
+        fuente = "fallback"
+        out, sin_df = _sucursales_historia_lento(client, sociedad_ids)
+        if out.empty:
+            return pd.DataFrame()
+
+    out["direccion_id"] = out["direccion_id"].astype("int64")
     dd = get_dim_direccion_full(client)
     if not dd.empty:
         out = out.merge(dd.rename(columns={"id": "direccion_id",
@@ -595,10 +608,57 @@ def get_sucursales_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
     out["razon_social"] = out.get("razon_social", pd.Series(dtype=object)).fillna(
         out["cliente_rut"])
 
-    out.attrs["sin_sucursal"] = (
-        sin.groupby(["cliente_rut", "ym"])["neto"].sum().reset_index(name="fact_nc")
-        if not sin.empty else pd.DataFrame(columns=["cliente_rut", "ym", "fact_nc"]))
+    out.attrs["sin_sucursal"] = sin_df
+    out.attrs["fuente"] = fuente
     return out
+
+
+def _sucursales_historia_lento(client: Client, sociedad_ids=None):
+    """
+    Camino antiguo: trae fact_ventas entera y agrega en pandas. Solo se usa si
+    v_sucursal_mes no existe todavía. Correcto pero lento (~8 s con 64K líneas,
+    y crece linealmente con el histórico) → correr sql/029.
+    """
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        q = (client.table("fact_ventas")
+             .select("fecha,tipo_dcto,n_dcto,cliente_rut,neto,direccion_id,sociedad_id")
+             .order("id").range(offset, offset + _PAGE - 1))
+        if sociedad_ids:
+            q = q.in_("sociedad_id", sociedad_ids)
+        r = q.execute()
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    if not rows:
+        return pd.DataFrame(), pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df["neto"] = pd.to_numeric(df["neto"], errors="coerce").fillna(0)
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df = df.dropna(subset=["fecha"])
+    df["ym"] = df["fecha"].dt.strftime("%Y-%m")
+    df["es_fac"] = df["tipo_dcto"].str.contains("factura", case=False, na=False)
+
+    sin = df[df["direccion_id"].isna()]
+    con = df[df["direccion_id"].notna()].copy()
+    if con.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    monto = (con.groupby(["direccion_id", "cliente_rut", "ym"], dropna=False)["neto"]
+               .sum().reset_index(name="fact_nc"))
+    nfac = (con[con["es_fac"]].groupby(["direccion_id", "ym"])["n_dcto"]
+              .nunique().reset_index(name="n_facturas"))
+    out = monto.merge(nfac, on=["direccion_id", "ym"], how="left")
+    out["n_facturas"] = out["n_facturas"].fillna(0).astype(int)
+
+    sin_df = (sin.groupby(["cliente_rut", "ym"])["neto"].sum()
+              .reset_index(name="fact_nc") if not sin.empty
+              else pd.DataFrame(columns=["cliente_rut", "ym", "fact_nc"]))
+    return out, sin_df
 
 
 def get_clientes_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
@@ -610,13 +670,45 @@ def get_clientes_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
     Devuelve formato largo (una fila por cliente-mes con actividad):
       cliente_rut, ym ('YYYY-MM'), fact_nc (SUM neto), n_facturas (folios
       distintos), razon_social, comuna, region, tipo.
+
+    Lee v_cliente_mes (agregación en Postgres, sql/029). Si la vista no existe,
+    cae al camino antiguo y lo declara en df.attrs["fuente"]="fallback".
+    """
+    fuente = "vista"
+    try:
+        out = _leer_vista_mes(client, "v_cliente_mes", sociedad_ids)
+        if out.empty:
+            return pd.DataFrame()
+        out = (out.groupby(["cliente_rut", "ym"], as_index=False)
+               .agg(fact_nc=("fact_nc", "sum"), n_facturas=("n_facturas", "sum")))
+    except Exception:
+        fuente = "fallback"
+        out = _clientes_historia_lento(client, sociedad_ids)
+        if out.empty:
+            return pd.DataFrame()
+
+    dfc = get_dim_cliente_full(client)
+    if not dfc.empty:
+        out = out.merge(dfc.rename(columns={"rut": "cliente_rut"}),
+                        on="cliente_rut", how="left")
+    for col in ["razon_social", "comuna", "region", "tipo"]:
+        if col not in out.columns:
+            out[col] = None
+    out["razon_social"] = out["razon_social"].fillna(out["cliente_rut"])
+    out.attrs["fuente"] = fuente
+    return out
+
+
+def _clientes_historia_lento(client: Client, sociedad_ids=None) -> pd.DataFrame:
+    """
+    Camino antiguo (solo si v_cliente_mes no existe): trae fact_ventas entera y
+    agrega en pandas. Correcto pero lento y no escala con el histórico.
     """
     _PAGE, offset, rows = 1000, 0, []
     while True:
         q = (client.table("fact_ventas")
              .select("fecha,tipo_dcto,n_dcto,cliente_rut,neto")
-             .order("id")
-             .range(offset, offset + _PAGE - 1))
+             .order("id").range(offset, offset + _PAGE - 1))
         if sociedad_ids:
             q = q.in_("sociedad_id", sociedad_ids)
         r = q.execute()
@@ -642,15 +734,6 @@ def get_clientes_historia(client: Client, sociedad_ids=None) -> pd.DataFrame:
               .nunique().reset_index(name="n_facturas"))
     out = monto.merge(nfac, on=["cliente_rut", "ym"], how="left")
     out["n_facturas"] = out["n_facturas"].fillna(0).astype(int)
-
-    dfc = get_dim_cliente_full(client)
-    if not dfc.empty:
-        out = out.merge(dfc.rename(columns={"rut": "cliente_rut"}),
-                        on="cliente_rut", how="left")
-    for col in ["razon_social", "comuna", "region", "tipo"]:
-        if col not in out.columns:
-            out[col] = None
-    out["razon_social"] = out["razon_social"].fillna(out["cliente_rut"])
     return out
 
 
