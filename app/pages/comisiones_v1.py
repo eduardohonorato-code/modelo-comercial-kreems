@@ -558,13 +558,16 @@ def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame):
               .iloc[0]["vendedor_id"])
     d = detalle[detalle["vendedor_id"] == vid].copy()
 
-    # Enriquecer con razón social y comuna.
+    # Enriquecer con razón social y comuna. Solo esas columnas: dim_cliente
+    # trae un "tipo" propio (tipo de cliente) que colisionaría con el "tipo"
+    # del detalle (nuevo/reactivado/dormido) → tipo_x/tipo_y y KeyError.
     try:
         from app.data import get_dim_cliente_full
         dfc = get_dim_cliente_full(client)
         if not dfc.empty:
-            d = d.merge(dfc.rename(columns={"rut": "cliente_rut"}),
-                        on="cliente_rut", how="left")
+            dfc = (dfc.rename(columns={"rut": "cliente_rut"})
+                      [["cliente_rut", "razon_social", "comuna"]])
+            d = d.merge(dfc, on="cliente_rut", how="left")
     except Exception:
         pass
     for col in ["razon_social", "comuna"]:
