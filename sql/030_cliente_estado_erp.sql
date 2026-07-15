@@ -24,4 +24,6 @@ create policy cliente_estado_erp_sel on public.cliente_estado_erp
   for select to authenticated using (true);
 
 grant select on public.cliente_estado_erp to authenticated;
--- La escritura la hace el ETL/carga con la service_role key (bypassa RLS).
+-- La escritura la hace el ETL/carga con la service_role key. En este proyecto los
+-- grants a service_role NO son automáticos para tablas nuevas → concederlos explícito.
+grant select, insert, update, delete on public.cliente_estado_erp to service_role;
