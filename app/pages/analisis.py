@@ -910,8 +910,22 @@ def _s05_productos_fondo(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim):
     tbl["Venta"] = tbl["venta"].apply(fmt_clp)
     tbl["Uds"]   = tbl["uds"].apply(lambda x: fmt_num(int(x or 0)))
     tbl = tbl.rename(columns={"producto_codigo": "Código", "nombre": "Producto"})
-    st.dataframe(tbl[["Código", "Producto", "Venta", "Uds", "% cat."]],
-                 use_container_width=True, hide_index=True)
+    disp = tbl[["Código", "Producto", "Venta", "Uds", "% cat."]]
+    st.dataframe(disp, use_container_width=True, hide_index=True)
+
+    # Descarga en Excel (el CSV nativo de la tabla se ve mal por acentos/formato).
+    from app.export import to_xlsx, to_csv
+    nb = f"paletas_skus_{cat_sel.lower()}_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}"
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button(
+            "📗 Descargar Excel", to_xlsx(disp, hoja=f"SKUs {cat_sel.title()}"[:31]),
+            f"{nb}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_xlsx_{nb}", use_container_width=True)
+    with d2:
+        st.download_button("📄 Descargar CSV", to_csv(disp), f"{nb}.csv",
+                           "text/csv", key=f"dl_csv_{nb}", use_container_width=True)
 
     # Tendencia mensual del año
     _sec(f"Tendencia mensual {f_fin.year} · {cat_sel.title()}")
@@ -935,6 +949,21 @@ def render(client, anio: int, mes: int):
     )
     if f_ini is None:
         return
+
+    # Análisis lee las líneas del rango a nivel de detalle (producto, región,
+    # sucursal), que es lo que necesitan sus gráficos. Con el histórico cargado
+    # (2023→hoy), un rango de varios años son cientos de miles de líneas y la carga
+    # se vuelve lenta. No se trunca (falsearía los números): se avisa y el usuario
+    # decide. El caso normal —un mes— es instantáneo.
+    n_dias = (f_fin - f_ini).days + 1
+    if n_dias > 180:
+        st.warning(
+            f"El rango elegido son **{n_dias} días**. Análisis trabaja al detalle "
+            "(producto, región, sucursal), así que un rango tan amplio puede tardar "
+            "bastante en cargar. Para tendencias largas conviene mirar mes a mes o "
+            "usar la pestaña de tendencia del año. ¿Seguir de todos modos?")
+        if not st.checkbox("Sí, cargar el rango completo", key="anal_rango_ancho"):
+            st.stop()
 
     with st.spinner("Cargando datos…"):
         df_raw, df_prev_raw = _load_pair(client, f_ini, f_fin, soc_ids)

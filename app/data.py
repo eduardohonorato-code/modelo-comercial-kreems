@@ -106,62 +106,6 @@ def get_maquinas_sin_factura(client: Client, anio: int, mes: int) -> pd.DataFram
     return df
 
 
-# ── Análisis de ventas por producto / categoría ──────────────────────────────
-
-def get_ventas_producto(client: Client, anio: int, mes: int) -> pd.DataFrame:
-    """fact_ventas unido con dim_producto para análisis de categoría/fabricante."""
-    rv = (client.table("fact_ventas")
-          .select("producto_codigo,neto,margen,cantidad,tipo_dcto,fecha")
-          .execute())
-    rp = client.table("dim_producto").select("codigo,nombre,categoria,subcategoria,fabricante").execute()
-
-    if not rv.data:
-        return pd.DataFrame()
-
-    dfv = pd.DataFrame(rv.data)
-    dfp = pd.DataFrame(rp.data) if rp.data else pd.DataFrame()
-
-    dfv["fecha"] = pd.to_datetime(dfv["fecha"], errors="coerce")
-    dfv = dfv[(dfv["fecha"].dt.year == anio) & (dfv["fecha"].dt.month == mes)]
-
-    for col in ["neto", "margen", "cantidad"]:
-        dfv[col] = pd.to_numeric(dfv[col], errors="coerce").fillna(0)
-
-    if not dfp.empty:
-        # Normalizar categoria
-        dfp["categoria"] = dfp["categoria"].str.upper().str.strip()
-        dfv = dfv.merge(dfp.rename(columns={"codigo": "producto_codigo"}),
-                        on="producto_codigo", how="left")
-    return dfv
-
-
-def get_ventas_region(client: Client, anio: int, mes: int) -> pd.DataFrame:
-    """fact_ventas unido con dim_cliente para análisis por región/comuna."""
-    rv = (client.table("fact_ventas")
-          .select("cliente_rut,neto,margen,cantidad,tipo_dcto,fecha,sociedad_id")
-          .execute())
-    rc = client.table("dim_cliente").select("rut,region,comuna,sociedad_id").execute()
-
-    if not rv.data:
-        return pd.DataFrame()
-
-    dfv = pd.DataFrame(rv.data)
-    dfc = pd.DataFrame(rc.data) if rc.data else pd.DataFrame()
-
-    dfv["fecha"] = pd.to_datetime(dfv["fecha"], errors="coerce")
-    dfv = dfv[(dfv["fecha"].dt.year == anio) & (dfv["fecha"].dt.month == mes)]
-
-    for col in ["neto", "margen"]:
-        dfv[col] = pd.to_numeric(dfv[col], errors="coerce").fillna(0)
-
-    if not dfc.empty:
-        # Normalizar region (quitar duplicados con/sin tilde)
-        dfc["region"] = dfc["region"].str.strip()
-        dfv = dfv.merge(dfc.rename(columns={"rut": "cliente_rut", "sociedad_id": "soc_cliente"}),
-                        on="cliente_rut", how="left")
-    return dfv
-
-
 # ── Máquinas ─────────────────────────────────────────────────────────────────
 
 def get_maquinas(client: Client, anio: int, mes: int) -> pd.DataFrame:
