@@ -75,6 +75,12 @@ grant select on public.v_cliente_mes      to authenticated;
 grant select on public.v_sucursal_mes     to authenticated;
 grant select on public.v_sin_sucursal_mes to authenticated;
 
+-- service_role (backend: ETL y scripts de medición) también lee estas vistas en
+-- vez de re-escanear fact_ventas. Es server-side, nunca se expone al browser.
+grant select on public.v_cliente_mes      to service_role;
+grant select on public.v_sucursal_mes     to service_role;
+grant select on public.v_sin_sucursal_mes to service_role;
+
 -- Índices que sostienen el GROUP BY cuando crezca el histórico.
 create index if not exists ix_fact_ventas_cliente_fecha
     on public.fact_ventas(cliente_rut, fecha);
