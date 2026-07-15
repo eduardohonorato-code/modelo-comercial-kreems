@@ -414,6 +414,31 @@ def get_dim_cliente_full(client: Client) -> pd.DataFrame:
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
+def get_estado_erp(client: Client) -> pd.DataFrame:
+    """
+    Flag activo/inactivo del cliente según el ERP Autoventa (tabla
+    cliente_estado_erp, cargada desde la página Carga). Paginado.
+    Fail-soft: si la tabla aún no existe (no se corrió sql/030) o falla la
+    lectura, devuelve vacío para no romper la página de Clientes.
+    """
+    _PAGE, offset, rows = 1000, 0, []
+    try:
+        while True:
+            r = (client.table("cliente_estado_erp")
+                 .select("rut,activo")
+                 .order("rut")
+                 .range(offset, offset + _PAGE - 1).execute())
+            if not r.data:
+                break
+            rows.extend(r.data)
+            if len(r.data) < _PAGE:
+                break
+            offset += _PAGE
+    except Exception:
+        return pd.DataFrame(columns=["rut", "activo"])
+    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["rut", "activo"])
+
+
 def get_top_clientes(client: Client, anio: int, mes: int,
                      sociedad_ids=None) -> pd.DataFrame:
     """

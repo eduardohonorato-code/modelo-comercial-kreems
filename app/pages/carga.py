@@ -278,6 +278,31 @@ registrarlos (se reportan al final).
     if rep:
         _mostrar_reporte(rep)
 
+    _seccion_estado_erp()
+
+
+def _seccion_estado_erp():
+    """Carga de la lista de clientes del ERP (flag activo/inactivo) → cliente_estado_erp."""
+    st.divider()
+    st.markdown('<div class="seccion-titulo">Lista de clientes (ERP: activo/inactivo)</div>',
+                unsafe_allow_html=True)
+    st.caption("Sube el export **lista_clientes.xlsx** del ERP (Autoventa). Usa las columnas "
+               "`cliente_rut` y `cliente_activo` (1/0). Alimenta el flag Activo/Inactivo de la "
+               "sección **Clientes**. Idempotente (upsert por RUT).")
+    up = st.file_uploader("Lista de clientes (.xlsx)", type=["xlsx"], key="up_lista_erp")
+    if st.button("⬆️  Cargar lista de clientes", disabled=up is None,
+                 use_container_width=True):
+        with st.spinner("Cargando lista de clientes a Supabase…"):
+            try:
+                import io
+                from etl.db import get_client
+                from etl.cargar_estado_erp import cargar_estado_erp
+                r = cargar_estado_erp(get_client(), io.BytesIO(up.getvalue()))
+                st.success(f"Lista cargada: {r['filas']} clientes "
+                           f"({r['activos']} activos, {r['inactivos']} inactivos). ✅")
+            except Exception as exc:
+                st.error(f"No se pudo cargar la lista: {exc}")
+
 
 def _mostrar_reporte(rep: dict):
     import pandas as pd

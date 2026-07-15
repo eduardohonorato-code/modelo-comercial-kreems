@@ -24,7 +24,7 @@ import plotly.graph_objects as go
 from app.styles import fmt_clp, fmt_num, fmt_pct
 from app.data import (get_clientes_historia, get_cliente_detalle,
                       get_direcciones_cliente, get_sucursales_historia,
-                      get_dim_sociedad)
+                      get_dim_sociedad, get_estado_erp)
 from app.export_sucursales import (perfil_sucursales, libro_clientes_sucursales,
                                    _nombre_sucursal)
 
@@ -227,6 +227,15 @@ def render(client, anio: int, mes: int):
     if perfil.empty:
         _empty()
         return
+
+    # ── Enriquecer con estado ERP (activo/inactivo) — fail-soft ──
+    erp = get_estado_erp(client)
+    if not erp.empty:
+        erp_map = dict(zip(erp["rut"].astype(str),
+                           erp["activo"].map(lambda v: "Activo" if v else "Inactivo")))
+        perfil["estado_erp"] = perfil["cliente_rut"].astype(str).map(erp_map).fillna("(sin dato)")
+    else:
+        perfil["estado_erp"] = "(sin dato)"
 
     if hist.attrs.get("fuente") == "fallback":
         st.info("Corriendo sin las vistas de agregación (falta correr "
@@ -500,18 +509,53 @@ def _tab_alertas(perfil):
                        lambda r: fmt_clp(r["ventas_total"]),
                        "Sin candidatos claros de upsell.")
 
+    # ── Descuadre con el flag activo/inactivo del ERP (si hay datos) ──
+    if "estado_erp" in p.columns and (p["estado_erp"] != "(sin dato)").any():
+        st.divider()
+        _sec("🔄 Descuadre con el ERP (activo / inactivo)")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**ERP 'Activo' pero dejó de comprar (Perdido)**")
+            mis1 = p[(p["estado_erp"] == "Activo") & (p["estado"] == "Perdido")].nlargest(5, "ventas_total")
+            _lista_alertas(mis1, "#C0392B", "🧹",
+                           lambda r: f"Última compra {_ym_label(r['last_ym'])} · {r['recency']:.0f} meses — el ERP aún lo da por activo",
+                           lambda r: fmt_clp(r["ventas_total"]),
+                           "Sin descuadres de este tipo.")
+        with c2:
+            st.markdown("**ERP 'Inactivo' pero compró hace poco**")
+            mis2 = p[(p["estado_erp"] == "Inactivo")
+                     & (p["estado"].isin(["Activo", "Nuevo", "Recuperado"]))].nlargest(5, "ventas_total")
+            _lista_alertas(mis2, "#1E88E5", "✅",
+                           lambda r: f"Compró {_ym_label(r['last_ym'])} — el ERP lo marca inactivo (flag desactualizado)",
+                           lambda r: fmt_clp(r["ventas_total"]),
+                           "Sin descuadres de este tipo.")
+
 
 # ─── TAB 4 · Ranking ────────────────────────────────────────────────────────────
+_ERP_COLOR = {"Activo": "#1A7F4B", "Inactivo": "#C0392B", "(sin dato)": "#94A3B8"}
+
+
+def _erp_chip(v):
+    c = _ERP_COLOR.get(v, "#94A3B8")
+    return f'<span class="cl-chip" style="background:{c}22;color:{c}">{v}</span>'
+
+
 def _tab_ranking(perfil):
     _sec("Ranking de clientes")
-    c1, c2 = st.columns([2, 3])
+    c1, c2, c3 = st.columns([2, 2, 3])
     with c1:
         estados = ["Todos"] + sorted(perfil["estado"].unique().tolist())
-        f_est = st.selectbox("Estado", estados, key="cli_rk_est")
+        f_est = st.selectbox("Estado (comportamiento)", estados, key="cli_rk_est")
     with c2:
+        erp_opts = ["Todos"] + [e for e in ["Activo", "Inactivo", "(sin dato)"]
+                                if e in set(perfil["estado_erp"])]
+        f_erp = st.selectbox("Estado ERP", erp_opts, key="cli_rk_erp")
+    with c3:
         top_n = st.slider("Mostrar", 10, 100, 25, step=5, key="cli_rk_n")
 
     d = perfil if f_est == "Todos" else perfil[perfil["estado"] == f_est]
+    if f_erp != "Todos":
+        d = d[d["estado_erp"] == f_erp]
     d = d.sort_values("ventas_total", ascending=False).head(top_n)
     if d.empty:
         _empty()
@@ -521,7 +565,7 @@ def _tab_ranking(perfil):
     header = ("<th style='text-align:left'>#</th><th style='text-align:left'>Cliente</th>"
               "<th>Clase</th><th>Venta acumulada</th><th>Participación</th>"
               "<th>Ticket prom.</th><th>Frec.</th><th>Última compra</th>"
-              "<th>Tendencia</th><th>Estado</th>")
+              "<th>Tendencia</th><th>Estado</th><th>ERP</th>")
     rows = ""
     for i, (_, r) in enumerate(d.iterrows(), start=1):
         bar_w = int((r["part"] / max_part) * 100)
@@ -545,6 +589,7 @@ def _tab_ranking(perfil):
           <td>{_ym_label(r['last_ym'])}</td>
           <td>{tend}</td>
           <td>{_badge(r['estado'])}</td>
+          <td>{_erp_chip(r.get('estado_erp', '(sin dato)'))}</td>
         </tr>"""
     st.markdown(f"""<div class="tabla-container">
       <table class="kreems"><thead><tr>{header}</tr></thead>
