@@ -52,9 +52,16 @@ COL_MAP = {
 
 
 def _leer_xls_html(path: Path, encoding: str = "utf-8") -> pd.DataFrame:
-    """Lee un .xls exportado como HTML de Obuma."""
+    """Lee un .xls exportado como HTML de Obuma.
+
+    Los exports vienen con formato numérico chileno (miles '.', decimal ',').
+    Sin declararlo, pd.read_html usa thousands=',' y convierte la Cantidad
+    '1,00' en 100 al parsear (bug ×100 en fact_ventas.cantidad, irreversible
+    aguas abajo porque la columna ya llega numérica a la limpieza).
+    """
     with path.open("rb") as fh:
-        tablas = pd.read_html(fh, encoding=encoding, header=0, flavor="lxml")
+        tablas = pd.read_html(fh, encoding=encoding, header=0, flavor="lxml",
+                              thousands=".", decimal=",")
     if not tablas:
         raise ValueError(f"No se encontraron tablas HTML en {path.name}")
     df = tablas[0]
