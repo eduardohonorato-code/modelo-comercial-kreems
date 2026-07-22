@@ -42,6 +42,48 @@ def to_csv(df) -> bytes:
     return df.to_csv(index=False, sep=";").encode("utf-8-sig")
 
 
+def to_xlsx(df, hoja: str = "Datos") -> bytes:
+    """
+    DataFrame → archivo .xlsx nativo (bytes). Se abre limpio en Excel: sin
+    problemas de acentos ni de delimitador (a diferencia del CSV). Encabezado
+    navy en negrita, filtro automático y ancho de columna proporcional.
+    openpyxl ya es dependencia del proyecto (lo usa el ETL / lectura de Excel).
+    """
+    import pandas as pd  # noqa: F401  (asegura que openpyxl esté disponible)
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = hoja[:31]  # Excel limita el nombre de hoja a 31 chars
+
+    cols = [str(c) for c in df.columns]
+    hdr_fill = PatternFill("solid", fgColor="1B3A6B")
+    hdr_font = Font(bold=True, color="FFFFFF")
+    for j, name in enumerate(cols, 1):
+        c = ws.cell(row=1, column=j, value=name)
+        c.fill = hdr_fill
+        c.font = hdr_font
+        c.alignment = Alignment(horizontal="center")
+
+    for i, (_, row) in enumerate(df.iterrows(), 2):
+        for j, name in enumerate(df.columns, 1):
+            ws.cell(row=i, column=j, value=row[name])
+
+    for j, name in enumerate(cols, 1):
+        ancho = max([len(name)] + [len(str(v)) for v in df.iloc[:, j - 1]]) + 2
+        ws.column_dimensions[get_column_letter(j)].width = min(max(ancho, 8), 48)
+
+    ws.freeze_panes = "A2"
+    if len(df):
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{len(df) + 1}"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = None,
               resaltar_ultima: bool = False, col_labels=None, grupos=None,
               dpi: int = 200) -> bytes:
