@@ -186,10 +186,13 @@ def _enrich(df: pd.DataFrame, df_prod_dim: pd.DataFrame,
     df = df.copy()
 
     if not df_prod_dim.empty:
+        _cols_dp = ["producto_codigo", "nombre", "categoria",
+                    "subcategoria", "fabricante"]
+        if "unidad_medida" in df_prod_dim.columns:
+            _cols_dp.append("unidad_medida")
         dp = (df_prod_dim
               .rename(columns={"codigo": "producto_codigo"})
-              [["producto_codigo", "nombre", "categoria",
-                "subcategoria", "fabricante"]])
+              [_cols_dp])
         dp["categoria"] = (dp["categoria"].fillna("SIN CATEGORIA")
                            .map(_canon_cat))
         df = df.merge(dp, on="producto_codigo", how="left")
@@ -943,6 +946,107 @@ def _s05_productos_fondo(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim):
             st.plotly_chart(_fig_base(fig3, 300), use_container_width=True)
 
 
+# ─── Sección 06 · Cajas por centro de distribución ────────────────────────────
+_CDS = ["SANTIAGO", "CONCEPCION", "TEMUCO"]  # centros de distribución (Gran Natural)
+
+
+def _s06_cajas_cd(df_all: pd.DataFrame, f_ini, f_fin):
+    _sec("Cajas vendidas por SKU y centro de distribución")
+    st.caption("Cajas = cantidad de líneas cuya unidad de medida es **CAJA** "
+               "(excluye fletes/servicios). Netas de notas de crédito. "
+               "Refleja el período seleccionado arriba.")
+
+    if df_all.empty or "unidad_medida" not in df_all.columns:
+        if "unidad_medida" not in df_all.columns:
+            st.info("No se pudo leer la unidad de medida de los productos "
+                    "(correr con el catálogo actualizado). ")
+        else:
+            _empty()
+        return
+
+    caja = df_all[df_all["unidad_medida"].astype(str).str.upper() == "CAJA"].copy()
+    if caja.empty:
+        _empty()
+        return
+    caja["cantidad"] = pd.to_numeric(caja["cantidad"], errors="coerce").fillna(0)
+    caja["cd"] = (caja["sucursal"].fillna("(sin CD)").astype(str).str.strip()
+                  .str.upper().replace("", "(sin CD)"))
+
+    # Filtro opcional por categoría (dentro de las que vienen en caja).
+    cats = sorted(caja["categoria"].dropna().unique().tolist())
+    cats_sel = st.multiselect("Categoría (opcional)", cats,
+                              placeholder="Todas las categorías de caja",
+                              key="cajas_cat")
+    if cats_sel:
+        caja = caja[caja["categoria"].isin(cats_sel)]
+    if caja.empty:
+        _empty()
+        return
+
+    # Orden de columnas: los 3 CD primero, luego cualquier otro presente.
+    cds_presentes = [c for c in _CDS if c in set(caja["cd"])]
+    otros = [c for c in sorted(caja["cd"].unique()) if c not in _CDS]
+    cols_cd = cds_presentes + otros
+
+    total_cajas = float(caja["cantidad"].sum())
+    por_cd = caja.groupby("cd")["cantidad"].sum()
+
+    # KPIs: total + un CD por tarjeta.
+    kpis = [_kic("📦", "Cajas totales", fmt_num(round(total_cajas)))]
+    _emoji = {"SANTIAGO": "🏙️", "CONCEPCION": "🌆", "TEMUCO": "🌲"}
+    for cd in cols_cd[:3]:
+        v = float(por_cd.get(cd, 0))
+        pct = v / total_cajas if total_cajas else 0
+        kpis.append(_kic(_emoji.get(cd, "🏬"), cd.title(), fmt_num(round(v)),
+                         sub=f"{pct*100:.0f}% del total"))
+    st.markdown(f'<div class="kpi-grid">{"".join(kpis)}</div>', unsafe_allow_html=True)
+
+    # Gráfico: cajas por CD.
+    _sec("Cajas por centro de distribución")
+    serie_cd = por_cd.reindex(cols_cd).fillna(0)
+    figb = go.Figure(go.Bar(
+        x=[c.title() for c in serie_cd.index], y=serie_cd.values,
+        marker_color=_C["chart"], text=[fmt_num(round(v)) for v in serie_cd.values],
+        textposition="outside"))
+    figb.update_layout(yaxis=dict(showgrid=False), xaxis=dict(tickfont=dict(size=11)))
+    st.plotly_chart(_fig_base(figb, 300), use_container_width=True)
+
+    # Tabla SKU × CD.
+    _sec("Detalle SKU × centro de distribución")
+    piv = (caja.pivot_table(index=["producto_codigo", "nombre"], columns="cd",
+                            values="cantidad", aggfunc="sum", fill_value=0.0)
+               .reset_index())
+    for cd in cols_cd:
+        if cd not in piv.columns:
+            piv[cd] = 0.0
+    piv["Total"] = piv[cols_cd].sum(axis=1)
+    piv = piv.sort_values("Total", ascending=False)
+
+    disp = piv.rename(columns={"producto_codigo": "Código", "nombre": "Producto"})
+    orden = ["Código", "Producto"] + cols_cd + ["Total"]
+    disp = disp[orden].copy()
+    for c in cols_cd + ["Total"]:
+        disp[c] = disp[c].round().astype(int)
+    # Renombrar CD a Title Case para mostrar.
+    disp = disp.rename(columns={c: c.title() for c in cols_cd})
+    st.dataframe(disp, use_container_width=True, hide_index=True,
+                 height=min(560, 60 + 28 * min(len(disp), 18)))
+
+    st.caption(f"**{len(disp)} SKUs** · Total {fmt_num(round(total_cajas))} cajas en el período.")
+
+    from app.export import to_xlsx, to_csv
+    nb = f"cajas_por_cd_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}"
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button("📗 Descargar Excel", to_xlsx(disp, hoja="Cajas por CD"),
+                           f"{nb}.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key=f"dl_xlsx_{nb}", use_container_width=True)
+    with d2:
+        st.download_button("📄 Descargar CSV", to_csv(disp), f"{nb}.csv",
+                           "text/csv", key=f"dl_csv_{nb}", use_container_width=True)
+
+
 def render(client, anio: int, mes: int):
     f_ini, f_fin, soc_ids, cats_sel, df_prod_dim = _page_filters(
         client, anio, mes
@@ -975,8 +1079,8 @@ def render(client, anio: int, mes: int):
     df      = df_all if not cats_sel else df_all[df_all["categoria"].isin(cats_sel)].copy()
     df_prev = _enrich(df_prev_raw, df_prod_dim, df_geo, cats_sel)
 
-    tab_ventas, tab_maquinas, tab_prod = st.tabs(
-        ["📊 Ventas", "🧊 Máquinas", "🔬 Productos a fondo"]
+    tab_ventas, tab_maquinas, tab_prod, tab_cajas = st.tabs(
+        ["📊 Ventas", "🧊 Máquinas", "🔬 Productos a fondo", "📦 Cajas por CD"]
     )
 
     with tab_ventas:
@@ -996,3 +1100,6 @@ def render(client, anio: int, mes: int):
 
     with tab_prod:
         _s05_productos_fondo(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim)
+
+    with tab_cajas:
+        _s06_cajas_cd(df_all, f_ini, f_fin)

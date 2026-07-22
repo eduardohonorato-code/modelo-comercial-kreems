@@ -377,11 +377,22 @@ def get_ventas_rango(client: Client, fecha_ini, fecha_fin, sociedad_ids=None) ->
 
 
 def get_dim_producto_all(client: Client) -> pd.DataFrame:
-    """dim_producto completo (para multiselect de categorías y enriquecimiento)."""
-    r = client.table("dim_producto").select(
-        "codigo,nombre,categoria,subcategoria,fabricante"
-    ).execute()
-    return pd.DataFrame(r.data) if r.data else pd.DataFrame()
+    """dim_producto completo (para multiselect de categorías y enriquecimiento).
+    Paginado: defensivo por si el catálogo supera las 1000 filas de PostgREST
+    (si no, productos sin categoría → líneas mal clasificadas en Análisis)."""
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        r = (client.table("dim_producto")
+             .select("codigo,nombre,categoria,subcategoria,fabricante,unidad_medida")
+             .order("codigo")
+             .range(offset, offset + _PAGE - 1).execute())
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
 def get_dim_cliente_geo(client: Client) -> pd.DataFrame:
