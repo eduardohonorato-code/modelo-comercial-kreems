@@ -951,10 +951,10 @@ _CDS = ["SANTIAGO", "CONCEPCION", "TEMUCO"]  # centros de distribución (Gran Na
 
 
 def _s06_cajas_cd(df_all: pd.DataFrame, f_ini, f_fin):
-    _sec("Cajas vendidas por SKU y centro de distribución")
+    _sec("Cajas y monto por SKU y centro de distribución")
     st.caption("Cajas = cantidad de líneas cuya unidad de medida es **CAJA** "
-               "(excluye fletes/servicios). Netas de notas de crédito. "
-               "Refleja el período seleccionado arriba.")
+               "(excluye fletes/servicios). Monto = Fact-NC (neto). Ambos netos de "
+               "notas de crédito. Refleja el período seleccionado arriba.")
 
     if df_all.empty or "unidad_medida" not in df_all.columns:
         if "unidad_medida" not in df_all.columns:
@@ -969,6 +969,7 @@ def _s06_cajas_cd(df_all: pd.DataFrame, f_ini, f_fin):
         _empty()
         return
     caja["cantidad"] = pd.to_numeric(caja["cantidad"], errors="coerce").fillna(0)
+    caja["neto"] = pd.to_numeric(caja["neto"], errors="coerce").fillna(0)
     caja["cd"] = (caja["sucursal"].fillna("(sin CD)").astype(str).str.strip()
                   .str.upper().replace("", "(sin CD)"))
 
@@ -989,56 +990,83 @@ def _s06_cajas_cd(df_all: pd.DataFrame, f_ini, f_fin):
     cols_cd = cds_presentes + otros
 
     total_cajas = float(caja["cantidad"].sum())
-    por_cd = caja.groupby("cd")["cantidad"].sum()
+    total_venta = float(caja["neto"].sum())
+    por_cd_caja = caja.groupby("cd")["cantidad"].sum()
+    por_cd_venta = caja.groupby("cd")["neto"].sum()
 
-    # KPIs: total + un CD por tarjeta.
-    kpis = [_kic("📦", "Cajas totales", fmt_num(round(total_cajas)))]
+    # KPIs: totales de cajas y monto + un CD por tarjeta (cajas + monto en el sub).
+    kpis = [_kic("📦", "Cajas totales", fmt_num(round(total_cajas))),
+            _kic("💰", "Monto total", fmt_clp(total_venta))]
     _emoji = {"SANTIAGO": "🏙️", "CONCEPCION": "🌆", "TEMUCO": "🌲"}
     for cd in cols_cd[:3]:
-        v = float(por_cd.get(cd, 0))
-        pct = v / total_cajas if total_cajas else 0
-        kpis.append(_kic(_emoji.get(cd, "🏬"), cd.title(), fmt_num(round(v)),
-                         sub=f"{pct*100:.0f}% del total"))
+        vc = float(por_cd_caja.get(cd, 0))
+        vv = float(por_cd_venta.get(cd, 0))
+        pct = vc / total_cajas if total_cajas else 0
+        kpis.append(_kic(_emoji.get(cd, "🏬"), cd.title(),
+                         f"{fmt_num(round(vc))} cajas",
+                         sub=f"{fmt_clp(vv)} · {pct*100:.0f}%"))
     st.markdown(f'<div class="kpi-grid">{"".join(kpis)}</div>', unsafe_allow_html=True)
 
-    # Gráfico: cajas por CD.
-    _sec("Cajas por centro de distribución")
+    # Selector de métrica para el gráfico y las columnas por CD de la tabla.
+    metrica = st.radio("Métrica", ["Cajas", "Monto $"], horizontal=True,
+                       key="cajas_metrica")
+    es_caja = metrica == "Cajas"
+    val_col = "cantidad" if es_caja else "neto"
+    por_cd = por_cd_caja if es_caja else por_cd_venta
+    fmt_val = (lambda v: fmt_num(round(v))) if es_caja else fmt_clp
+
+    # Gráfico por CD según la métrica.
+    _sec(f"{metrica} por centro de distribución")
     serie_cd = por_cd.reindex(cols_cd).fillna(0)
     figb = go.Figure(go.Bar(
         x=[c.title() for c in serie_cd.index], y=serie_cd.values,
-        marker_color=_C["chart"], text=[fmt_num(round(v)) for v in serie_cd.values],
+        marker_color=_C["chart"], text=[fmt_val(v) for v in serie_cd.values],
         textposition="outside"))
     figb.update_layout(yaxis=dict(showgrid=False), xaxis=dict(tickfont=dict(size=11)))
     st.plotly_chart(_fig_base(figb, 300), use_container_width=True)
 
-    # Tabla SKU × CD.
+    # Tabla SKU × CD (métrica elegida en las columnas por CD) + totales de AMBAS.
     _sec("Detalle SKU × centro de distribución")
     piv = (caja.pivot_table(index=["producto_codigo", "nombre"], columns="cd",
-                            values="cantidad", aggfunc="sum", fill_value=0.0)
-               .reset_index())
+                            values=val_col, aggfunc="sum", fill_value=0.0))
+    tot_caja = caja.groupby(["producto_codigo", "nombre"])["cantidad"].sum()
+    tot_venta = caja.groupby(["producto_codigo", "nombre"])["neto"].sum()
     for cd in cols_cd:
         if cd not in piv.columns:
             piv[cd] = 0.0
-    piv["Total"] = piv[cols_cd].sum(axis=1)
-    piv = piv.sort_values("Total", ascending=False)
+    piv = piv[cols_cd].copy()
+    piv["Total cajas"] = tot_caja
+    piv["Venta $"] = tot_venta
+    piv = piv.reset_index().sort_values("Venta $" if not es_caja else "Total cajas",
+                                        ascending=False)
 
     disp = piv.rename(columns={"producto_codigo": "Código", "nombre": "Producto"})
-    orden = ["Código", "Producto"] + cols_cd + ["Total"]
-    disp = disp[orden].copy()
-    for c in cols_cd + ["Total"]:
-        disp[c] = disp[c].round().astype(int)
-    # Renombrar CD a Title Case para mostrar.
     disp = disp.rename(columns={c: c.title() for c in cols_cd})
-    st.dataframe(disp, use_container_width=True, hide_index=True,
+    cd_titles = [c.title() for c in cols_cd]
+    # Tipos: cajas → enteros; monto → enteros $ (se formatea con column_config).
+    for c in cd_titles:
+        disp[c] = disp[c].round().astype(int)
+    disp["Total cajas"] = disp["Total cajas"].round().astype(int)
+    disp["Venta $"] = disp["Venta $"].round().astype(int)
+    disp = disp[["Código", "Producto"] + cd_titles + ["Total cajas", "Venta $"]]
+
+    money_fmt = "$%d"
+    colcfg = {"Venta $": st.column_config.NumberColumn("Venta $", format=money_fmt)}
+    if not es_caja:  # columnas por CD en pesos
+        for c in cd_titles:
+            colcfg[c] = st.column_config.NumberColumn(f"{c} $", format=money_fmt)
+    st.dataframe(disp, use_container_width=True, hide_index=True, column_config=colcfg,
                  height=min(560, 60 + 28 * min(len(disp), 18)))
 
-    st.caption(f"**{len(disp)} SKUs** · Total {fmt_num(round(total_cajas))} cajas en el período.")
+    st.caption(f"**{len(disp)} SKUs** · {fmt_num(round(total_cajas))} cajas · "
+               f"{fmt_clp(total_venta)} en el período. Las columnas por CD muestran "
+               f"**{metrica}** (cambia con el selector de arriba).")
 
     from app.export import to_xlsx, to_csv
-    nb = f"cajas_por_cd_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}"
+    nb = f"cajas_monto_por_cd_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}"
     d1, d2 = st.columns(2)
     with d1:
-        st.download_button("📗 Descargar Excel", to_xlsx(disp, hoja="Cajas por CD"),
+        st.download_button("📗 Descargar Excel", to_xlsx(disp, hoja="Cajas y monto por CD"),
                            f"{nb}.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            key=f"dl_xlsx_{nb}", use_container_width=True)
