@@ -785,8 +785,11 @@ def _anio_ventas(client, year, soc_ids, df_prod_dim):
                           datetime.date(year, 12, 31), soc_ids)
     if dy.empty:
         return dy
+    _cols = ["producto_codigo", "nombre", "categoria", "subcategoria"]
+    if "unidad_medida" in df_prod_dim.columns:
+        _cols.append("unidad_medida")
     dp = (df_prod_dim.rename(columns={"codigo": "producto_codigo"})
-          [["producto_codigo", "nombre", "categoria", "subcategoria"]].copy())
+          [_cols].copy())
     dp["categoria"] = dp["categoria"].fillna("SIN CATEGORIA").map(_canon_cat)
     dy = dy.merge(dp, on="producto_codigo", how="left")
     dy["categoria"] = dy["categoria"].fillna("SIN CATEGORIA").map(_canon_cat)
@@ -948,9 +951,18 @@ def _s05_productos_fondo(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim):
 
 # ─── Sección 06 · Cajas por centro de distribución ────────────────────────────
 _CDS = ["SANTIAGO", "CONCEPCION", "TEMUCO"]  # centros de distribución (Gran Natural)
+# Alias de sucursal → CD canónico. "C. Matriz" (casa matriz de Acuña, en
+# Concepción) = Concepción (confirmado). Así Concepción no queda partida.
+_CD_ALIAS = {"C. MATRIZ": "CONCEPCION", "CASA MATRIZ": "CONCEPCION", "MATRIZ": "CONCEPCION"}
 
 
-def _s06_cajas_cd(df_all: pd.DataFrame, f_ini, f_fin):
+def _norm_cd(serie: pd.Series) -> pd.Series:
+    """Normaliza el nombre del centro de distribución (mayúsculas + alias)."""
+    return (serie.fillna("(sin CD)").astype(str).str.strip().str.upper()
+            .replace("", "(sin CD)").replace(_CD_ALIAS))
+
+
+def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_dim):
     _sec("Cajas y monto por SKU y centro de distribución")
     st.caption("Cajas = cantidad de líneas cuya unidad de medida es **CAJA** "
                "(excluye fletes/servicios). Monto = Fact-NC (neto). Ambos netos de "
@@ -970,8 +982,7 @@ def _s06_cajas_cd(df_all: pd.DataFrame, f_ini, f_fin):
         return
     caja["cantidad"] = pd.to_numeric(caja["cantidad"], errors="coerce").fillna(0)
     caja["neto"] = pd.to_numeric(caja["neto"], errors="coerce").fillna(0)
-    caja["cd"] = (caja["sucursal"].fillna("(sin CD)").astype(str).str.strip()
-                  .str.upper().replace("", "(sin CD)"))
+    caja["cd"] = _norm_cd(caja["sucursal"])
 
     # Filtro opcional por categoría (dentro de las que vienen en caja).
     cats = sorted(caja["categoria"].dropna().unique().tolist())
@@ -1074,6 +1085,61 @@ def _s06_cajas_cd(df_all: pd.DataFrame, f_ini, f_fin):
         st.download_button("📄 Descargar CSV", to_csv(disp), f"{nb}.csv",
                            "text/csv", key=f"dl_csv_{nb}", use_container_width=True)
 
+    # ── Total mensual por CD (año completo) ──────────────────────────────────────
+    _sec(f"Total mensual de {metrica.lower()} por CD · {f_fin.year}")
+    with st.spinner("Cargando el año…"):
+        dy = _anio_ventas_cached(client, f_fin.year, soc_ids, df_prod_dim)
+    if dy.empty or "unidad_medida" not in dy.columns:
+        st.caption("Sin datos anuales para mostrar el detalle mensual.")
+        return
+    cy = dy[dy["unidad_medida"].astype(str).str.upper() == "CAJA"].copy()
+    if cats_sel:
+        cy = cy[cy["categoria"].isin(cats_sel)]
+    if cy.empty:
+        st.caption("Sin cajas en el año para el filtro elegido.")
+        return
+    cy["cantidad"] = pd.to_numeric(cy["cantidad"], errors="coerce").fillna(0)
+    cy["neto"] = pd.to_numeric(cy["neto"], errors="coerce").fillna(0)
+    cy["cd"] = _norm_cd(cy["sucursal"])
+    cds_y = ([c for c in _CDS if c in set(cy["cd"])]
+             + [c for c in sorted(cy["cd"].unique()) if c not in _CDS])
+
+    mp = cy.pivot_table(index="mes_num", columns="cd", values=val_col,
+                        aggfunc="sum", fill_value=0.0)
+    for cd in cds_y:
+        if cd not in mp.columns:
+            mp[cd] = 0.0
+    mp = mp[cds_y].sort_index()
+
+    # Barras apiladas: alto de la barra = total del mes; color = CD.
+    figm = go.Figure()
+    for i, cd in enumerate(cds_y):
+        figm.add_bar(x=[MESES_C[m] for m in mp.index], y=mp[cd].values,
+                     name=cd.title(), marker_color=_PALETA[i % len(_PALETA)])
+    figm.update_layout(barmode="stack", yaxis=dict(showgrid=False),
+                       legend=dict(orientation="h", y=1.12))
+    st.plotly_chart(_fig_base(figm, 340), use_container_width=True)
+
+    # Tabla Mes × CD con Total por mes y fila TOTAL.
+    tblm = mp.copy()
+    tblm["Total"] = tblm.sum(axis=1)
+    tblm.loc["TOTAL"] = tblm.sum()
+    tblm.index = [MESES_C[m] if m != "TOTAL" else "TOTAL" for m in tblm.index]
+    tblm = tblm.reset_index().rename(columns={"index": "Mes", "mes_num": "Mes"})
+    ren = {c: c.title() for c in cds_y}
+    tblm = tblm.rename(columns=ren)
+    cd_titles = [c.title() for c in cds_y]
+    for c in cd_titles + ["Total"]:
+        tblm[c] = tblm[c].round().astype(int)
+    if es_caja:
+        cfg = None
+    else:
+        cfg = {c: st.column_config.NumberColumn(f"{c} $", format="$%d") for c in cd_titles}
+        cfg["Total"] = st.column_config.NumberColumn("Total $", format="$%d")
+    st.dataframe(tblm, use_container_width=True, hide_index=True, column_config=cfg)
+    st.caption(f"Total mensual de **{metrica.lower()}** por centro de distribución "
+               f"en {f_fin.year} (cambia con el selector Cajas/Monto).")
+
 
 def render(client, anio: int, mes: int):
     f_ini, f_fin, soc_ids, cats_sel, df_prod_dim = _page_filters(
@@ -1130,4 +1196,4 @@ def render(client, anio: int, mes: int):
         _s05_productos_fondo(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim)
 
     with tab_cajas:
-        _s06_cajas_cd(df_all, f_ini, f_fin)
+        _s06_cajas_cd(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim)
