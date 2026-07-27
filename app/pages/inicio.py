@@ -788,7 +788,13 @@ def render(client, anio: int, mes: int, nombre_usuario: str = ""):
     pct_anterior = None
     if es_gerencia():
         anio_prev, mes_prev = _mes_anterior(anio, mes)
-        df_prev = get_resumen(client, anio_prev, mes_prev)
+        # Fail-soft: este dato solo alimenta el delta "vs mes anterior" (cosmético).
+        # Es una segunda lectura de la vista pesada; si se cae por timeout no debe
+        # tumbar Inicio, que ya tiene los datos del mes en curso.
+        try:
+            df_prev = get_resumen(client, anio_prev, mes_prev)
+        except Exception:
+            df_prev = pd.DataFrame()
         if not df_prev.empty:
             df_prev = _preparar_df(df_prev)
             fnc_p = df_prev["fact_nc"].sum()

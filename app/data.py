@@ -2,9 +2,42 @@
 El cliente ya trae el JWT del usuario → RLS se aplica automáticamente.
 No se recalcula ninguna métrica aquí: se leen desde las vistas de Postgres.
 """
+import time
+
 import pandas as pd
 from datetime import date, timedelta
 from supabase import Client
+
+# Errores transitorios de Postgres que justifican reintentar la consulta:
+#   57014 = statement timeout (la consulta se pasó del límite del rol)
+#   08006/08003 = conexión caída/perdida
+_TRANSITORIOS = ("57014", "08006", "08003", "statement timeout")
+
+
+def _es_transitorio(exc: Exception) -> bool:
+    txt = str(exc)
+    return any(cod in txt for cod in _TRANSITORIOS)
+
+
+def _con_reintento(fn, intentos: int = 3, espera: float = 1.0):
+    """
+    Ejecuta `fn` reintentando ante errores transitorios (timeout de statement).
+
+    Por qué: `v_resumen_vendedor_mes` agrega TODO el histórico de fact_ventas en
+    cada llamada (el filtro anio/mes no se puede empujar a un índice porque son
+    columnas calculadas). Con la caché de Postgres fría —la primera entrada del
+    día, o tras dormirse el proyecto— la consulta tarda varias veces más de lo
+    normal y puede cruzar el statement_timeout del rol, tirando un 57014 que
+    reventaba la página de Inicio. El primer intento deja los buffers calientes,
+    así que el reintento entra rápido.
+    """
+    for i in range(intentos):
+        try:
+            return fn()
+        except Exception as exc:
+            if i == intentos - 1 or not _es_transitorio(exc):
+                raise
+            time.sleep(espera * (i + 1))
 
 
 # ── Resumen principal (v_resumen_vendedor_mes) ───────────────────────────────
@@ -13,12 +46,14 @@ def get_resumen(client: Client, anio: int, mes: int) -> pd.DataFrame:
     """
     Lee la vista de métricas para el período dado.
     RLS filtra automáticamente: vendedor ve solo sus filas.
+    Reintenta ante timeouts transitorios (ver `_con_reintento`).
     """
-    r = (client.table("v_resumen_vendedor_mes")
-         .select("*")
-         .eq("anio", anio)
-         .eq("mes", mes)
-         .execute())
+    r = _con_reintento(lambda: (
+        client.table("v_resumen_vendedor_mes")
+        .select("*")
+        .eq("anio", anio)
+        .eq("mes", mes)
+        .execute()))
     if not r.data:
         return pd.DataFrame()
     return pd.DataFrame(r.data)
@@ -26,10 +61,11 @@ def get_resumen(client: Client, anio: int, mes: int) -> pd.DataFrame:
 
 def get_resumen_anio(client: Client, anio: int) -> pd.DataFrame:
     """Devuelve todos los meses de un año (para tendencias)."""
-    r = (client.table("v_resumen_vendedor_mes")
-         .select("*")
-         .eq("anio", anio)
-         .execute())
+    r = _con_reintento(lambda: (
+        client.table("v_resumen_vendedor_mes")
+        .select("*")
+        .eq("anio", anio)
+        .execute()))
     return pd.DataFrame(r.data) if r.data else pd.DataFrame()
 
 
