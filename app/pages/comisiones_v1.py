@@ -562,9 +562,9 @@ def render_tab(client, anio: int, mes: int):
                 agendamientos los genera Autoventa según la ruta y frecuencia de cada
                 cliente (las configura el jefe de ventas), por eso cambian mes a mes. Si no
                 se han cargado, el KPI queda en “—” y no suma ni resta.</li>
-            <li><strong>Galletas NY</strong> es columna indicadora (no paga directo):
-                % de clientes del vendedor que llevan la línea nueva. La línea empuja
-                igual la Amplitud al ser una categoría nueva.</li>
+            <li>La colocación de <strong>Galletas NY</strong> ya no es una columna del
+                scorecard: al ser una categoría nueva, empuja sola la Amplitud. El detalle
+                de qué clientes la llevan está en “Detalle por vendedor → Activos”.</li>
           </ul>
         </div>
         """, unsafe_allow_html=True)
@@ -1014,7 +1014,6 @@ def _tabla(df: pd.DataFrame):
         "<th title='Clientes que compraron / clientes en cartera'>Efec. cartera</th>"
         "<th title='Promedio de líneas (categorías) distintas por cliente / meta'>Amplitud</th>"
         "<th title='Visitas / agendamientos (reporte Cobertura-Efectividad de Autoventa)'>Cob. ruta</th>"
-        "<th title='Indicador (no paga directo): clientes con Galletas NY y % de penetración'>Galletas NY</th>"
         "<th title='Suma de los 5 KPIs (tope 5%)'>Tasa Efec.</th>"
         "<th title='Tasa efectiva × venta real'>Comisión $</th>"
     )
@@ -1025,10 +1024,6 @@ def _tabla(df: pd.DataFrame):
         nv_tip = (f"{fmt_num(r.get('nuevos_solo'))} nuevos + "
                   f"{fmt_num(r.get('react_solo'))} reactivados / meta "
                   f"{fmt_num(r.get('nuevos_meta'))} · dormidos: {fmt_num(r.get('dormidos'))}")
-        # Galletas NY: indicador informativo.
-        ny_tip = (f"Penetración {fmt_pct(r.get('ny_pct'))} de "
-                  f"{fmt_num(r.get('clientes_activos'))} clientes activos — indicador, no paga directo")
-        ny = f"{fmt_num(r.get('ny_clientes'))} ({fmt_pct(r.get('ny_pct'))})"
         rows += f"""<tr>
           <td style='text-align:left'>{r['nombre_canonico']}</td>
           <td>{fmt_clp(r.get('fact_nc'))}</td>
@@ -1037,16 +1032,15 @@ def _tabla(df: pd.DataFrame):
           {_celda_kpi(r, 'cobertura')}
           {_celda_kpi(r, 'amplitud')}
           {_celda_kpi(r, 'ruta')}
-          <td title='{ny_tip}'>{ny}</td>
           <td><strong>{fmt_pct(r.get('tasa_efectiva'))}</strong></td>
           <td><strong>{fmt_clp(r.get('comision_total'))}</strong></td>
         </tr>"""
 
+    # Fila TOTAL: 9 columnas (vendedor, venta, 5 KPIs, tasa, comisión).
     rows += f"""<tr class='total-row'>
       <td style='text-align:left'>TOTAL</td>
       <td>{fmt_clp(df['fact_nc'].sum())}</td>
       <td></td><td></td><td></td><td></td><td></td><td></td>
-      <td></td>
       <td>{fmt_clp(df['comision_total'].sum())}</td>
     </tr>"""
 
