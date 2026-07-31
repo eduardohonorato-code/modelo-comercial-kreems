@@ -897,6 +897,27 @@ def get_cartera_map(client: Client) -> pd.DataFrame:
 
 # ── Propuesta de Comisiones v1 (scorecard 5 KPIs) ───────────────────────────
 
+def get_comision_ruta(client: Client, anio: int, mes: int) -> pd.DataFrame:
+    """Cobertura de ruta del mes (tabla comision_ruta_mensual): agendamientos y
+    visitas cargados desde el reporte de Autoventa. Fail-soft si no existe."""
+    try:
+        r = (client.table("comision_ruta_mensual")
+             .select("vendedor_id,agendamientos,visitas,pedidos")
+             .eq("anio", anio).eq("mes", mes)
+             .execute())
+        return pd.DataFrame(r.data) if r.data else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def upsert_comision_ruta(client: Client, registros: list):
+    """Guarda agendamientos/visitas por vendedor.
+    registros: [{vendedor_id, anio, mes, agendamientos, visitas, pedidos}]"""
+    if registros:
+        client.table("comision_ruta_mensual").upsert(
+            registros, on_conflict="vendedor_id,anio,mes").execute()
+
+
 def get_comision_v1_parametros(client: Client) -> dict:
     """Parámetros del modelo v1 (umbrales de pago por KPI) como dict
     clave→valor. Fail-soft: tabla inexistente → {} (la app usa defaults)."""
