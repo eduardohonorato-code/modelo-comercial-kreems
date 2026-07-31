@@ -64,7 +64,6 @@ PCT    = {k: p * TASA_MAX for k, _, p in KPIS}   # % sobre venta de cada KPI
 
 # Defaults de metas cuando no hay valor cargado ni fuente previa.
 DEFAULT_META_LINEAS = 2.0   # amplitud: líneas (categorías) x cliente
-UMBRAL_PAGO = 0.80          # umbral usado solo si modo_pago = 1
 
 # Meta automática de Nuevos+Reactivados (override manual en meta_nuevos_react):
 PCT_META_NUEVOS = 0.02   # nuevos: 2% de la cartera (mín. 2)
@@ -102,20 +101,19 @@ def _es_galleta_ny(codigo, categoria) -> bool:
 
 
 # ── Motor de pago ────────────────────────────────────────────────────────────
-def _factor(ratio, con_umbral: bool = False, umbral: float = UMBRAL_PAGO) -> float | None:
-    """Fracción del KPI que se paga, según la regla vigente.
+def _factor(ratio, umbral: float = 0.0) -> float | None:
+    """Fracción del KPI que se paga.
 
-    · Proporcional (default): cobras el mismo % que lograste, tope 100%.
-      Logro 90% → paga 90% del indicador.
-    · Con umbral: bajo el umbral paga $0; del umbral al 100% sube lineal.
-      Logro 90% con umbral 80% → paga 50%.
+    El umbral es una PUERTA DE ENTRADA, no una reescala:
+      · logro < umbral  → 0 (no alcanza el mínimo para cobrar ese KPI)
+      · logro ≥ umbral  → paga proporcional al logro real, con tope 100%
+    Ej. umbral 80%: logro 79% → 0 · 80% → 0,80 · 90% → 0,90 · 110% → 1,00.
+    Umbral 0 = sin umbral (proporcional puro desde el primer punto).
     """
     if ratio is None or pd.isna(ratio):
         return None
-    if con_umbral:
-        if umbral >= 1.0:
-            return 1.0 if ratio >= 1.0 else 0.0
-        return max(0.0, min(1.0, (ratio - umbral) / (1.0 - umbral)))
+    if umbral > 0 and ratio < umbral:
+        return 0.0
     return max(0.0, min(1.0, ratio))
 
 
@@ -147,10 +145,9 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
         if c not in base.columns:
             base[c] = None
 
-    # Regla de pago vigente (parámetro editable por gerencia).
+    # Umbral de acceso por KPI (editable por gerencia; 0 = sin umbral).
     params = get_comision_v1_parametros(client)
-    con_umbral = bool(float(params.get("modo_pago", 0)) >= 1)
-    umbral = float(params.get("umbral_pago", UMBRAL_PAGO))
+    umbrales = {k: float(params.get(f"umbral_{k}", 0.0)) for k, _, _ in KPIS}
 
     # Cobertura de ruta: agendamientos y visitas del reporte de Autoventa
     # (carga manual mensual; el reporte no está publicado en la API).
@@ -246,7 +243,6 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
             "nuevos_solo": r.get("nuevos_solo") or 0, "react_solo": r.get("react_solo") or 0,
             "dormidos": dorm, "clientes_activos": r.get("clientes_activos") or 0,
             "agendamientos": agend, "visitas": vis,
-            "con_umbral": con_umbral, "umbral": umbral,
             # Overrides crudos (para que el editor distinga manual vs automático)
             "ov_meta_venta": r.get("meta_venta"),
             "ov_meta_nuevos_react": r.get("meta_nuevos_react"),
@@ -256,11 +252,12 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
         tasa = 0.0
         for k, _lbl, _peso in KPIS:
             rt = _ratio(reales[k], metas_ef[k])
-            f  = _factor(rt, con_umbral, umbral)
+            f  = _factor(rt, umbrales[k])
             fila[f"{k}_real"] = reales[k]
             fila[f"{k}_meta"] = metas_ef[k]
             fila[f"{k}_logro"] = rt
             fila[f"{k}_factor"] = f
+            fila[f"{k}_umbral"] = umbrales[k]
             aporte = (f or 0.0) * PCT[k]
             fila[f"{k}_aporte"] = aporte
             fila[f"{k}_comision"] = aporte * (r.get("fact_nc") or 0)
@@ -539,11 +536,11 @@ def render_tab(client, anio: int, mes: int):
             <li>Cada KPI aporta <em>peso × 5%</em> como máximo: Cuota 1,50%,
                 Clientes nuevos 1,00%, Efectividad de cartera 1,00%, Amplitud 0,75%
                 y Cobertura de ruta 0,75%.</li>
-            <li><strong>Regla de pago</strong> (conmutable al final de la página):
-                <em>proporcional</em> — cobra el mismo % que cumplió, hasta el 100%
-                (logro 90% → 90% del KPI); o <em>con umbral</em> — no paga bajo el 80%
-                de la meta y de ahí sube lineal. La comparación en plata de ambas
-                reglas se muestra junto al selector.</li>
+            <li><strong>Pago proporcional con umbral de acceso</strong> (editable por
+                indicador al final de la página): bajo el umbral ese KPI paga $0; una vez
+                alcanzado, se paga <em>proporcional a lo que va</em> — logro 90% → 90% del
+                indicador. Ej. cuota con umbral 80%: logro 79% → $0; 80% → 1,20%;
+                90% → 1,35%; 100% o más → 1,50%. Umbral en 0 = paga desde el primer punto.</li>
             <li><strong>Cuota</strong> = Fact-NC / meta de venta.</li>
             <li><strong>Nuevos + reactivados</strong> = clientes de 1ª compra + clientes
                 que vuelven tras {GAP_REACTIVACION}+ meses dormidos. La <strong>meta es
@@ -580,9 +577,9 @@ def render_tab(client, anio: int, mes: int):
                 unsafe_allow_html=True)
     _editor_metas(client, df, anio, mes)
 
-    st.markdown('<div class="seccion-titulo">Regla de pago</div>',
+    st.markdown('<div class="seccion-titulo">Umbrales de pago por indicador</div>',
                 unsafe_allow_html=True)
-    _selector_regla(client, df)
+    _editor_umbrales(client, df)
 
 
 def _editor_ruta(client, df: pd.DataFrame, anio: int, mes: int):
@@ -644,56 +641,79 @@ def _editor_ruta(client, df: pd.DataFrame, anio: int, mes: int):
             st.error(f"Error al guardar: {e}")
 
 
-def _selector_regla(client, df: pd.DataFrame):
-    """Conmuta entre pago proporcional y pago con umbral, y muestra el impacto
-    en plata de la regla no elegida para poder compararlas."""
+def _total_con_umbrales(df: pd.DataFrame, umbrales: dict) -> float:
+    """Recalcula la comisión total del mes con otro juego de umbrales."""
+    tot = 0.0
+    for _, r in df.iterrows():
+        tasa = sum((_factor(r.get(f"{k}_logro"), umbrales.get(k, 0.0)) or 0.0) * PCT[k]
+                   for k, _lbl, _peso in KPIS)
+        tot += tasa * (r.get("fact_nc") or 0)
+    return tot
+
+
+def _editor_umbrales(client, df: pd.DataFrame):
+    """Umbral de acceso por KPI: bajo el umbral ese indicador no paga; pasado el
+    umbral paga proporcional al logro real. 0 = sin umbral."""
     params = get_comision_v1_parametros(client)
     if not params:
-        st.info("Corre `sql/027_comision_v2_cobertura_ruta.sql` en Supabase para "
-                "habilitar el cambio de regla (mientras tanto rige la proporcional).")
+        st.info("Corre `sql/028_comision_umbral_por_kpi.sql` en Supabase para poder "
+                "editar los umbrales (mientras tanto rige 0 = sin umbral).")
         return
-    actual = int(float(params.get("modo_pago", 0)))
-    umbral = float(params.get("umbral_pago", UMBRAL_PAGO))
+    actuales = {k: float(params.get(f"umbral_{k}", 0.0)) for k, _, _ in KPIS}
 
-    c1, c2 = st.columns([1.3, 1])
-    with c1:
-        opciones = {
-            0: "Proporcional — cobra el mismo % que cumplió",
-            1: f"Con umbral — no paga bajo el {umbral*100:.0f}% de la meta",
-        }
-        elegido = st.radio("Regla vigente", options=list(opciones.keys()),
-                           format_func=lambda k: opciones[k],
-                           index=actual, key="modo_pago_radio")
-        if elegido != actual:
-            if st.button("💾 Aplicar regla", type="primary", key="save_modo_pago"):
-                try:
-                    upsert_comision_v1_parametros(client, {"modo_pago": float(elegido)})
-                    st.success("✅ Regla actualizada.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+    st.caption(
+        "**Desde qué % de la meta empieza a pagar cada indicador.** Bajo ese piso el "
+        "KPI paga $0; alcanzado el piso se paga **proporcional a lo que va** (logro 90% "
+        "→ 90% del indicador). Deja un umbral en **0** para quitarlo y que pague desde "
+        "el primer punto.")
 
-    # Comparación de costo entre ambas reglas (con los logros del mes en curso).
-    with c2:
-        tot_actual = df["comision_total"].fillna(0).sum()
-        alt = 0.0
-        for _, r in df.iterrows():
-            tasa = 0.0
-            for k, _lbl, _peso in KPIS:
-                f = _factor(r.get(f"{k}_logro"), con_umbral=(actual == 0), umbral=umbral)
-                tasa += (f or 0.0) * PCT[k]
-            alt += tasa * (r.get("fact_nc") or 0)
-        lbl_act = "proporcional" if actual == 0 else "con umbral"
-        lbl_alt = "con umbral" if actual == 0 else "proporcional"
-        delta = alt - tot_actual
-        st.markdown(
-            f"""<div class="nota-embudo">
-            <strong>Comparación del mes</strong><br>
-            Regla vigente ({lbl_act}): <strong>{fmt_clp(tot_actual)}</strong><br>
-            Si fuera {lbl_alt}: <strong>{fmt_clp(alt)}</strong>
-            <span style='color:{"#C0392B" if delta > 0 else "#1A7F4B"}'>
-            ({'+' if delta >= 0 else ''}{fmt_clp(delta)})</span>
-            </div>""", unsafe_allow_html=True)
+    with st.form("form_umbrales_kpi", clear_on_submit=False):
+        cols = st.columns(len(KPIS))
+        nuevos = {}
+        for col, (k, lbl, peso) in zip(cols, KPIS):
+            nuevos[k] = col.number_input(
+                lbl, min_value=0, max_value=100, step=5,
+                value=int(round(actuales[k] * 100)), key=f"umb_{k}",
+                help=f"Aporta hasta {PCT[k]*100:.2f}% de la venta.")
+        guardar = st.form_submit_button("💾 Guardar umbrales", type="primary",
+                                        use_container_width=True)
+    if guardar:
+        try:
+            upsert_comision_v1_parametros(
+                client, {f"umbral_{k}": round(v / 100, 4) for k, v in nuevos.items()})
+            st.success("✅ Umbrales guardados.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error al guardar: {e}")
+
+    # ── Impacto en plata: umbrales vigentes vs sin umbrales ──────────────────
+    tot_actual = df["comision_total"].fillna(0).sum()
+    tot_sin = _total_con_umbrales(df, {k: 0.0 for k, _, _ in KPIS})
+    delta = tot_actual - tot_sin
+    filas = ""
+    for k, lbl, _p in KPIS:
+        u = actuales[k]
+        n_bajo = int(sum(1 for _, r in df.iterrows()
+                         if r.get(f"{k}_logro") is not None
+                         and pd.notna(r.get(f"{k}_logro"))
+                         and u > 0 and r[f"{k}_logro"] < u))
+        filas += (f"<tr><td style='text-align:left'>{lbl}</td>"
+                  f"<td>{'sin umbral' if u <= 0 else fmt_pct(u)}</td>"
+                  f"<td>{n_bajo if u > 0 else '—'}</td></tr>")
+    st.markdown(f"""
+    <div class="nota-embudo">
+      <strong>Impacto de los umbrales vigentes en este mes</strong><br>
+      Con los umbrales actuales: <strong>{fmt_clp(tot_actual)}</strong> &nbsp;·&nbsp;
+      Sin ningún umbral: <strong>{fmt_clp(tot_sin)}</strong>
+      <span style='color:{"#C0392B" if delta < 0 else "#1A7F4B"}'>
+        ({'' if delta >= 0 else '−'}{fmt_clp(abs(delta))} por los umbrales)</span>
+      <div class="tabla-container" style="margin-top:.6rem">
+        <table class="kreems"><thead><tr>
+          <th style='text-align:left'>Indicador</th><th>Umbral</th>
+          <th title='Vendedores que no alcanzan el umbral y por eso no cobran este KPI'>No lo alcanzan</th>
+        </tr></thead><tbody>{filas}</tbody></table>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
 
 _EST_ORDEN = {"Activo": 0, "En riesgo": 1, "Dormido": 2, "Sin compras": 3}
@@ -979,6 +999,9 @@ def _celda_kpi(r, k) -> str:
                    if meta else "sin datos de Autoventa cargados")
     else:
         detalle = f"{fmt_num(real)} / {fmt_num(meta)}"
+    umb = r.get(f"{k}_umbral")
+    if umb is not None and pd.notna(umb) and float(umb) > 0:
+        detalle += f" · paga desde {fmt_pct(umb)}"
     return f"<td class='{cls}' title='{detalle}'>{fmt_pct(logro)}</td>"
 
 
