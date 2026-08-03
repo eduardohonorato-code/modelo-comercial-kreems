@@ -955,6 +955,11 @@ _CDS = ["SANTIAGO", "CONCEPCION", "TEMUCO"]  # centros de distribución (Gran Na
 # Concepción) = Concepción (confirmado). Así Concepción no queda partida.
 _CD_ALIAS = {"C. MATRIZ": "CONCEPCION", "CASA MATRIZ": "CONCEPCION", "MATRIZ": "CONCEPCION"}
 
+# Categorías que se venden por bulto aunque el catálogo de Obuma las tipifique
+# con otra unidad. Galletas NY viene como "UN", pero la unidad de venta real es
+# el display de 12 (~$14.500 c/u): sin esto quedaban invisibles en esta pestaña.
+_CATS_BULTO = {"GALLETAS"}
+
 
 def _norm_cd(serie: pd.Series) -> pd.Series:
     """Normaliza el nombre del centro de distribución (mayúsculas + alias)."""
@@ -962,10 +967,19 @@ def _norm_cd(serie: pd.Series) -> pd.Series:
             .replace("", "(sin CD)").replace(_CD_ALIAS))
 
 
+def _mask_bulto(df: pd.DataFrame) -> pd.Series:
+    """Líneas que cuentan como bulto: unidad CAJA + las categorías de _CATS_BULTO."""
+    m = df["unidad_medida"].astype(str).str.upper() == "CAJA"
+    if "categoria" in df.columns:
+        m |= df["categoria"].astype(str).str.strip().str.upper().isin(_CATS_BULTO)
+    return m
+
+
 def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_dim):
-    _sec("Cajas y monto por SKU y centro de distribución")
-    st.caption("Cajas = cantidad de líneas cuya unidad de medida es **CAJA** "
-               "(excluye fletes/servicios). Monto = Fact-NC (neto). Ambos netos de "
+    _sec("Bultos y monto por SKU y centro de distribución")
+    st.caption("Bultos = líneas cuya unidad de medida es **CAJA**, más **Galletas NY** "
+               "(el ERP las tipifica como UN, pero se venden por display de 12). "
+               "Excluye fletes/servicios. Monto = Fact-NC (neto). Ambos netos de "
                "notas de crédito. Refleja el período seleccionado arriba.")
 
     if df_all.empty or "unidad_medida" not in df_all.columns:
@@ -976,7 +990,7 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
             _empty()
         return
 
-    caja = df_all[df_all["unidad_medida"].astype(str).str.upper() == "CAJA"].copy()
+    caja = df_all[_mask_bulto(df_all)].copy()
     if caja.empty:
         _empty()
         return
@@ -987,7 +1001,7 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
     # Filtro opcional por categoría (dentro de las que vienen en caja).
     cats = sorted(caja["categoria"].dropna().unique().tolist())
     cats_sel = st.multiselect("Categoría (opcional)", cats,
-                              placeholder="Todas las categorías de caja",
+                              placeholder="Todas las categorías por bulto",
                               key="cajas_cat")
     if cats_sel:
         caja = caja[caja["categoria"].isin(cats_sel)]
@@ -1006,7 +1020,7 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
     por_cd_venta = caja.groupby("cd")["neto"].sum()
 
     # KPIs: totales de cajas y monto + un CD por tarjeta (cajas + monto en el sub).
-    kpis = [_kic("📦", "Cajas totales", fmt_num(round(total_cajas))),
+    kpis = [_kic("📦", "Bultos totales", fmt_num(round(total_cajas))),
             _kic("💰", "Monto total", fmt_clp(total_venta))]
     _emoji = {"SANTIAGO": "🏙️", "CONCEPCION": "🌆", "TEMUCO": "🌲"}
     for cd in cols_cd[:3]:
@@ -1014,14 +1028,14 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
         vv = float(por_cd_venta.get(cd, 0))
         pct = vc / total_cajas if total_cajas else 0
         kpis.append(_kic(_emoji.get(cd, "🏬"), cd.title(),
-                         f"{fmt_num(round(vc))} cajas",
+                         f"{fmt_num(round(vc))} bultos",
                          sub=f"{fmt_clp(vv)} · {pct*100:.0f}%"))
     st.markdown(f'<div class="kpi-grid">{"".join(kpis)}</div>', unsafe_allow_html=True)
 
     # Selector de métrica para el gráfico y las columnas por CD de la tabla.
-    metrica = st.radio("Métrica", ["Cajas", "Monto $"], horizontal=True,
-                       key="cajas_metrica")
-    es_caja = metrica == "Cajas"
+    metrica = st.radio("Métrica", ["Bultos", "Monto $"], horizontal=True,
+                       key="cajas_metrica_v2")
+    es_caja = metrica == "Bultos"
     val_col = "cantidad" if es_caja else "neto"
     por_cd = por_cd_caja if es_caja else por_cd_venta
     fmt_val = (lambda v: fmt_num(round(v))) if es_caja else fmt_clp
@@ -1046,9 +1060,9 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
         if cd not in piv.columns:
             piv[cd] = 0.0
     piv = piv[cols_cd].copy()
-    piv["Total cajas"] = tot_caja
+    piv["Total bultos"] = tot_caja
     piv["Venta $"] = tot_venta
-    piv = piv.reset_index().sort_values("Venta $" if not es_caja else "Total cajas",
+    piv = piv.reset_index().sort_values("Venta $" if not es_caja else "Total bultos",
                                         ascending=False)
 
     disp = piv.rename(columns={"producto_codigo": "Código", "nombre": "Producto"})
@@ -1057,9 +1071,9 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
     # Tipos: cajas → enteros; monto → enteros $ (se formatea con column_config).
     for c in cd_titles:
         disp[c] = disp[c].round().astype(int)
-    disp["Total cajas"] = disp["Total cajas"].round().astype(int)
+    disp["Total bultos"] = disp["Total bultos"].round().astype(int)
     disp["Venta $"] = disp["Venta $"].round().astype(int)
-    disp = disp[["Código", "Producto"] + cd_titles + ["Total cajas", "Venta $"]]
+    disp = disp[["Código", "Producto"] + cd_titles + ["Total bultos", "Venta $"]]
 
     money_fmt = "$%d"
     colcfg = {"Venta $": st.column_config.NumberColumn("Venta $", format=money_fmt)}
@@ -1069,15 +1083,15 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
     st.dataframe(disp, use_container_width=True, hide_index=True, column_config=colcfg,
                  height=min(560, 60 + 28 * min(len(disp), 18)))
 
-    st.caption(f"**{len(disp)} SKUs** · {fmt_num(round(total_cajas))} cajas · "
+    st.caption(f"**{len(disp)} SKUs** · {fmt_num(round(total_cajas))} bultos · "
                f"{fmt_clp(total_venta)} en el período. Las columnas por CD muestran "
                f"**{metrica}** (cambia con el selector de arriba).")
 
     from app.export import to_xlsx, to_csv
-    nb = f"cajas_monto_por_cd_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}"
+    nb = f"bultos_monto_por_cd_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}"
     d1, d2 = st.columns(2)
     with d1:
-        st.download_button("📗 Descargar Excel", to_xlsx(disp, hoja="Cajas y monto por CD"),
+        st.download_button("📗 Descargar Excel", to_xlsx(disp, hoja="Bultos y monto por CD"),
                            f"{nb}.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            key=f"dl_xlsx_{nb}", use_container_width=True)
@@ -1092,11 +1106,11 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
     if dy.empty or "unidad_medida" not in dy.columns:
         st.caption("Sin datos anuales para mostrar el detalle mensual.")
         return
-    cy = dy[dy["unidad_medida"].astype(str).str.upper() == "CAJA"].copy()
+    cy = dy[_mask_bulto(dy)].copy()
     if cats_sel:
         cy = cy[cy["categoria"].isin(cats_sel)]
     if cy.empty:
-        st.caption("Sin cajas en el año para el filtro elegido.")
+        st.caption("Sin bultos en el año para el filtro elegido.")
         return
     cy["cantidad"] = pd.to_numeric(cy["cantidad"], errors="coerce").fillna(0)
     cy["neto"] = pd.to_numeric(cy["neto"], errors="coerce").fillna(0)
@@ -1174,7 +1188,7 @@ def render(client, anio: int, mes: int):
     df_prev = _enrich(df_prev_raw, df_prod_dim, df_geo, cats_sel)
 
     tab_ventas, tab_maquinas, tab_prod, tab_cajas = st.tabs(
-        ["📊 Ventas", "🧊 Máquinas", "🔬 Productos a fondo", "📦 Cajas por CD"]
+        ["📊 Ventas", "🧊 Máquinas", "🔬 Productos a fondo", "📦 Cajas y bultos por CD"]
     )
 
     with tab_ventas:
