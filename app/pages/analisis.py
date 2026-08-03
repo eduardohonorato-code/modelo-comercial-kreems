@@ -1068,12 +1068,18 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
     disp = piv.rename(columns={"producto_codigo": "Código", "nombre": "Producto"})
     disp = disp.rename(columns={c: c.title() for c in cols_cd})
     cd_titles = [c.title() for c in cols_cd]
+    # Categoría a la vista: ordenada por bultos la tabla arranca con puras
+    # paletas y los SKUs de bajo volumen/alto precio (galletas) quedan bajo el
+    # scroll. Con la columna se filtran y se ubican de un vistazo.
+    cat_por_cod = caja.groupby("producto_codigo")["categoria"].first()
+    disp.insert(2, "Categoría", disp["Código"].map(cat_por_cod).fillna("—"))
     # Tipos: cajas → enteros; monto → enteros $ (se formatea con column_config).
     for c in cd_titles:
         disp[c] = disp[c].round().astype(int)
     disp["Total bultos"] = disp["Total bultos"].round().astype(int)
     disp["Venta $"] = disp["Venta $"].round().astype(int)
-    disp = disp[["Código", "Producto"] + cd_titles + ["Total bultos", "Venta $"]]
+    disp = disp[["Código", "Producto", "Categoría"] + cd_titles
+                + ["Total bultos", "Venta $"]]
 
     money_fmt = "$%d"
     colcfg = {"Venta $": st.column_config.NumberColumn("Venta $", format=money_fmt)}
@@ -1083,9 +1089,16 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
     st.dataframe(disp, use_container_width=True, hide_index=True, column_config=colcfg,
                  height=min(560, 60 + 28 * min(len(disp), 18)))
 
+    resumen_cat = " · ".join(
+        f"{c.title()} ({n})"
+        for c, n in disp["Categoría"].value_counts().items())
     st.caption(f"**{len(disp)} SKUs** · {fmt_num(round(total_cajas))} bultos · "
                f"{fmt_clp(total_venta)} en el período. Las columnas por CD muestran "
-               f"**{metrica}** (cambia con el selector de arriba).")
+               f"**{metrica}** (cambia con el selector de arriba). "
+               f"Categorías incluidas: {resumen_cat}. "
+               "Ordena por cualquier columna haciendo clic en su encabezado: por "
+               "bultos mandan las paletas, por **Venta $** suben los SKUs de bajo "
+               "volumen y alto precio (ej. galletas).")
 
     from app.export import to_xlsx, to_csv
     nb = f"bultos_monto_por_cd_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}"
