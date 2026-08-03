@@ -88,6 +88,10 @@ def _headers() -> dict:
     }
 
 
+class ObumaCuotaError(RuntimeError):
+    """La API bloqueó el método por exceder el límite de consultas del día."""
+
+
 def _get(path: str) -> dict:
     """
     GET a un endpoint de la API; devuelve el JSON ya parseado.
@@ -107,6 +111,13 @@ def _get(path: str) -> dict:
             body = r.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"HTTP {e.code} en {path}: {e.read()[:200]!r}")
+    # "Error 005... Bloqueo por exceder limite de consultas diario para el metodo"
+    # llega como texto plano con HTTP 200. Se distingue del resto porque NO se
+    # arregla reintentando: hay que esperar al día siguiente o gastar menos.
+    if "exceder limite de consultas" in body or "Error 005" in body:
+        raise ObumaCuotaError(
+            f"Obuma bloqueó {path.split('.json')[0].lstrip('/')} por cuota diaria "
+            f"de consultas. Respuesta: {body[:120]!r}")
     try:
         j = json.loads(body)
     except json.JSONDecodeError:
@@ -116,12 +127,39 @@ def _get(path: str) -> dict:
     return j
 
 
+# Caché en memoria de los métodos ya descargados en esta corrida, indexada por
+# (metodo, filtros). Obuma limita las consultas POR MÉTODO POR DÍA, y bajar
+# `clientes.list` cuesta 5 consultas (4.2k clientes / 1000 por página). Sin caché
+# la misma corrida lo bajaba hasta 4 veces —una por el loader de ventas y otra
+# por el de direcciones, multiplicado por los dos períodos de los primeros 5 días
+# del mes— y el 2º cron del día se topaba con "Error 005". La caché vive solo
+# mientras dura el proceso: cada corrida sigue viendo clientes/productos frescos.
+_CACHE: dict[tuple, list[dict]] = {}
+
+
+def limpiar_cache() -> None:
+    """Vacía la caché de la corrida (útil en tests o procesos largos)."""
+    _CACHE.clear()
+
+
 def _get_paginado(metodo: str, filtros: str = "") -> list[dict]:
     """
     Trae TODAS las filas de un método `<recurso>.<metodo>.json` paginando de a
     PAGE_SIZE. `metodo` es el nombre completo antes de `.json`, ej. 'ventas.list'
     o 'ventas.listItems'. `filtros` son parámetros extra de query.
+
+    El resultado queda cacheado por (metodo, filtros) durante la corrida: pedir
+    lo mismo dos veces no gasta cuota de la API.
     """
+    # Normalizar: algunos llamadores pasan el filtro con '&' adelante. Sin esto
+    # la query salía con '&&' y, peor, la misma consulta no compartía caché.
+    filtros = filtros.strip().lstrip("&")
+    clave = (metodo, filtros)
+    if clave in _CACHE:
+        logger.info("    %s (caché de la corrida; %d filas, 0 consultas)",
+                    metodo, len(_CACHE[clave]))
+        return _CACHE[clave]
+
     filas: list[dict] = []
     page = 1
     total_items = None
@@ -140,6 +178,7 @@ def _get_paginado(metodo: str, filtros: str = "") -> list[dict]:
         if not data or len(filas) >= total_items or len(data) < PAGE_SIZE:
             break
         page += 1
+    _CACHE[clave] = filas
     return filas
 
 

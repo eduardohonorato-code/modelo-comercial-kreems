@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 from etl.run_obuma_api import run as run_obuma          # noqa: E402
 from etl.run_autoventa_api import run as run_autoventa  # noqa: E402
+from etl.loaders.obuma_api import ObumaCuotaError       # noqa: E402
 
 
 def _periodos(hoy: date) -> list[tuple]:
@@ -61,10 +62,25 @@ def main() -> int:
                 [f"{a}-{m:02d}" for a, m in periodos])
 
     errores = 0
+    obuma_sin_cuota = False
     for periodo in periodos:
         for nombre, fn in [("Obuma", run_obuma), ("Autoventa", run_autoventa)]:
+            # Si Obuma ya bloqueó por cuota diaria, insistir con el siguiente
+            # período solo gasta más consultas y vuelve a fallar igual.
+            if nombre == "Obuma" and obuma_sin_cuota:
+                logger.warning("Obuma %d-%02d omitido: cuota diaria agotada.", *periodo)
+                continue
             try:
                 fn(periodo)
+            except ObumaCuotaError as exc:
+                errores += 1
+                obuma_sin_cuota = True
+                logger.error(
+                    "FALLO %s %d-%02d por CUOTA DIARIA de la API: %s\n"
+                    "  → No es un bug: Obuma limita las consultas por método/día. "
+                    "Se reintenta solo en la corrida de mañana; para forzar hoy "
+                    "hay que esperar el reset o pedir más cuota a Obuma.",
+                    nombre, *periodo, exc)
             except Exception:
                 errores += 1
                 logger.exception("FALLO %s %d-%02d (la carga continúa con el resto)",

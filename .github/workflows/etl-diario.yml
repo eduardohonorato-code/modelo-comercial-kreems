@@ -4,12 +4,18 @@ name: ETL diario Kreems (nube)
 # servidores de GitHub, SIN depender del PC de la oficina. Así los datos quedan
 # frescos temprano en la mañana para el reporte de las 9 AM.
 #
-# Horarios (GitHub usa UTC; Chile = UTC-4 en invierno / UTC-3 en verano):
+# Horario (GitHub usa UTC; Chile = UTC-4 en invierno / UTC-3 en verano):
 #   10:00 UTC -> 06:00 (invierno) / 07:00 (verano) Chile
-#   11:00 UTC -> 07:00 (invierno) / 08:00 (verano) Chile
-# Dos corridas por redundancia (el cron de GitHub puede retrasarse unos minutos).
-# Ambas terminan bastante antes de las 9 AM. El ETL es idempotente: correr dos
-# veces NO duplica.
+# Deja ~3 h de holgura antes del reporte de las 9 AM, de sobra para absorber los
+# retrasos habituales del cron de GitHub.
+#
+# UNA sola corrida diaria (2026-08-03). Antes eran dos (10:00 y 11:00 UTC) "por
+# redundancia", pero la cuota diaria de la API de Obuma es POR MÉTODO y es baja:
+# cada corrida gasta 5 consultas de `clientes.list` y la segunda dejaba el día sin
+# margen para un re-run manual (Error 005, ver etl/loaders/obuma_api.py).
+# La redundancia no hacía falta: un cron retrasado igual carga los datos, y si
+# GitHub llegara a saltarse un día, la corrida siguiente recarga el mes completo
+# (el ETL es idempotente). Para recuperar en el momento: Actions -> "Run workflow".
 #
 # Requiere estos Secrets del repo (Settings -> Secrets and variables -> Actions):
 #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OBUMA_API_KEY, AUTOVENTA_API_KEY_ADMIN
@@ -18,7 +24,6 @@ name: ETL diario Kreems (nube)
 on:
   schedule:
     - cron: "0 10 * * *"
-    - cron: "0 11 * * *"
   workflow_dispatch: {}   # permite ejecutarlo a mano desde la pestaña "Actions"
 
 concurrency:
