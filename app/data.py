@@ -835,11 +835,19 @@ def get_cliente_detalle(client: Client, cliente_rut: str):
 
 def get_comisiones(client: Client, anio: int, mes: int) -> pd.DataFrame:
     """Lee la vista de cálculo de comisiones en vivo (v_comision_vendedor_mes).
-    RLS: la vista filtra por es_gerencia(); un vendedor recibe 0 filas."""
-    r = (client.table("v_comision_vendedor_mes")
-         .select("*")
-         .eq("anio", anio).eq("mes", mes)
-         .execute())
+    RLS: la vista filtra por es_gerencia(); un vendedor recibe 0 filas.
+
+    Reintenta ante timeouts transitorios (ver `_con_reintento`): esta vista se
+    construye ENCIMA de v_resumen_vendedor_mes, así que hereda su costo (agrega
+    todo el histórico de fact_ventas) y le suma joins y funciones por fila →
+    es estrictamente más cara que Inicio. Con caché fría cruza el
+    statement_timeout del rol y tira 57014; por eso fallaba "de vez en cuando".
+    """
+    r = _con_reintento(lambda: (
+        client.table("v_comision_vendedor_mes")
+        .select("*")
+        .eq("anio", anio).eq("mes", mes)
+        .execute()))
     return pd.DataFrame(r.data) if r.data else pd.DataFrame()
 
 
