@@ -7,6 +7,7 @@ supabase==2.7.4        # versión probada con Python 3.14; >=2.30 requiere C++ B
 
 # App
 streamlit>=1.35
+starlette<1.4             # starlette 1.4 rompe streamlit 1.61 (GZipResponder: thread_minimum_size)
 plotly>=5.22
 reportlab>=4.0         # export PDF de comisiones (Anexo Cierre de Ventas)
 matplotlib>=3.8        # export PNG de tablas (reportes por WhatsApp)
