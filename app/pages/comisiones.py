@@ -114,6 +114,8 @@ def _render_mes(client, anio: int, mes: int):
                     f"{MESES[mes]} {anio}  ·  {estado_cierre}",
                     f"comisiones_{anio}_{mes:02d}", disp_csv=_csv)
 
+    _export_simulador(client, df, anio, mes)
+
     with st.expander("ℹ️ Cómo se calcula", expanded=False):
         st.markdown(
             """
@@ -301,6 +303,42 @@ def _export_comisiones(df: pd.DataFrame):
     disp = pd.DataFrame(filas)
     disp_csv = pd.DataFrame(filas_csv).reindex(columns=list(filas_csv[0].keys()))
     return disp, colores, disp_csv
+
+
+def _export_simulador(client, df: pd.DataFrame, anio: int, mes: int):
+    """Excel explicativo: cada monto es una fórmula sobre sus insumos, para que
+    gerencia pueda mover objetivos/cartera/días y ver el efecto sin tocar la base."""
+    with st.expander("📊 Excel explicativo (simulador) — para revisar e iterar los números",
+                     expanded=False):
+        st.caption(
+            "Una fila por vendedor con **todos los insumos** del cálculo y los montos como "
+            "fórmulas: cambias una celda amarilla (objetivo, cartera, días trabajados…) y la "
+            "comisión se recalcula sola. Incluye una hoja **Guía** que explica cada indicador y "
+            "otra con las **escalas vigentes** leídas de la base. No modifica el sistema."
+        )
+        if not st.button("Generar Excel explicativo", key="btn_sim_xlsx",
+                         use_container_width=True):
+            return
+        try:
+            from app.export_comisiones_sim import comisiones_simulador_xlsx
+            par = get_parametros(client)
+            params = ({str(r["clave"]): float(r["valor"]) for _, r in par.iterrows()}
+                      if not par.empty else
+                      {"bono_pct": 0.04, "bono_umbral": 1.10, "reposicion_monto": 15000})
+            data = comisiones_simulador_xlsx(
+                df, anio, mes,
+                get_tramos_pnv(client), get_tramos_maquinas(client),
+                get_tramos_efectividad(client), params,
+            )
+        except Exception as e:
+            st.error(f"No se pudo generar el Excel explicativo: {e}")
+            return
+        st.download_button(
+            "⬇️ Descargar Excel explicativo", data=data,
+            file_name=f"comisiones_simulador_{anio}_{mes:02d}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True, key="dl_sim_xlsx",
+        )
 
 
 def _safe_int(val, default=0) -> int:
