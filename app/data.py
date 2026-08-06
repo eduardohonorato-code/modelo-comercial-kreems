@@ -865,8 +865,15 @@ def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: in
                             cartera_clientes: int, salas_ganga: int,
                             efectividad_override=None,
                             pnv_logro_override=None,
-                            maq_logro_override=None):
-    """Crea/actualiza la entrada mensual de comisión de un vendedor."""
+                            maq_logro_override=None,
+                            dias_trabajados_override=None,
+                            inab_override=None):
+    """Crea/actualiza la entrada mensual de comisión de un vendedor.
+
+    `dias_trabajados_override` / `inab_override` (sql/033) solo se usan en meses
+    parciales (ingreso, salida, licencia, reemplazo): con valor mandan sobre el
+    calendario del mes en la Semana Corrida; en None se usa el calendario.
+    """
     client.table("comision_entrada_mensual").upsert({
         "vendedor_id": vendedor_id,
         "anio": anio,
@@ -876,7 +883,37 @@ def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: in
         "efectividad_override": efectividad_override,
         "pnv_logro_override": pnv_logro_override,
         "maq_logro_override": maq_logro_override,
+        "dias_trabajados_override": dias_trabajados_override,
+        "inab_override": inab_override,
     }, on_conflict="vendedor_id,anio,mes").execute()
+
+
+def habiles_e_inab(client: Client, desde: date, hasta: date) -> tuple[int, int]:
+    """Días hábiles (lun-vie sin feriados) y días de descanso (domingos +
+    feriados que no caen domingo) entre dos fechas, ambas inclusive.
+
+    Misma regla que `inab_calculado` (sql/019), pero sobre un tramo arbitrario:
+    sirve para sugerir los overrides de un mes parcial. Fail-soft si la tabla
+    `feriados` no existe (se ignoran los feriados).
+    """
+    feriados: set = set()
+    try:
+        fr = (client.table("feriados").select("fecha")
+              .gte("fecha", desde.isoformat())
+              .lte("fecha", hasta.isoformat()).execute())
+        feriados = {f["fecha"] for f in (fr.data or [])}
+    except Exception:
+        pass
+
+    habiles = descanso = 0
+    for n in range((hasta - desde).days + 1):
+        d = desde + timedelta(days=n)
+        es_feriado = d.isoformat() in feriados
+        if d.weekday() < 5 and not es_feriado:
+            habiles += 1
+        if d.weekday() == 6 or (es_feriado and d.weekday() != 6):
+            descanso += 1
+    return habiles, descanso
 
 
 # ── Cartera oficial de clientes por vendedor ────────────────────────────────

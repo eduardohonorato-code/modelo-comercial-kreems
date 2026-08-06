@@ -5,6 +5,9 @@ editar las entradas del período (cartera de clientes, salas Ganga, override de
 efectividad y plan de comisión), cerrar el mes (snapshot) y exportar por
 trabajador y consolidado (PDF/Excel).
 """
+import calendar
+from datetime import date
+
 import streamlit as st
 import pandas as pd
 
@@ -16,6 +19,7 @@ from app.data import (
     cerrar_mes_comisiones, get_comision_calculo, get_ventas_detalle_doc,
     get_tramos_pnv, get_tramos_maquinas, get_tramos_efectividad,
     get_parametros, replace_tramos_plan, upsert_parametros,
+    habiles_e_inab,
 )
 
 MESES = {
@@ -28,6 +32,7 @@ _NUM_COLS = [
     "obj_maquinas", "maquinas_entregadas", "logro_maquinas", "maq_aj", "maq_logro_override", "com_maquinas",
     "obj_visitas", "n_facturas", "cartera_clientes", "logro_efectividad", "efect_aj",
     "com_efectividad", "total_comision", "dias_trabajados", "inab", "semana_corrida",
+    "dias_trabajados_base", "inab_base", "dias_trabajados_override", "inab_override",
     "salas_ganga", "bono_reposicion", "total_variable", "total_a_pagar", "plan_id",
 ]
 
@@ -331,9 +336,15 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
     plan_opts = ({int(p["id"]): p["nombre"] for _, p in planes.iterrows()}
                  if not planes.empty else {1: "Kreems normal", 2: "Nueva escala Macarena"})
 
-    vendedores = df[["vendedor_id", "nombre_canonico", "cartera_clientes",
-                     "salas_ganga", "efectividad_override",
-                     "pnv_logro_override", "maq_logro_override", "plan_id"]].copy()
+    cols = ["vendedor_id", "nombre_canonico", "cartera_clientes",
+            "salas_ganga", "efectividad_override",
+            "pnv_logro_override", "maq_logro_override", "plan_id"]
+    # Columnas de sql/033 (mes parcial): si el script aún no se corrió, la vista
+    # no las trae y el editor sigue funcionando sin ese bloque.
+    cols_parcial = ["dias_trabajados_override", "inab_override",
+                    "dias_trabajados_base", "inab_base"]
+    hay_parcial = all(c in df.columns for c in cols_parcial)
+    vendedores = df[cols + (cols_parcial if hay_parcial else [])].copy()
     vendedores = vendedores.sort_values("nombre_canonico")
 
     nombre_sel = st.selectbox(
@@ -455,6 +466,11 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
         key=f"{_key}_efect_val", label_visibility="collapsed",
     )
 
+    # ── Mes parcial: días trabajados del vendedor (uso interno) ──────────────
+    dias_ov, inab_ov = (None, None)
+    if hay_parcial:
+        dias_ov, inab_ov = _bloque_mes_parcial(client, fila, vendedor_id, anio, mes)
+
     if submitted:
         try:
             pnv_ov   = round(pnv_ov_val  / 100, 4) if usar_pnv_ov  else None
@@ -464,13 +480,78 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
                                     cartera, salas,
                                     efectividad_override=efect_ov,
                                     pnv_logro_override=pnv_ov,
-                                    maq_logro_override=maq_ov)
+                                    maq_logro_override=maq_ov,
+                                    dias_trabajados_override=dias_ov,
+                                    inab_override=inab_ov)
             if plan_id_sel != plan_actual:
                 update_vendedor_plan(client, vendedor_id, plan_id_sel)
             st.success(f"✅ Entrada de **{nombre_sel}** guardada.")
             st.rerun()
         except Exception as e:
             st.error(f"Error al guardar: {e}")
+
+
+def _bloque_mes_parcial(client, fila, vendedor_id: int, anio: int, mes: int):
+    """Días trabajados / días de descanso del VENDEDOR cuando el mes es parcial
+    (ingreso, salida, licencia, reemplazo). Solo afecta la Semana Corrida
+    (= Total Comisión / días trabajados × INAB).
+
+    Uso interno de gerencia: NO aparece en la tabla de comisiones ni en los
+    exports. Devuelve (dias_override, inab_override); None = usar el calendario.
+    """
+    st.markdown("---")
+    st.caption(
+        "**Mes parcial — días trabajados del vendedor** · uso interno, no se "
+        "muestra en la tabla ni en los exports. Solo cambia la **Semana Corrida**: "
+        "quien trabajó medio mes no debería cobrar los descansos del mes completo."
+    )
+
+    base_dias = _safe_int(fila.get("dias_trabajados_base"))
+    base_inab = _safe_int(fila.get("inab_base"))
+    tiene_ov  = pd.notna(fila.get("dias_trabajados_override"))
+
+    _k = f"mp_{vendedor_id}_{anio}_{mes}"
+    activo = st.checkbox(
+        "Este vendedor trabajó solo parte del mes",
+        value=tiene_ov, key=f"{_k}_chk",
+        help="Sin marcar se usa el calendario del mes "
+             f"({base_dias} días hábiles, {base_inab} de descanso).",
+    )
+    if not activo:
+        return None, None
+
+    ultimo = calendar.monthrange(anio, mes)[1]
+    c1, c2 = st.columns(2)
+    desde = c1.date_input("Trabajó desde", value=date(anio, mes, 1),
+                          min_value=date(anio, mes, 1), max_value=date(anio, mes, ultimo),
+                          key=f"{_k}_desde", format="DD/MM/YYYY")
+    hasta = c2.date_input("Trabajó hasta", value=date(anio, mes, ultimo),
+                          min_value=date(anio, mes, 1), max_value=date(anio, mes, ultimo),
+                          key=f"{_k}_hasta", format="DD/MM/YYYY")
+
+    if hasta < desde:
+        st.warning("La fecha de término es anterior a la de inicio.")
+        return None, None
+
+    sug_dias, sug_inab = habiles_e_inab(client, desde, hasta)
+
+    # Las keys incluyen el tramo: al mover las fechas, los números se recalculan.
+    _kf = f"{_k}_{desde:%m%d}_{hasta:%m%d}"
+    n1, n2 = st.columns(2)
+    dias = n1.number_input("Días trabajados", value=sug_dias, min_value=1, max_value=31,
+                           step=1, key=f"{_kf}_dias",
+                           help="Días hábiles del tramo (lun-vie sin feriados). "
+                                "Ajústalo si hubo días sueltos.")
+    inab = n2.number_input("Días de descanso (INAB)", value=sug_inab, min_value=0, max_value=15,
+                           step=1, key=f"{_kf}_inab",
+                           help="Domingos + feriados que no caen domingo dentro del tramo.")
+
+    st.caption(
+        f"Tramo {desde:%d/%m} – {hasta:%d/%m}: **{sug_dias} días hábiles** y "
+        f"**{sug_inab} de descanso** (el mes completo tiene {base_dias} y {base_inab}). "
+        "Guarda con el botón **💾 Guardar entrada** de más arriba."
+    )
+    return int(dias), int(inab)
 
 
 def _cierre_y_export(client, df: pd.DataFrame, anio: int, mes: int, snapshot: pd.DataFrame):
