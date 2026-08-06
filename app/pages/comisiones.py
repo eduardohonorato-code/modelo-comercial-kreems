@@ -449,7 +449,10 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
     maq_ov_val   = oc2.number_input(
         "% tramo Máq",
         value=float(fila["maq_logro_override"]) * 100 if pd.notna(fila.get("maq_logro_override")) else 100.0,
-        step=5.0, min_value=40.0, max_value=140.0,
+        # Piso 25%: sql/009 agregó los tramos 25/30/35% ($40.000) y el input
+        # seguía cortando en 40%, así que 1 máquina sobre meta 4 (=25%) no se
+        # podía cargar.
+        step=5.0, min_value=25.0, max_value=140.0,
         disabled=not usar_maq_ov,
         key=f"{_key}_maq_val", label_visibility="collapsed",
     )
