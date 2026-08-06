@@ -70,6 +70,20 @@ def _pct(n):
 
 # ── EXCEL ────────────────────────────────────────────────────────────────────
 
+def _mes_parcial_txt(r) -> str:
+    """Etiqueta auditora para el Excel: vacía en un mes normal; en uno parcial
+    deja a la vista sobre qué base se calculó la Semana Corrida.
+    Ej: '15 de 21 días · INAB 2 de 5'."""
+    ov_d, ov_i = r.get("dias_trabajados_override"), r.get("inab_override")
+    if pd.isna(ov_d) and pd.isna(ov_i):
+        return ""
+    dias = f"{int(ov_d)} de {int(r['dias_trabajados_base'])} días" \
+        if pd.notna(ov_d) and pd.notna(r.get("dias_trabajados_base")) else ""
+    inab = f"INAB {int(ov_i)} de {int(r['inab_base'])}" \
+        if pd.notna(ov_i) and pd.notna(r.get("inab_base")) else ""
+    return " · ".join(x for x in (dias, inab) if x)
+
+
 def comisiones_a_excel(df: pd.DataFrame, anio: int, mes: int,
                        detalle: pd.DataFrame | None = None) -> bytes:
     """Excel con hoja Resumen (todos los componentes) y, si se entrega, hoja
@@ -78,6 +92,15 @@ def comisiones_a_excel(df: pd.DataFrame, anio: int, mes: int,
     cols = [c for c, _ in _RESUMEN_COLS if c in df.columns]
     resumen = df[cols].copy()
     resumen.columns = [lbl for c, lbl in _RESUMEN_COLS if c in df.columns]
+
+    # "Días Trab." e "INAB" ya vienen con el override aplicado (sql/033). Se
+    # agrega al lado de qué base salieron, para que un mes parcial sea auditable
+    # sin tener que entrar a la app.
+    if ({"dias_trabajados_override", "inab_override"} <= set(df.columns)
+            and "Días Trab." in resumen.columns):
+        resumen.insert(resumen.columns.get_loc("Días Trab."), "Mes parcial",
+                       df.apply(_mes_parcial_txt, axis=1).values)
+
     resumen = resumen.sort_values("Total a Pagar", ascending=False, na_position="last")
 
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
