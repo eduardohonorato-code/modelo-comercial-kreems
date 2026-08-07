@@ -33,6 +33,7 @@ _NUM_COLS = [
     "obj_visitas", "n_facturas", "cartera_clientes", "logro_efectividad", "efect_aj",
     "com_efectividad", "total_comision", "dias_trabajados", "inab", "semana_corrida",
     "dias_trabajados_base", "inab_base", "dias_trabajados_override", "inab_override",
+    "ajuste_monto",
     "salas_ganga", "bono_reposicion", "total_variable", "total_a_pagar", "plan_id",
 ]
 
@@ -192,6 +193,15 @@ def _tabla_comisiones(df: pd.DataFrame):
         ef_disp  = fmt_pct(ef_real) + (_forzado_span(fmt_pct(r["efectividad_override"])) if ef_over else "")
         maq_star = (f" <span title='Tramo forzado a {fmt_pct(r['maq_logro_override'])} por gerencia' "
                     f"style='color:#f59e0b'>★</span>") if maq_over else ""
+        # Ajuste manual: se muestra junto al Total Comisión, con el motivo al pasar el mouse.
+        aj = r.get("ajuste_monto")
+        aj_txt = ""
+        if pd.notna(aj) and float(aj) != 0:
+            motivo = str(r.get("ajuste_motivo") or "sin motivo registrado").replace("'", "&#39;")
+            signo = "+" if float(aj) > 0 else "−"
+            aj_txt = (f" <span style='color:#f59e0b;font-weight:600' "
+                      f"title='Ajuste manual: {motivo}'>"
+                      f"({signo}{fmt_clp(abs(float(aj)))})</span>")
         rows += f"""<tr>
           <td style='text-align:left'>{r['nombre_canonico']}</td>
           <td>{plan}</td>
@@ -205,7 +215,7 @@ def _tabla_comisiones(df: pd.DataFrame):
           <td class='{cls_ef}'>{ef_disp}</td>
           <td>{fmt_num(r.get('cartera_clientes'))}</td>
           <td>{fmt_clp(r.get('com_efectividad'))}</td>
-          <td><strong>{fmt_clp(r.get('total_comision'))}</strong></td>
+          <td><strong>{fmt_clp(r.get('total_comision'))}</strong>{aj_txt}</td>
           <td>{fmt_clp(r.get('semana_corrida'))}</td>
           <td>{fmt_clp(r.get('bono_reposicion'))}</td>
           <td><strong>{fmt_clp(r.get('total_a_pagar'))}</strong></td>
@@ -285,6 +295,8 @@ def _export_comisiones(df: pd.DataFrame):
             "%Efec original": fmt_pct(ef_real),
             "%Efec forzado": fmt_pct(_ov(r.get("efectividad_override"))),
             "Cartera": fmt_num(r.get("cartera_clientes")), "Com Efec": fmt_clp(r.get("com_efectividad")),
+            "Ajuste manual": fmt_clp(r.get("ajuste_monto")) if pd.notna(r.get("ajuste_monto")) else "",
+            "Motivo del ajuste": r.get("ajuste_motivo") or "",
             "Total Com.": fmt_clp(r.get("total_comision")), "Sem.Corr": fmt_clp(r.get("semana_corrida")),
             "Repos": fmt_clp(r.get("bono_reposicion")), "Total Pagar": fmt_clp(r.get("total_a_pagar")),
         })
@@ -381,8 +393,11 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
     # no las trae y el editor sigue funcionando sin ese bloque.
     cols_parcial = ["dias_trabajados_override", "inab_override",
                     "dias_trabajados_base", "inab_base"]
+    cols_ajuste = ["ajuste_monto", "ajuste_motivo"]
     hay_parcial = all(c in df.columns for c in cols_parcial)
-    vendedores = df[cols + (cols_parcial if hay_parcial else [])].copy()
+    hay_ajuste = all(c in df.columns for c in cols_ajuste)
+    vendedores = df[cols + (cols_parcial if hay_parcial else [])
+                    + (cols_ajuste if hay_ajuste else [])].copy()
     vendedores = vendedores.sort_values("nombre_canonico")
 
     nombre_sel = st.selectbox(
@@ -512,7 +527,15 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
     if hay_parcial:
         dias_ov, inab_ov = _bloque_mes_parcial(client, fila, vendedor_id, anio, mes)
 
+    # ── Ajuste manual de monto libre ─────────────────────────────────────────
+    aj_monto, aj_motivo = (None, None)
+    if hay_ajuste:
+        aj_monto, aj_motivo = _bloque_ajuste(fila, vendedor_id, anio, mes)
+
     if submitted:
+        if hay_ajuste and aj_monto and not (aj_motivo or "").strip():
+            st.error("El ajuste manual necesita un motivo. No se guardó nada.")
+            return
         try:
             pnv_ov   = round(pnv_ov_val  / 100, 4) if usar_pnv_ov  else None
             maq_ov   = round(maq_ov_val  / 100, 4) if usar_maq_ov  else None
@@ -523,13 +546,61 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
                                     pnv_logro_override=pnv_ov,
                                     maq_logro_override=maq_ov,
                                     dias_trabajados_override=dias_ov,
-                                    inab_override=inab_ov)
+                                    inab_override=inab_ov,
+                                    ajuste_monto=aj_monto,
+                                    ajuste_motivo=aj_motivo)
             if plan_id_sel != plan_actual:
                 update_vendedor_plan(client, vendedor_id, plan_id_sel)
             st.success(f"✅ Entrada de **{nombre_sel}** guardada.")
             st.rerun()
         except Exception as e:
             st.error(f"Error al guardar: {e}")
+
+
+def _bloque_ajuste(fila, vendedor_id: int, anio: int, mes: int):
+    """Ajuste manual de monto libre, con motivo obligatorio (sql/034).
+
+    Es la salida para los casos que no calzan con ningún peldaño de las escalas.
+    Entra a Total Comisión, así que genera Semana Corrida. Devuelve
+    (monto, motivo); (None, None) = sin ajuste.
+    """
+    st.markdown("---")
+    st.caption(
+        "**Ajuste manual de comisión** — para lo que no calza con ninguna escala. "
+        "Suma (o resta) directo al **Total Comisión**, así que también genera Semana "
+        "Corrida. Antes de usarlo, revisa si forzar un tramo arriba ya resuelve el caso: "
+        "queda mejor trazado."
+    )
+
+    monto_actual = fila.get("ajuste_monto")
+    motivo_actual = fila.get("ajuste_motivo")
+    tiene = pd.notna(monto_actual) and float(monto_actual or 0) != 0
+
+    _k = f"aj_{vendedor_id}_{anio}_{mes}"
+    activo = st.checkbox("Aplicar un ajuste manual", value=bool(tiene), key=f"{_k}_chk")
+    if not activo:
+        return None, None
+
+    a1, a2 = st.columns([1, 2])
+    monto = a1.number_input(
+        "Monto del ajuste ($)",
+        value=float(monto_actual) if tiene else 0.0,
+        step=10000.0, format="%.0f", key=f"{_k}_monto",
+        help="Puede ser negativo para descontar.",
+    )
+    motivo = a2.text_input(
+        "Motivo (obligatorio)",
+        value=str(motivo_actual) if pd.notna(motivo_actual) else "",
+        max_chars=200, key=f"{_k}_motivo",
+        placeholder="Ej: acuerdo por 5 máquinas de cliente antiguo no registradas como FL-4",
+    )
+
+    if monto and not motivo.strip():
+        st.warning("Sin motivo no se puede guardar el ajuste.")
+    elif monto:
+        st.caption(f"Se sumará **{fmt_clp(monto)}** al Total Comisión de "
+                   f"{fila['nombre_canonico']} en {MESES[mes]} {anio}.")
+    return (monto or None), (motivo.strip() or None)
 
 
 def _bloque_mes_parcial(client, fila, vendedor_id: int, anio: int, mes: int):

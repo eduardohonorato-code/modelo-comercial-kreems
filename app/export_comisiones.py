@@ -39,6 +39,8 @@ _RESUMEN_COLS = [
     ("cartera_clientes", "Cartera Clientes"),
     ("logro_efectividad", "% Efectividad"),
     ("com_efectividad", "Comisión Efectividad"),
+    ("ajuste_monto", "Ajuste manual"),
+    ("ajuste_motivo", "Motivo del ajuste"),
     ("total_comision", "Total Comisión"),
     ("dias_trabajados", "Días Trab."),
     ("inab", "INAB"),
@@ -210,23 +212,36 @@ def _anexo_vendedor(r, anio, mes, detalle, h_title, h_sub, normal, small):
     # INCENTIVOS / TOTALES
     el.append(Paragraph("<b>INCENTIVOS Y TOTALES</b>", normal))
     el.append(Spacer(1, 3))
-    tot = _kv_table([
+    filas_tot = [
         ["$ Comisión por Facturación", _clp(r.get("com_pnv"))],
         ["$ Comisión 4% sobre el 110%", _clp(r.get("bono_4pct"))],
         ["$ Comisión por Colocación", _clp(r.get("com_maquinas"))],
         ["$ Comisión por Efectividad", _clp(r.get("com_efectividad"))],
+    ]
+    # El ajuste manual solo aparece si existe, para no ensuciar la liquidación
+    # normal. Con motivo a la vista: es un monto que no sale de ninguna escala.
+    _aj = r.get("ajuste_monto")
+    if pd.notna(_aj) and float(_aj) != 0:
+        filas_tot.append([f"Ajuste manual — {r.get('ajuste_motivo') or 'sin motivo'}",
+                          _clp(_aj)])
+    filas_tot += [
         ["Total Comisión", _clp(r.get("total_comision"))],
         ["Semana Corrida", _clp(r.get("semana_corrida"))],
         ["Total Variable", _clp(r.get("total_variable"))],
         ["Bono Reposición (salas Ganga)", _clp(r.get("bono_reposicion"))],
         ["TOTAL A PAGAR", _clp(r.get("total_a_pagar"))],
-    ], [100 * mm, 65 * mm])
+    ]
+    # Índices en negrita calculados sobre la lista final: si se hardcodean, el
+    # ajuste opcional los descuadra.
+    i_total = next(i for i, f in enumerate(filas_tot) if f[0] == "Total Comisión")
+    i_var = next(i for i, f in enumerate(filas_tot) if f[0] == "Total Variable")
+    tot = _kv_table(filas_tot, [100 * mm, 65 * mm])
     tot.setStyle(TableStyle([
         ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#C01E6E")),
         ("TEXTCOLOR", (0, -1), (-1, -1), colors.white),
-        ("FONTNAME", (0, 4), (-1, 4), "Helvetica-Bold"),
-        ("FONTNAME", (0, 6), (-1, 6), "Helvetica-Bold"),
+        ("FONTNAME", (0, i_total), (-1, i_total), "Helvetica-Bold"),
+        ("FONTNAME", (0, i_var), (-1, i_var), "Helvetica-Bold"),
     ]))
     el.append(tot)
 

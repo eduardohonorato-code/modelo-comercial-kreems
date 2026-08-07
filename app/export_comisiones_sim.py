@@ -68,6 +68,8 @@ COLUMNAS = [
     ("Tramo Efec.",         None,                  "fx",  PC0),
     ("Cartera clientes",    "cartera_clientes",    "in",  '0'),
     ("Comisión Efectividad", None,                 "fx",  CLP),
+    ("Ajuste manual",       "ajuste_monto",        "in",  CLP),
+    ("Motivo del ajuste",   "ajuste_motivo",       "txt", None),
     ("TOTAL COMISIÓN",      None,                  "fx",  CLP),
     ("Días trabajados",     "dias_trabajados",     "in",  '0'),
     ("INAB",                "inab",                "in",  '0'),
@@ -77,7 +79,7 @@ COLUMNAS = [
     ("TOTAL A PAGAR",       None,                  "fx",  CLP),
 ]
 C = {h: get_column_letter(i) for i, (h, *_) in enumerate(COLUMNAS, start=1)}
-ANCHOS = {"Vendedor": 32, "Escala": 12, "Plan": 6}
+ANCHOS = {"Vendedor": 32, "Escala": 12, "Plan": 6, "Motivo del ajuste": 34}
 
 
 def _num(v, default=0):
@@ -189,7 +191,11 @@ def _guia(wb, anio, mes):
           "cercano. Bajo 30% no paga y sobre 60% se congela. El monto además depende del rango "
           "de cartera: con menos de 81 clientes asignados no paga aunque el % alcance."]),
         ("Semana Corrida y Total a Pagar",
-         ["Semana Corrida = TOTAL COMISIÓN ÷ días trabajados × INAB. Si la comisión es $0, la "
+         ["Ajuste manual — monto libre para lo que no calza con ninguna escala. Suma (o resta) al "
+          "TOTAL COMISIÓN, así que también genera semana corrida. Va siempre con motivo: si no "
+          "queda escrito, en tres meses nadie sabe por qué se pagó ese número. En el sistema se "
+          "carga en Comisiones → Editar entradas del período.",
+          "Semana Corrida = TOTAL COMISIÓN ÷ días trabajados × INAB. Si la comisión es $0, la "
           "semana corrida también es $0: no hay remuneración variable que repartir.",
           "Días trabajados e INAB salen del calendario del mes, salvo que el vendedor haya "
           "trabajado solo parte del mes; en ese caso van sus días reales y los descansos de ese "
@@ -261,6 +267,8 @@ def comisiones_simulador_xlsx(df: pd.DataFrame, anio: int, mes: int,
             "dias_trabajados": _num(row.get("dias_trabajados")),
             "inab": _num(row.get("inab")),
             "salas_ganga": _num(row.get("salas_ganga")),
+            "ajuste_monto": _num(row.get("ajuste_monto")),
+            "ajuste_motivo": row.get("ajuste_motivo") or "",
         }
         f = _formulas(r, plan, ref)
         for j, (h, k, tipo, fmt) in enumerate(COLUMNAS, start=1):
@@ -284,8 +292,8 @@ def comisiones_simulador_xlsx(df: pd.DataFrame, anio: int, mes: int,
     ult = r - 1
     ws.cell(r, 1, "TOTAL").font = F_B
     for h in ("Comisión PNV", "Bono 4%", "Comisión Máquinas", "Comisión Efectividad",
-              "TOTAL COMISIÓN", "Semana Corrida", "Bono Reposición", "TOTAL A PAGAR",
-              "Objetivo de venta", "Fact-NC"):
+              "Ajuste manual", "TOTAL COMISIÓN", "Semana Corrida", "Bono Reposición",
+              "TOTAL A PAGAR", "Objetivo de venta", "Fact-NC"):
         col = C[h]
         cel = ws.cell(r, ws[f"{col}{hdr}"].column, f"=SUM({col}{hdr + 1}:{col}{ult})")
         cel.number_format = CLP
@@ -333,7 +341,8 @@ def _formulas(r, plan, ref):
                                  f"INDEX({ref[e + '_m']},MATCH({cart},{ref[e + '_c']},1),"
                                  f"MATCH({tef},{ref[e + '_p']},1)))"),
         "TOTAL COMISIÓN": (f"={C['Comisión PNV']}{r}+{C['Bono 4%']}{r}"
-                           f"+{C['Comisión Máquinas']}{r}+{C['Comisión Efectividad']}{r}"),
+                           f"+{C['Comisión Máquinas']}{r}+{C['Comisión Efectividad']}{r}"
+                           f"+N({C['Ajuste manual']}{r})"),
         "Semana Corrida": f"=IF({dt}=0,0,ROUND({tot}/{dt}*{inab},0))",
         "Bono Reposición": f"={ref['par_reposicion_monto']}*{C['Salas Ganga']}{r}",
         "TOTAL A PAGAR": (f"={tot}+{C['Semana Corrida']}{r}+{C['Bono Reposición']}{r}"),

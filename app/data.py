@@ -867,12 +867,18 @@ def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: in
                             pnv_logro_override=None,
                             maq_logro_override=None,
                             dias_trabajados_override=None,
-                            inab_override=None):
+                            inab_override=None,
+                            ajuste_monto=None,
+                            ajuste_motivo=None):
     """Crea/actualiza la entrada mensual de comisión de un vendedor.
 
     `dias_trabajados_override` / `inab_override` (sql/033) solo se usan en meses
     parciales (ingreso, salida, licencia, reemplazo): con valor mandan sobre el
     calendario del mes en la Semana Corrida; en None se usa el calendario.
+
+    `ajuste_monto` / `ajuste_motivo` (sql/034) es el ajuste manual de monto libre:
+    entra a Total Comisión y por lo tanto genera Semana Corrida. La base exige
+    motivo cuando el monto no es 0 (constraint comision_entrada_ajuste_chk).
     """
     client.table("comision_entrada_mensual").upsert({
         "vendedor_id": vendedor_id,
@@ -885,6 +891,8 @@ def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: in
         "maq_logro_override": maq_logro_override,
         "dias_trabajados_override": dias_trabajados_override,
         "inab_override": inab_override,
+        "ajuste_monto": ajuste_monto,
+        "ajuste_motivo": ajuste_motivo,
     }, on_conflict="vendedor_id,anio,mes").execute()
 
 
