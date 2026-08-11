@@ -157,6 +157,9 @@ def cargar_autoventa_api(
                 "vendedor_nombre": ln.get("created_by_name") or inv.get("created_by_name"),
                 "cliente_rut_raw": rut,
                 "producto_codigo": str(ln.get("product_code") or "").strip(),
+                "producto_nombre": ln.get("product_name"),
+                "producto_categoria": ln.get("product_category_name"),
+                "producto_unidad": ln.get("measurement_unit_name"),
                 "neto": float(ln.get("net_amount") or 0),
                 "neto_nc": 0.0,
             })
@@ -197,6 +200,9 @@ def cargar_autoventa_api(
                 "vendedor_nombre": ln.get("created_by_name") or req.get("created_by_name"),
                 "cliente_rut_raw": rut,
                 "producto_codigo": str(ln.get("product_code") or "").strip(),
+                "producto_nombre": ln.get("product_name"),
+                "producto_categoria": ln.get("product_category_name"),
+                "producto_unidad": ln.get("measurement_unit_name"),
                 "neto": float(ln.get("net_amount") or 0),
                 "neto_nc": 0.0,
             })
@@ -285,6 +291,28 @@ def cargar_autoventa_api(
     dim_cliente["es_maquina"] = False
     dim_cliente = dim_cliente.drop(columns=["cliente_rut_raw"])
 
+    # ── 6. dim_producto (SOLO para tapar el hueco de FK) ────────────────────
+    # fact_pedidos tiene FK a dim_producto, que se puebla desde Obuma. Pero hay
+    # SKUs que existen en Autoventa y NO en el catálogo de Obuma (verificado:
+    # MUS-1 "Muestra Sodexo Frambuesa" no está en productos.list), así que el
+    # upsert reventaba con 23503. Devolvemos los productos vistos en los pedidos
+    # para que run_autoventa_api inserte los que falten.
+    #
+    # OJO: quien consuma esto debe insertar SOLO los códigos ausentes, nunca
+    # actualizar los existentes: la categoría de Obuma es la canónica (de ella
+    # dependen reglas de negocio como Galletas NY) y la de Autoventa no coincide.
+    dim_producto = (
+        df[["producto_codigo", "producto_nombre", "producto_categoria",
+            "producto_unidad"]]
+        .rename(columns={"producto_codigo": "codigo", "producto_nombre": "nombre",
+                         "producto_categoria": "categoria",
+                         "producto_unidad": "unidad_medida"})
+        .assign(codigo=lambda d: d["codigo"].astype(str).str.strip())
+        .query("codigo != '' and codigo != 'nan'")
+        .drop_duplicates(subset=["codigo"])
+        .copy()
+    )
+
     docs_facturados = set(
         fact_pedidos.loc[fact_pedidos["doc_venta"] != "Sin DTE", "num_documento"]
         .dropna().astype(str)
@@ -305,6 +333,7 @@ def cargar_autoventa_api(
     return {
         "fact_pedidos": fact_pedidos,
         "dim_cliente": dim_cliente,
+        "dim_producto": dim_producto,
         "stats": stats,
         "_docs_facturados": docs_facturados,
         "_vendedor_fl_folio": vendedor_fl_folio,

@@ -133,6 +133,47 @@ def _leer_overrides_maquina(client) -> pd.DataFrame:
         return vacio
 
 
+def _insertar_productos_faltantes(client, dim_producto) -> None:
+    """
+    Inserta en dim_producto SOLO los códigos de Autoventa que aún no existen.
+
+    Por qué existe: fact_pedidos tiene FK a dim_producto, que se puebla desde
+    Obuma. Hay SKUs que viven en Autoventa y no en el catálogo de Obuma (caso
+    real: MUS-1 'Muestra Sodexo Frambuesa', 2026-08-11) → el upsert de
+    fact_pedidos moría con 23503 y tumbaba la corrida entera.
+
+    Por qué SOLO inserta y nunca actualiza: la ficha de producto de Obuma es la
+    canónica (categoría, subcategoría, fabricante) y de ella dependen reglas de
+    negocio del panel. La categoría de Autoventa usa otra nomenclatura, así que
+    un upsert plano sobre los códigos ya existentes las pisaría en silencio.
+    """
+    if dim_producto is None or dim_producto.empty:
+        return
+
+    # dim_producto puede superar el límite de 1000 filas de PostgREST → paginar.
+    existentes, offset = set(), 0
+    while True:
+        r = (client.table("dim_producto").select("codigo")
+             .order("codigo").range(offset, offset + 999).execute())
+        if not r.data:
+            break
+        existentes.update(str(x["codigo"]) for x in r.data)
+        if len(r.data) < 1000:
+            break
+        offset += 1000
+
+    faltantes = dim_producto[~dim_producto["codigo"].isin(existentes)].copy()
+    if faltantes.empty:
+        logger.info("  [dim_producto] sin códigos nuevos desde Autoventa")
+        return
+
+    logger.warning(
+        "  [dim_producto] %d código(s) de Autoventa ausentes del catálogo Obuma "
+        "→ se insertan para no romper la FK: %s",
+        len(faltantes), sorted(faltantes["codigo"])[:20])
+    upsert_tabla(client, "dim_producto", faltantes, on_conflict="codigo")
+
+
 def _parse_periodo(valor: str) -> tuple:
     try:
         anio, mes = valor.split("-")
@@ -192,6 +233,7 @@ def run(periodo: tuple, dry_run: bool = False):
 
     logger.info("\n-- Upserts a Supabase --")
     upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut")
+    _insertar_productos_faltantes(client, av.get("dim_producto"))
     upsert_tabla(client, "fact_pedidos", fact_pedidos,
                  on_conflict="sociedad_id,n_pedido,producto_codigo,linea")
 
