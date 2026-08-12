@@ -31,58 +31,40 @@ Ahí adentro vas a ver, entre otras cosas:
 
 ---
 
-## Por qué hay que cargar el mes (y qué se carga)
+## Este archivo es solo de PROYECCIONES
 
-No todos los datos llegan solos:
+Importante para no confundirlo con la operación diaria:
 
-| Fuente | Cómo entra | ¿Hay que hacer algo? |
-|---|---|---|
-| Gran Natural (ventas) | API, automático | No |
-| Autoventa (pedidos) | API, automático | No |
-| Acuña (ventas) | Excel manual | Sin operación desde jul-2026 (ver abajo) |
-| **Despachos** | **Excel manual** | **Sí** |
+- Este plan **solo lee ventas** (`fact_ventas` y el catálogo de productos).
+  No lee despachos, ni pedidos, ni máquinas.
+- **No escribe nada en la base.** Es de solo lectura: genera un Excel y nada más.
+- **No modifica ni depende del ETL diario.** Es otra pata, para tener proyecciones.
 
-**Sobre Acuña:** con la transición a Gran Natural dejó de facturar; su última venta
-real es del 13-jul-2026. El script lo tiene registrado como *sociedad de baja*, así
-que no espera datos suyos ni bloquea el cierre de mes. Si algún día Acuña volviera a
-facturar, el script lo detecta y avisa en pantalla que hay que actualizar ese dato.
+Las ventas llegan **solas por API** (Gran Natural). Acuña dejó de facturar con la
+transición a Gran Natural — su última venta real es del 13-jul-2026 — y el script la
+tiene registrada como *sociedad de baja*, así que no espera datos suyos. Si alguna vez
+volviera a facturar, avisa en pantalla.
 
-Lo que sí sigue siendo manual son los **despachos**.
+**Conclusión práctica: para actualizar las proyecciones no tienes que cargar nada.**
+Basta con el paso 2.
+
+(La carga manual de despachos y el `Cargar mes.bat` son parte de la operación diaria
+y sirven para otros análisis —máquinas, logística—, no para este archivo.)
 
 ---
 
-## El proceso mensual, en 3 pasos
+## El proceso mensual, en 2 pasos
 
 Los primeros días de cada mes, cuando ya cerró el mes anterior:
 
-### Paso 1 — Cargar el mes en la base
-
-**1.a** Descarga de Autoventa el **detalle de despachos** del mes que cerró.
-(Si en algún momento vuelve a haber ventas de Acuña, también su reporte de Obuma.)
-
-**1.b** Arrástralo a su carpeta dentro de `inbox\`:
-- el de despachos → `inbox\despachos\`
-- (el de Acuña, si lo hubiera → `inbox\acuna\`)
-
-(no importa el nombre que tengan; la carpeta es la que manda)
-
-**1.c** Doble clic en **`Cargar mes.bat`**. Te va a preguntar el mes en formato
-`2026-07`. Escríbelo y presiona Enter.
-
-Eso corre todo el pipeline en orden: archiva lo del inbox, carga pedidos por API,
-carga Acuña y despachos desde los Excel, y carga Gran Natural por API.
-
-> Importante: el plan de stock lee lo que esté en la base. Si el mes no está
-> cargado, el plan no lo va a ver.
-
-### Paso 2 — Cerrar el Excel del plan de stock
+### Paso 1 — Cerrar el Excel del plan de stock
 Si tienes abierto `plan_stock_temporada_2026_2027.xlsx`, ciérralo.
 Windows no deja reescribir un archivo que está abierto.
 
 > Si se te olvida no pasa nada grave: el proceso te avisa y guarda una copia
 > aparte en la carpeta `reportes` del proyecto. Pero es más limpio cerrarlo antes.
 
-### Paso 3 — Actualizar el plan
+### Paso 2 — Actualizar el plan
 Doble clic en **`Actualizar plan de stock.bat`**.
 
 Está en la carpeta del proyecto:
@@ -143,7 +125,8 @@ Se hizo doble clic sobre el archivo equivocado, o el .bat no está en la carpeta
 proyecto (necesita estar junto a la carpeta `reportes`).
 
 **El mes que cerró sigue apareciendo como PROY**
-No quedó cargado en la base. Vuelve al Paso 1.
+El mes todavía no está completo en la base (la API carga día a día). Revisa en la
+pantalla hasta qué fecha hay datos.
 
 **Dice "CORTE LIMITADO POR: ..."**
 Significa que una fuente que sí opera no está cargada hasta fin de mes, así que el
@@ -176,7 +159,9 @@ En la hoja **Parametros**:
 
 | Cuándo | Qué | Cómo |
 |---|---|---|
-| Cierra el mes | Cargar el mes a la base | Doble clic en `Cargar mes.bat` |
-| Después | Cerrar el Excel del plan | — |
+| Cierra el mes | Cerrar el Excel del plan si está abierto | — |
 | Después | Actualizar el plan de stock | Doble clic en `Actualizar plan de stock.bat` |
 | Al final | Verificar el corte | Hoja Parametros: "Meses REALES: enero a ___" |
+
+Nada más: las ventas llegan solas por API. `Cargar mes.bat` es de la operación
+diaria (despachos, máquinas), no de este archivo.
