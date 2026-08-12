@@ -42,7 +42,11 @@ $py = "C:\Users\Evelyn Novoa\AppData\Local\Python\pythoncore-3.14-64\python.exe"
 if (-not (Test-Path $py)) { $py = "python" }
 
 Write-Host "[1/2] Recalculando demanda y stock desde Supabase..." -ForegroundColor Green
-& $py "reportes\plan_stock_temporada.py"
+# Se captura la salida para saber QUE archivo se escribio (si Drive estaba
+# bloqueado, el bueno es la copia local), sin dejar de mostrarla en pantalla.
+& $py "reportes\plan_stock_temporada.py" 2>&1 |
+    Tee-Object -Variable lineas |
+    ForEach-Object { if ("$_" -notlike "##ARCHIVO##*") { Write-Host "$_" } }
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
     Write-Host "*** Fallo la generacion. Revisa el mensaje de arriba. ***" -ForegroundColor Red
@@ -52,7 +56,12 @@ if ($LASTEXITCODE -ne 0) {
 # --- Recalcular formulas con Excel ---
 Write-Host ""
 Write-Host "[2/2] Recalculando formulas con Excel..." -ForegroundColor Green
-$archivo = $destino
+$marca = $lineas | Where-Object { "$_" -like "##ARCHIVO##*" } | Select-Object -Last 1
+if ($marca) {
+    $archivo = ("$marca" -replace '^##ARCHIVO##', '').Trim()
+} else {
+    $archivo = $destino
+}
 if (-not (Test-Path $archivo)) {
     $archivo = Join-Path $PSScriptRoot "reportes\plan_stock_temporada_2026_2027.xlsx"
 }

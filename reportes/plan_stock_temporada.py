@@ -19,6 +19,15 @@ import numpy as np
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.errors import IgnoredError, IgnoredErrors
+
+
+def sin_triangulos(ws, rango):
+    """Apaga el aviso de Excel 'fórmula distinta a las vecinas' (triángulo verde).
+    En estas grillas hay filas que legítimamente usan otra fórmula (galletas, y las
+    celdas de 2027 reestimadas por quiebre), así que el aviso es ruido."""
+    ws.ignored_errors = IgnoredErrors(
+        ignoredError=[IgnoredError(sqref=rango, formula=True, formulaRange=True)])
 
 sb = get_client()
 ANIO = 2026
@@ -199,18 +208,21 @@ for c in helados:
     for m in range(U + 1, 13):
         dem.loc[c, m] = acum * p[m] / base
 
-# calce de helados al presupuesto restante (META - real acumulado)
+# Calce de helados al presupuesto restante (META - real acumulado).
+# El factor resulta ser el MISMO para todos los meses proyectados
+# (obj_m = resto * peso_m/total  =>  f = obj_m/peso_m = resto/total), asi que se
+# puede dejar como UNA celda en Parametros y que las celdas proyectadas la
+# multipliquen: cambiar la META en el Excel recalcula todo sin regenerar nada.
+dem_pre = dem.copy()                      # proyeccion sin escalar
 hel_real = sum(sum(dem.loc[c, m] * precio[c] for m in range(1, U + 1)) for c in helados)
 resto = META_HELADOS - hel_real
-peso = {m: sum(dem.loc[c, m] * precio[c] for c in helados) for m in range(U + 1, 13)}
-tot_peso = sum(peso.values())
+BASE_H2 = sum(dem_pre.loc[c, m] * precio[c] for c in helados for m in range(U + 1, 13))
+FACTOR = resto / BASE_H2 if BASE_H2 > 0 else 1.0
 for m in range(U + 1, 13):
-    obj = resto * peso[m] / tot_peso
-    f = obj / peso[m] if peso[m] > 0 else 1.0
     for c in helados:
-        dem.loc[c, m] *= f
-plan_hel_mes = {m: (sum(dem.loc[c, m] * precio[c] for c in helados)) for m in range(1, 13)}
-print(f"Helados: real ene-{U:02d} ${hel_real/1e6:,.1f}M | resto {U+1}-12 ${resto/1e6:,.1f}M")
+        dem.loc[c, m] = dem_pre.loc[c, m] * FACTOR
+print(f"Helados: real ene-{U:02d} ${hel_real/1e6:,.1f}M | resto {U+1}-12 ${resto/1e6:,.1f}M "
+      f"| factor de calce {FACTOR:.4f}")
 
 # GALLETAS: proyeccion desde el ultimo mes real con rampa (tienen historia propia
 # desde jun-2026, no hay estacionalidad historica que aplicar todavia).
@@ -305,16 +317,21 @@ for i, (lbl, val, fmt) in enumerate(params):
     cc.font = F_INPUT; cc.fill = FILL_YEL; cc.number_format = fmt
 ws["B8"] = "META de venta HELADOS 2026 ($) — reparte los meses proyectados"; ws["B8"].font = F_TXT
 ws["C8"] = META_HELADOS; ws["C8"].font = F_INPUT; ws["C8"].fill = FILL_YEL; ws["C8"].number_format = CLP
-# referencia informativa
+ws["B9"] = f"Rampa mensual de GALLETAS ({MESES[U]} en adelante)"; ws["B9"].font = F_TXT
+ws["C9"] = RAMPA_GALL; ws["C9"].font = F_INPUT; ws["C9"].fill = FILL_YEL; ws["C9"].number_format = PCT
+# Cadena de calce: las celdas proyectadas de la hoja Demanda multiplican por F7,
+# asi que editar la META (C8) recalcula demanda, stock, CD e ingresos en cascada.
 sh_ytd = perf_global[list(range(1, U + 1))].sum()
 ritmo = hel_real / sh_ytd if sh_ytd > 0 else 0
 ws["E4"] = f"Helados REALES ene–{MESES[U-1]} ($)"; ws["F4"] = round(hel_real)
 ws["E5"] = "Resto del año a repartir ($) = META − real"; ws["F5"] = "=C8-F4"
-ws["E6"] = "Referencia: año implícito al RITMO REAL ($)"; ws["F6"] = round(ritmo)
-ws["E7"] = "  (real acumulado ÷ % del año ya transcurrido según estacionalidad)"
-for cc in ("F4", "F5", "F6"): ws[cc].font = F_TXT; ws[cc].number_format = CLP
-ws["F6"].font = Font(name=ARIAL, size=10, bold=True, color="B36B00")
-for cc in ("E4", "E5", "E6", "E7"): ws[cc].font = F_NOTE
+ws["E6"] = f"Proyección {MESES[U]}–Dic sin escalar ($)"; ws["F6"] = round(BASE_H2)
+ws["E7"] = "FACTOR DE CALCE = resto ÷ proyección sin escalar"; ws["F7"] = "=F5/F6"
+ws["E8"] = "Referencia: año implícito al RITMO REAL ($)"; ws["F8"] = round(ritmo)
+for cc in ("F4", "F5", "F6", "F8"): ws[cc].font = F_TXT; ws[cc].number_format = CLP
+ws["F7"].font = Font(name=ARIAL, size=10, bold=True); ws["F7"].number_format = "0.0000"
+ws["F8"].font = Font(name=ARIAL, size=10, bold=True, color="B36B00")
+for cc in ("E4", "E5", "E6", "E7", "E8"): ws[cc].font = F_NOTE
 ws.column_dimensions["B"].width = 118; ws.column_dimensions["C"].width = 14
 ws.column_dimensions["E"].width = 48; ws.column_dimensions["F"].width = 17
 # ── panel del mes en curso (semáforo, no entra al modelo) ──────────────────
@@ -415,9 +432,18 @@ for c in orden:
     ws.cell(row=r, column=4, value=prod.loc[c, "categoria"]).font = F_TXT
     for m in range(1, NM + 1):
         col = 4 + m
-        if m <= 12:
+        if m <= U:                       # mes cerrado: cajas reales, valor fijo
             cc = ws.cell(row=r, column=col, value=round(float(dem.loc[c, m]), 2))
-            cc.font = F_INPUT if m <= U else F_TXT
+            cc.font = F_INPUT
+        elif m <= 12:                    # proyeccion 2026: colgada de Parametros
+            if c in es_gall:             # galletas: ultimo mes real x rampa
+                k = m - U
+                cc = ws.cell(row=r, column=col,
+                             value=f"={get_column_letter(4 + U)}{r}*(1+Parametros!$C$9)^{k}")
+            else:                        # helados: proyeccion x factor de calce (META)
+                cc = ws.cell(row=r, column=col,
+                             value=f"={round(float(dem_pre.loc[c, m]), 2)}*Parametros!$F$7")
+            cc.font = F_TXT
         else:
             k = m - 12
             if c in es_gall:                       # galletas: nivel dic-26 con crecimiento
@@ -454,6 +480,7 @@ for col in (COL_TOT26, COL_TEMP):
     L = get_column_letter(col)
     cc = ws.cell(row=rt, column=col, value=f"=SUM({L}5:{L}{rt-1})")
     cc.font = F_HDR; cc.number_format = CAJ; cc.fill = FILL_TOT
+sin_triangulos(ws, f"E5:{get_column_letter(COL_TEMP)}{rt}")
 n_skus = len(orden)
 
 # ── Stock minimo / ideal ───────────────────────────────────────────────────
@@ -481,6 +508,7 @@ def hoja_stock(nombre, titulo, mult):
         cc = ws.cell(row=r, column=4 + m, value=f"=SUM({L}5:{L}{r-1})")
         cc.font = F_HDR; cc.number_format = CAJ
         cc.fill = FILL_TEMP if m in TEMP_MESES else FILL_TOT
+    sin_triangulos(ws, f"E5:{get_column_letter(4 + NM)}{r}")
     return ws
 
 hoja_stock("Stock Minimo", "Stock MÍNIMO por SKU (cajas, fin de mes) — ene-26 a abr-27",
@@ -568,6 +596,7 @@ for cd_nombre, share_col in CD_COL.items():
             cc.font = F_HDR; cc.number_format = CAJ
             cc.fill = FILL_TEMP if m in TEMP_MESES else FILL_TOT
         r += 3
+    sin_triangulos(ws, f"E6:{get_column_letter(4 + NM)}{r}")
     ws.freeze_panes = "E6"
     bloques_cd[cd_nombre] = tuple(filas_bloque)
 
@@ -745,3 +774,6 @@ except Exception as e:
 print(f"\nOK — {n_skus} SKUs ({len(es_gall)} galletas incluidas) · corte real: {MESES[U-1]}")
 print(f"Archivo: {destino}")
 print("(el .bat recalcula las fórmulas con Excel al terminar)")
+# Marca legible por el .ps1 para que recalcule EL archivo que se escribió
+# (si Drive estaba bloqueado, el bueno es la copia local, no el de Drive).
+print(f"##ARCHIVO##{destino}")
