@@ -39,12 +39,15 @@ No todos los datos llegan solos:
 |---|---|---|
 | Gran Natural (ventas) | API, automático | No |
 | Autoventa (pedidos) | API, automático | No |
-| **Acuña (ventas)** | **Excel manual** | **Sí** |
+| Acuña (ventas) | Excel manual | Sin operación desde jul-2026 (ver abajo) |
 | **Despachos** | **Excel manual** | **Sí** |
 
-Como Acuña se carga a mano, si no lo haces **ese mes queda a medias**: Gran Natural
-aparece completo y Acuña cortado el día que se cargó por última vez. El plan de stock
-detecta eso y **se niega a tomar el mes como real**, avisándote en pantalla.
+**Sobre Acuña:** con la transición a Gran Natural dejó de facturar; su última venta
+real es del 13-jul-2026. El script lo tiene registrado como *sociedad de baja*, así
+que no espera datos suyos ni bloquea el cierre de mes. Si algún día Acuña volviera a
+facturar, el script lo detecta y avisa en pantalla que hay que actualizar ese dato.
+
+Lo que sí sigue siendo manual son los **despachos**.
 
 ---
 
@@ -54,12 +57,12 @@ Los primeros días de cada mes, cuando ya cerró el mes anterior:
 
 ### Paso 1 — Cargar el mes en la base
 
-**1.a** Descarga de Obuma el reporte de ventas de **Acuña** del mes que cerró, y de
-Autoventa el **detalle de despachos**.
+**1.a** Descarga de Autoventa el **detalle de despachos** del mes que cerró.
+(Si en algún momento vuelve a haber ventas de Acuña, también su reporte de Obuma.)
 
-**1.b** Arrastra cada archivo a su carpeta dentro de `inbox\`:
-- el de Acuña → `inbox\acuna\`
+**1.b** Arrástralo a su carpeta dentro de `inbox\`:
 - el de despachos → `inbox\despachos\`
+- (el de Acuña, si lo hubiera → `inbox\acuna\`)
 
 (no importa el nombre que tengan; la carpeta es la que manda)
 
@@ -142,17 +145,15 @@ proyecto (necesita estar junto a la carpeta `reportes`).
 **El mes que cerró sigue apareciendo como PROY**
 No quedó cargado en la base. Vuelve al Paso 1.
 
-**Dice "CORTE LIMITADO POR: Acuña (Excel manual)"**
-Es el aviso más importante. Significa que Gran Natural está al día pero Acuña no,
-así que ese mes está a medias y el plan **no** lo toma como real (si lo tomara,
-subestimaría la venta del mes y le exigiría de más a los meses siguientes).
+**Dice "CORTE LIMITADO POR: ..."**
+Significa que una fuente que sí opera no está cargada hasta fin de mes, así que el
+plan **no** toma ese mes como real (si lo tomara, subestimaría la venta del mes y le
+exigiría de más a los meses siguientes). La pantalla te dice cuál es y hasta qué día
+tiene datos. Solución: cargarla (Paso 1) y volver a correr.
 
-La pantalla te muestra hasta qué día tiene cargada cada fuente. Solución: cargar
-Acuña (Paso 1) y volver a correr.
-
-> Si algún día Acuña deja de operar de verdad y ya no va a haber más ventas suyas,
-> avísame para fijar el corte a mano; si no, el plan se quedaría pegado esperando
-> datos que nunca van a llegar.
+**Dice "FACTURÓ DESPUÉS DE LA BAJA"**
+Acuña volvió a emitir ventas después de haber quedado sin operación. No es un error
+del proceso, es información: avísame para actualizar el registro en el script.
 
 ---
 

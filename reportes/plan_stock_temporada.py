@@ -9,6 +9,7 @@ Basta con volver a correr este script despues de cargar el mes que cerro.
 import os
 import sys
 import calendar
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -58,11 +59,17 @@ if _nc_mal.any():
 v = v.join(prod, on="producto_codigo")
 v = v[~v["categoria"].isin(["Servicios", "Maquinas"])].copy()
 
-# CORTE AUTOMATICO: ultimo mes COMPLETO cargado, EXIGIENDO QUE TODAS LAS
-# SOCIEDADES esten al dia. Gran Natural entra por API (siempre al dia) pero
-# Acuña se carga a mano desde un Excel; si se mira solo la fecha global, un mes
-# a medio cargar se toma como real y la venta de ese mes queda subestimada.
+# CORTE AUTOMATICO: ultimo mes COMPLETO, exigiendo que las sociedades ACTIVAS
+# esten al dia. Gran Natural entra por API (siempre al dia); Acuña se carga a
+# mano desde Excel, asi que un mes suyo a medio cargar no debe tomarse como real.
 SOC = {1: "Acuña (Excel manual)", 2: "Gran Natural (API)"}
+
+# Sociedades DADAS DE BAJA: dejaron de facturar de verdad, no es falta de carga.
+# Acuña quedo sin operacion por la transicion a Gran Natural; su ultima venta
+# real es del 13-jul-2026. No debe bloquear el cierre de ningun mes (si lo
+# hiciera, el plan quedaria esperando datos que nunca van a llegar).
+SOCIEDAD_BAJA = {1: date(2026, 7, 13)}
+
 def ultimo_mes_completo(fechas):
     f = fechas.max().date()
     return f, (f.month if f.day >= calendar.monthrange(f.year, f.month)[1] else f.month - 1)
@@ -74,6 +81,16 @@ for sid, nom in SOC.items():
     if fs.empty:
         continue
     f, u = ultimo_mes_completo(fs)
+    if sid in SOCIEDAD_BAJA:
+        baja = SOCIEDAD_BAJA[sid]
+        if f > baja:
+            # volvio a facturar: ya no esta de baja, hay que actualizar la constante
+            print(f"   {nom:26s} última venta {f}  [!] FACTURÓ DESPUÉS DE LA BAJA ({baja})")
+            print(f"      -> vuelve a operar: actualizar SOCIEDAD_BAJA en este script.")
+            cortes[sid] = u
+        else:
+            print(f"   {nom:26s} última venta {f}  (sociedad de baja: no limita el corte)")
+        continue
     cortes[sid] = u
     print(f"   {nom:26s} última venta {f} -> completo hasta mes {u:02d}")
 
@@ -82,9 +99,8 @@ U = min(cortes.values()) if cortes else 0
 rezagadas = [SOC[s] for s, u in cortes.items() if u < max(cortes.values())]
 if rezagadas:
     print(f"\n  [!] CORTE LIMITADO POR: {', '.join(rezagadas)}")
-    print(f"      El mes {max(cortes.values()):02d} NO se toma como real porque esa fuente no está cargada")
-    print(f"      hasta fin de mes. Corre 'Cargar mes.bat' y vuelve a intentarlo.")
-    print(f"      (si Acuña dejó de operar de verdad, avisar para fijar el corte a mano)\n")
+    print(f"      El mes {max(cortes.values()):02d} NO se toma como real porque esa fuente no está")
+    print(f"      cargada hasta fin de mes. Corre 'Cargar mes.bat' y vuelve a intentarlo.\n")
 print(f"Meses REALES: ene..{U:02d}/{ANIO} | proyectados: {U+1:02d}..12 + ene-abr 2027")
 
 vr = v[v["mes"] <= U].copy()          # solo meses completos
