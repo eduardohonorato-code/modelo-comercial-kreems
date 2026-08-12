@@ -43,7 +43,7 @@ def fetch(table, select, filt=None, orders=("fecha",)):
 # ── datos ──────────────────────────────────────────────────────────────────
 prod = fetch("dim_producto", "codigo,nombre,categoria", orders=("codigo",)).set_index("codigo")
 
-v = fetch("fact_ventas", "fecha,tipo_dcto,producto_codigo,cantidad,neto,sucursal",
+v = fetch("fact_ventas", "fecha,tipo_dcto,producto_codigo,cantidad,neto,sucursal,sociedad_id",
           lambda q: q.gte("fecha", f"{ANIO}-01-01").lte("fecha", f"{ANIO}-12-31"),
           orders=("fecha", "n_dcto", "linea"))
 v["fecha"] = pd.to_datetime(v["fecha"]); v["mes"] = v["fecha"].dt.month
@@ -58,11 +58,34 @@ if _nc_mal.any():
 v = v.join(prod, on="producto_codigo")
 v = v[~v["categoria"].isin(["Servicios", "Maquinas"])].copy()
 
-# CORTE AUTOMATICO: ultimo mes COMPLETO cargado
+# CORTE AUTOMATICO: ultimo mes COMPLETO cargado, EXIGIENDO QUE TODAS LAS
+# SOCIEDADES esten al dia. Gran Natural entra por API (siempre al dia) pero
+# Acuña se carga a mano desde un Excel; si se mira solo la fecha global, un mes
+# a medio cargar se toma como real y la venta de ese mes queda subestimada.
+SOC = {1: "Acuña (Excel manual)", 2: "Gran Natural (API)"}
+def ultimo_mes_completo(fechas):
+    f = fechas.max().date()
+    return f, (f.month if f.day >= calendar.monthrange(f.year, f.month)[1] else f.month - 1)
+
+print("Cobertura por sociedad:")
+cortes = {}
+for sid, nom in SOC.items():
+    fs = v.loc[v["sociedad_id"] == sid, "fecha"]
+    if fs.empty:
+        continue
+    f, u = ultimo_mes_completo(fs)
+    cortes[sid] = u
+    print(f"   {nom:26s} última venta {f} -> completo hasta mes {u:02d}")
+
 ULT_FECHA = v["fecha"].max().date()
-ULT_DIA_MES = calendar.monthrange(ULT_FECHA.year, ULT_FECHA.month)[1]
-U = ULT_FECHA.month if ULT_FECHA.day >= ULT_DIA_MES else ULT_FECHA.month - 1
-print(f"Ultima fecha en base: {ULT_FECHA} -> meses REALES: ene..{U:02d}/{ANIO} | proyectados: {U+1:02d}..12 + ene-abr 2027")
+U = min(cortes.values()) if cortes else 0
+rezagadas = [SOC[s] for s, u in cortes.items() if u < max(cortes.values())]
+if rezagadas:
+    print(f"\n  [!] CORTE LIMITADO POR: {', '.join(rezagadas)}")
+    print(f"      El mes {max(cortes.values()):02d} NO se toma como real porque esa fuente no está cargada")
+    print(f"      hasta fin de mes. Corre 'Cargar mes.bat' y vuelve a intentarlo.")
+    print(f"      (si Acuña dejó de operar de verdad, avisar para fijar el corte a mano)\n")
+print(f"Meses REALES: ene..{U:02d}/{ANIO} | proyectados: {U+1:02d}..12 + ene-abr 2027")
 
 vr = v[v["mes"] <= U].copy()          # solo meses completos
 es_gall_cat = lambda c: c == "Galletas"

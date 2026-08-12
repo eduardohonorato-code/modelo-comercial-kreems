@@ -15,12 +15,59 @@ normal: ahí se va viendo el avance. No la cierres hasta que diga LISTO.
 
 ---
 
+## Dónde están los archivos
+
+Los dos .bat están en la **carpeta del proyecto**:
+
+```
+C:\Users\Evelyn Novoa\OneDrive\Escritorio\Modelo_Comercial\
+```
+
+Ahí adentro vas a ver, entre otras cosas:
+
+- `Cargar mes.bat`  ← carga el mes a la base
+- `Actualizar plan de stock.bat`  ← actualiza el Excel del plan
+- la carpeta `inbox\`  ← donde se dejan los archivos a cargar
+
+---
+
+## Por qué hay que cargar el mes (y qué se carga)
+
+No todos los datos llegan solos:
+
+| Fuente | Cómo entra | ¿Hay que hacer algo? |
+|---|---|---|
+| Gran Natural (ventas) | API, automático | No |
+| Autoventa (pedidos) | API, automático | No |
+| **Acuña (ventas)** | **Excel manual** | **Sí** |
+| **Despachos** | **Excel manual** | **Sí** |
+
+Como Acuña se carga a mano, si no lo haces **ese mes queda a medias**: Gran Natural
+aparece completo y Acuña cortado el día que se cargó por última vez. El plan de stock
+detecta eso y **se niega a tomar el mes como real**, avisándote en pantalla.
+
+---
+
 ## El proceso mensual, en 3 pasos
 
 Los primeros días de cada mes, cuando ya cerró el mes anterior:
 
 ### Paso 1 — Cargar el mes en la base
-Doble clic en **`Cargar mes.bat`** (lo que ya haces hoy).
+
+**1.a** Descarga de Obuma el reporte de ventas de **Acuña** del mes que cerró, y de
+Autoventa el **detalle de despachos**.
+
+**1.b** Arrastra cada archivo a su carpeta dentro de `inbox\`:
+- el de Acuña → `inbox\acuna\`
+- el de despachos → `inbox\despachos\`
+
+(no importa el nombre que tengan; la carpeta es la que manda)
+
+**1.c** Doble clic en **`Cargar mes.bat`**. Te va a preguntar el mes en formato
+`2026-07`. Escríbelo y presiona Enter.
+
+Eso corre todo el pipeline en orden: archiva lo del inbox, carga pedidos por API,
+carga Acuña y despachos desde los Excel, y carga Gran Natural por API.
 
 > Importante: el plan de stock lee lo que esté en la base. Si el mes no está
 > cargado, el plan no lo va a ver.
@@ -94,6 +141,18 @@ proyecto (necesita estar junto a la carpeta `reportes`).
 
 **El mes que cerró sigue apareciendo como PROY**
 No quedó cargado en la base. Vuelve al Paso 1.
+
+**Dice "CORTE LIMITADO POR: Acuña (Excel manual)"**
+Es el aviso más importante. Significa que Gran Natural está al día pero Acuña no,
+así que ese mes está a medias y el plan **no** lo toma como real (si lo tomara,
+subestimaría la venta del mes y le exigiría de más a los meses siguientes).
+
+La pantalla te muestra hasta qué día tiene cargada cada fuente. Solución: cargar
+Acuña (Paso 1) y volver a correr.
+
+> Si algún día Acuña deja de operar de verdad y ya no va a haber más ventas suyas,
+> avísame para fijar el corte a mano; si no, el plan se quedaría pegado esperando
+> datos que nunca van a llegar.
 
 ---
 
