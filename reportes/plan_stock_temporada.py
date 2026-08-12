@@ -141,6 +141,30 @@ META_HELADOS = round(sum(plan_helados))
 CREC_REAL_2027 = 0.0511
 print(f"Plan oficial: total ${sum(plan_total)/1e6:,.1f}M | helados ${META_HELADOS/1e6:,.1f}M | galletas ${sum(GALL_PLAN_ORIG)/1e6:,.1f}M")
 
+# ── mes en curso (parcial): solo informativo, NO entra al modelo ───────────
+# Un mes a medias es muy ruidoso para proyectar (el % facturado al mismo dia
+# oscila entre 22% y 50% segun el mes), asi que no se mezcla con la demanda.
+# Pero sirve como semaforo: se muestra en Parametros para decidir a tiempo.
+curso = {}
+if U < 12:
+    vc = v[v["mes"] == U + 1]
+    if not vc.empty:
+        dia = int(vc["fecha"].max().day)
+        facturado = float(vc["neto"].sum())
+        shares = []
+        for m in range(1, U + 1):
+            sub = v[v["mes"] == m]
+            tot = float(sub["neto"].sum())
+            if tot > 0:
+                shares.append(float(sub.loc[sub["fecha"].dt.day <= dia, "neto"].sum()) / tot)
+        sh = sum(shares) / len(shares) if shares else None
+        curso = {"mes": U + 1, "dia": dia, "facturado": facturado,
+                 "share": sh, "cierre": (facturado / sh) if sh else None,
+                 "min_share": min(shares) if shares else None,
+                 "max_share": max(shares) if shares else None}
+        print(f"Mes en curso ({U+1:02d}, al día {dia}): facturado ${facturado/1e6:,.1f}M | "
+              f"al ritmo histórico cerraría en ${curso['cierre']/1e6:,.1f}M")
+
 # ── base por SKU ───────────────────────────────────────────────────────────
 real = vr.pivot_table(index="producto_codigo", columns="mes", values="cantidad",
                       aggfunc="sum", fill_value=0.0)
@@ -293,6 +317,33 @@ ws["F6"].font = Font(name=ARIAL, size=10, bold=True, color="B36B00")
 for cc in ("E4", "E5", "E6", "E7"): ws[cc].font = F_NOTE
 ws.column_dimensions["B"].width = 118; ws.column_dimensions["C"].width = 14
 ws.column_dimensions["E"].width = 48; ws.column_dimensions["F"].width = 17
+# ── panel del mes en curso (semáforo, no entra al modelo) ──────────────────
+if curso:
+    F_AL = Font(name=ARIAL, size=10, bold=True, color="B36B00")
+    plan_curso = plan_total[curso["mes"] - 1]
+    desv = curso["cierre"] / plan_curso - 1 if curso["cierre"] else None
+    ws["E9"] = f"MES EN CURSO — {MESES[curso['mes']-1]} (al día {curso['dia']})"
+    ws["E9"].font = F_HDR; ws["E9"].fill = FILL_YEL
+    filas_curso = [
+        ("Facturado hasta hoy", curso["facturado"], CLP, F_TXT),
+        ("Plan del mes", plan_curso, CLP, F_TXT),
+        (f"% del mes que suele ir al día {curso['dia']}", curso["share"], PCT, F_TXT),
+        ("Cierre estimado a ese ritmo", curso["cierre"], CLP, F_AL),
+        ("Desvío estimado vs plan del mes", desv, PCT, F_AL),
+    ]
+    for i, (lbl, val, fmt, fnt) in enumerate(filas_curso):
+        ws.cell(row=10 + i, column=5, value=lbl).font = F_NOTE
+        cc = ws.cell(row=10 + i, column=6, value=val)
+        cc.font = fnt; cc.number_format = fmt
+    ws["E15"] = (f"Referencia, NO entra en la proyección: el % facturado al día {curso['dia']} "
+                 f"osciló entre {curso['min_share']:.0%} y {curso['max_share']:.0%} en los meses cerrados,")
+    ws["E16"] = ("así que el cierre estimado es orientativo. Sirve para ver a tiempo si el mes se está "
+                 "desviando del plan;")
+    ws["E17"] = ("si la desviación se repite mes a mes, bajar la META en vez de exigirle la recuperación "
+                 "a los meses que quedan.")
+    for c in ("E15", "E16", "E17"):
+        ws[c].font = F_NOTE
+
 ws["B10"] = "Cómo se actualiza (proceso mensual):"; ws["B10"].font = F_HDR
 notas = [
     f"1) Cargar en Supabase el mes que cerró.  2) Volver a correr el generador.  3) Listo: el corte real/proyectado se mueve solo.",
