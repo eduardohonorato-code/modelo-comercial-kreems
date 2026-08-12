@@ -7,8 +7,8 @@ pasos que si no tendrías que escribir a mano en la consola. No es un programa q
 haya que instalar ni una macro de Excel: es un archivo de texto con instrucciones,
 y Windows sabe cómo ejecutarlo.
 
-Tú ya usas uno: **`Cargar mes.bat`**, el que corres para subir el mes a la base.
-El nuevo funciona igual.
+En el proyecto ya existe otro (`Cargar mes.bat`) que es de la operación diaria.
+El nuevo funciona igual, pero sirve para otra cosa: **las proyecciones**.
 
 Al hacer doble clic se abre una **ventana negra** (la consola de Windows). Eso es
 normal: ahí se va viendo el avance. No la cierres hasta que diga LISTO.
@@ -25,9 +25,8 @@ C:\Users\Evelyn Novoa\OneDrive\Escritorio\Modelo_Comercial\
 
 Ahí adentro vas a ver, entre otras cosas:
 
-- `Cargar mes.bat`  ← carga el mes a la base
-- `Actualizar plan de stock.bat`  ← actualiza el Excel del plan
-- la carpeta `inbox\`  ← donde se dejan los archivos a cargar
+- `Actualizar plan de stock.bat`  ← **el que te interesa aquí**: actualiza las proyecciones
+- `Cargar mes.bat`  ← operación diaria (despachos, máquinas). No hace falta para este archivo.
 
 ---
 
@@ -69,7 +68,6 @@ Doble clic en **`Actualizar plan de stock.bat`**.
 
 Está en la carpeta del proyecto:
 `C:\Users\Evelyn Novoa\OneDrive\Escritorio\Modelo_Comercial\`
-(la misma carpeta donde está `Cargar mes.bat`)
 
 Te va a pedir que presiones una tecla para empezar. Después trabaja solo:
 
@@ -132,7 +130,8 @@ pantalla hasta qué fecha hay datos.
 Significa que una fuente que sí opera no está cargada hasta fin de mes, así que el
 plan **no** toma ese mes como real (si lo tomara, subestimaría la venta del mes y le
 exigiría de más a los meses siguientes). La pantalla te dice cuál es y hasta qué día
-tiene datos. Solución: cargarla (Paso 1) y volver a correr.
+tiene datos. Con Acuña de baja y Gran Natural entrando por API, este aviso no debería
+aparecer; si sale, avísame.
 
 **Dice "FACTURÓ DESPUÉS DE LA BAJA"**
 Acuña volvió a emitir ventas después de haber quedado sin operación. No es un error
