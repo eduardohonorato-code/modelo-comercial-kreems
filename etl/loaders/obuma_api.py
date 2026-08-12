@@ -291,9 +291,12 @@ def cargar_obuma_api(
     df["sociedad_id"] = soc_id
     df["cliente_rut"] = normalizar_rut(df["cliente_rut_raw"])
 
-    # 5. Signo de NC en montos (regla de negocio sección 3, igual que el Excel)
+    # 5. Signo de NC en montos Y EN CANTIDAD (regla de negocio sección 3).
+    # La API devuelve la cantidad de una NC en positivo (el export Excel ya la
+    # trae negativa). Sin invertirla, la devolución SUMA cajas en vez de
+    # restarlas y las cajas netas quedan infladas.
     es_neg = df["tipo_dcto"].isin(TIPO_DCTO_NEGATIVO)
-    for col in ["neto", "costo"]:
+    for col in ["neto", "costo", "cantidad"]:
         df.loc[es_neg, col] = -df.loc[es_neg, col].abs()
     # total y margen derivados (la API entrega neto y costo por línea)
     df["total"] = df["neto"]               # total real lleva IVA a nivel doc; en línea usamos neto
