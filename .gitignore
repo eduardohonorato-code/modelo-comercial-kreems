@@ -4,8 +4,12 @@
 # Bandeja de descargas a archivar (mismos datos sensibles que /data)
 /inbox/
 
-# Reportes generados (traen RUT y datos de clientes — no subir al repo público)
-/reportes/
+# Reportes generados (traen RUT y datos de clientes — no subir al repo público).
+# Se ignora el CONTENIDO, no la carpeta: así se puede exceptuar el código.
+# (una regla '/reportes/' a secas impide que git mire adentro y la negación no aplica)
+/reportes/*
+# ...pero los generadores SÍ son código y se versionan (no contienen datos)
+!/reportes/*.py
 
 # Material interno de comisiones (montos por vendedor — no subir al repo público)
 docs/Comisiones_v1_*.pptx
