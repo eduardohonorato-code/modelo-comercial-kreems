@@ -42,21 +42,11 @@ def to_csv(df) -> bytes:
     return df.to_csv(index=False, sep=";").encode("utf-8-sig")
 
 
-def to_xlsx(df, hoja: str = "Datos") -> bytes:
-    """
-    DataFrame → archivo .xlsx nativo (bytes). Se abre limpio en Excel: sin
-    problemas de acentos ni de delimitador (a diferencia del CSV). Encabezado
-    navy en negrita, filtro automático y ancho de columna proporcional.
-    openpyxl ya es dependencia del proyecto (lo usa el ETL / lectura de Excel).
-    """
-    import pandas as pd  # noqa: F401  (asegura que openpyxl esté disponible)
-    from openpyxl import Workbook
+def _escribir_hoja(ws, df):
+    """Vuelca un DataFrame en una hoja con el estilo de la casa (encabezado navy,
+    panel congelado, autofiltro y ancho proporcional al contenido)."""
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = hoja[:31]  # Excel limita el nombre de hoja a 31 chars
 
     cols = [str(c) for c in df.columns]
     hdr_fill = PatternFill("solid", fgColor="1B3A6B")
@@ -78,6 +68,41 @@ def to_xlsx(df, hoja: str = "Datos") -> bytes:
     ws.freeze_panes = "A2"
     if len(df):
         ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{len(df) + 1}"
+
+
+def to_xlsx(df, hoja: str = "Datos") -> bytes:
+    """
+    DataFrame → archivo .xlsx nativo (bytes). Se abre limpio en Excel: sin
+    problemas de acentos ni de delimitador (a diferencia del CSV). Encabezado
+    navy en negrita, filtro automático y ancho de columna proporcional.
+    openpyxl ya es dependencia del proyecto (lo usa el ETL / lectura de Excel).
+    """
+    import pandas as pd  # noqa: F401  (asegura que openpyxl esté disponible)
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = hoja[:31]  # Excel limita el nombre de hoja a 31 chars
+    _escribir_hoja(ws, df)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def to_xlsx_multi(hojas: dict) -> bytes:
+    """
+    Varias hojas en un mismo .xlsx: {nombre_hoja: DataFrame}, mismo estilo que
+    to_xlsx. Sirve para entregar la vista pivote y, en otra hoja, el detalle en
+    formato largo con el que el usuario arma sus propias tablas dinámicas.
+    """
+    import pandas as pd  # noqa: F401
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    for nombre, df in hojas.items():
+        _escribir_hoja(wb.create_sheet(title=str(nombre)[:31]), df)
 
     buf = io.BytesIO()
     wb.save(buf)

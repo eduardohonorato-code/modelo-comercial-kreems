@@ -1167,6 +1167,79 @@ def _s06_cajas_cd(client, df_all: pd.DataFrame, f_ini, f_fin, soc_ids, df_prod_d
     st.caption(f"Total mensual de **{metrica.lower()}** por centro de distribución "
                f"en {f_fin.year} (cambia con el selector Cajas/Monto).")
 
+    _s06b_detalle_mensual_sku(cy, cds_y, val_col, metrica, es_caja, f_fin.year)
+
+
+def _s06b_detalle_mensual_sku(cy: pd.DataFrame, cds_y: list, val_col: str,
+                              metrica: str, es_caja: bool, year: int):
+    """SKU × mes del año (la tabla de arriba solo da el total por CD, y la del
+    período solo el mes filtrado). Exporta el pivote y el detalle largo, que es
+    lo que permite armar tablas dinámicas mes a mes."""
+    _sec(f"Detalle mensual por SKU · {year}")
+    cd_sel = st.radio("Centro de distribución", ["Todos"] + [c.title() for c in cds_y],
+                      horizontal=True, key="cajas_mes_cd")
+    dfm = cy if cd_sel == "Todos" else cy[cy["cd"] == cd_sel.upper()]
+    if dfm.empty:
+        st.caption("Sin datos para ese centro de distribución.")
+        return
+
+    meses = sorted(dfm["mes_num"].dropna().unique())
+    piv = dfm.pivot_table(index=["producto_codigo", "nombre", "categoria"],
+                          columns="mes_num", values=val_col,
+                          aggfunc="sum", fill_value=0.0)
+    piv = piv.reindex(columns=meses, fill_value=0.0)
+    piv["Total"] = piv.sum(axis=1)
+    piv = piv.sort_values("Total", ascending=False).reset_index()
+    piv.columns = (["Código", "Producto", "Categoría"]
+                   + [MESES_C[m] for m in meses] + ["Total"])
+    num_cols = [MESES_C[m] for m in meses] + ["Total"]
+    for c in num_cols:
+        piv[c] = piv[c].round().astype(int)
+    # Fila TOTAL al pie: el detalle por SKU no debe obligar a sumar a mano.
+    tot = {c: (piv[c].sum() if c in num_cols else "") for c in piv.columns}
+    tot["Código"] = "TOTAL"
+    piv_disp = pd.concat([piv, pd.DataFrame([tot])], ignore_index=True)
+
+    cfgm = (None if es_caja else
+            {c: st.column_config.NumberColumn(f"{c} $", format="$%d") for c in num_cols})
+    st.dataframe(piv_disp, use_container_width=True, hide_index=True,
+                 column_config=cfgm,
+                 height=min(600, 60 + 28 * min(len(piv_disp), 18)))
+    st.caption(f"**{metrica}** por SKU y mes en {year} · {cd_sel}. El Excel trae "
+               "esta vista y, en una segunda hoja, el detalle mes × CD × SKU en "
+               "formato largo (cajas y monto juntos) para tablas dinámicas.")
+
+    # Detalle largo: una fila por mes × CD × SKU, con AMBAS métricas.
+    largo = (cy.groupby(["mes_num", "cd", "producto_codigo", "nombre", "categoria"])
+             .agg(cajas=("cantidad", "sum"), monto=("neto", "sum"))
+             .reset_index())
+    largo["Mes"] = largo["mes_num"].map(MESES_C)
+    largo["Año"] = year
+    largo["cd"] = largo["cd"].str.title()
+    largo["cajas"] = largo["cajas"].round().astype(int)
+    largo["monto"] = largo["monto"].round().astype(int)
+    largo = largo[["Año", "mes_num", "Mes", "cd", "producto_codigo", "nombre",
+                   "categoria", "cajas", "monto"]].sort_values(
+        ["mes_num", "cd", "cajas"], ascending=[True, True, False])
+    largo.columns = ["Año", "N° mes", "Mes", "Centro distribución", "Código",
+                     "Producto", "Categoría", "Cajas", "Monto $"]
+
+    from app.export import to_xlsx_multi, to_csv
+    nbm = f"cajas_mensual_sku_{year}_{cd_sel.lower().replace(' ', '_')}"
+    e1, e2 = st.columns(2)
+    with e1:
+        st.download_button(
+            "📗 Descargar Excel mensual",
+            to_xlsx_multi({f"{metrica} SKU x Mes": piv_disp,
+                           "Detalle largo": largo}),
+            f"{nbm}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_xlsx_{nbm}", use_container_width=True)
+    with e2:
+        st.download_button("📄 Descargar CSV (detalle largo)", to_csv(largo),
+                           f"{nbm}_largo.csv", "text/csv",
+                           key=f"dl_csv_{nbm}", use_container_width=True)
+
 
 def render(client, anio: int, mes: int):
     f_ini, f_fin, soc_ids, cats_sel, df_prod_dim = _page_filters(
