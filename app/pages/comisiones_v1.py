@@ -10,16 +10,17 @@ en 5 KPIs ponderados. Cada KPI paga proporcional al cumplimiento de su meta
   2. Clientes nuevos válidos       20%     1,00%       historia fact_ventas; META AUTOMÁTICA
                                                        (2% de cartera + 10% de sus dormidos)
   3. Efectividad de cartera        20%     1,00%       clientes activos / cartera asignada
-  4. Amplitud de portafolio        15%     0,75%       líneas distintas x cliente vs meta (2)
+  4. Amplitud de SKU               15%     0,75%       productos distintos x cliente vs meta (5)
   5. Cobertura de ruta             15%     0,75%       visitas / agendamientos — CARGA MANUAL
                                                        del reporte de Autoventa (no está en su API)
 
 Modelo definido por gerencia (julio 2026). Cambios respecto de la versión previa:
   · Pesos nuevos (antes 50/15/11,7/11,7/11,7).
   · Cobertura de ruta ENTRA como KPI (visitas ÷ agendamientos de Autoventa).
-  · Profundidad SKU SALE del cálculo.
-  · Regla de pago CONMUTABLE (proporcional o con umbral 80%), para que gerencia
-    compare el impacto en plata antes de fijarla.
+  · Amplitud pasa a contar SKUs (productos) distintos por cliente, sin importar
+    la categoría; antes contaba categorías y existía un KPI aparte de SKU.
+  · Umbral de acceso EDITABLE por KPI: bajo el umbral no paga; alcanzado, se
+    paga proporcional al logro real.
   · Penetración Galletas NY no paga: queda como columna INDICADORA.
   · Meta de Clientes nuevos es automática y autorregulada: más cartera ⇒ más
     nuevos exigidos; más dormidos ⇒ más reactivaciones exigidas.
@@ -56,14 +57,14 @@ KPIS = [
     ("cuota",     "Cuota de venta",          0.30),   # 1,50% s/venta
     ("nuevos",    "Clientes nuevos válidos", 0.20),   # 1,00%
     ("cobertura", "Efectividad de cartera",  0.20),   # 1,00%
-    ("amplitud",  "Amplitud de portafolio",  0.15),   # 0,75%
+    ("amplitud",  "Amplitud de SKU",         0.15),   # 0,75%
     ("ruta",      "Cobertura de ruta",       0.15),   # 0,75%
 ]
 PESO   = {k: p for k, _, p in KPIS}
 PCT    = {k: p * TASA_MAX for k, _, p in KPIS}   # % sobre venta de cada KPI
 
 # Defaults de metas cuando no hay valor cargado ni fuente previa.
-DEFAULT_META_LINEAS = 2.0   # amplitud: líneas (categorías) x cliente
+DEFAULT_META_SKU = 5.0   # amplitud: SKUs (productos) distintos x cliente
 
 # Meta automática de Nuevos+Reactivados (override manual en meta_nuevos_react):
 PCT_META_NUEVOS = 0.02   # nuevos: 2% de la cartera (mín. 2)
@@ -217,7 +218,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
             parte_nuevos = max(2.0, round(PCT_META_NUEVOS * (m_cober or 0)))
             parte_react  = max(1.0, round(PCT_META_REACT * dorm)) if dorm > 0 else 0.0
             m_nuevos = parte_nuevos + parte_react
-        m_lineas = _coalesce(r, "meta_lineas", "__none__", DEFAULT_META_LINEAS)
+        m_lineas = _coalesce(r, "meta_lineas", "__none__", DEFAULT_META_SKU)
         # Cobertura de ruta: la meta son los agendamientos del reporte de
         # Autoventa (varían cada mes). Sin dato cargado el KPI queda en "—".
         agend = r.get("agendamientos")
@@ -277,8 +278,8 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
     - clientes_activos: clientes distintos con factura este mes.
     - nuevos_solo / react_solo / nuevos_react: 1ª compra (ever) y reactivados
       (gap ≥3m) entre los activos; el KPI usa la suma.
-    - amplitud_prom: promedio de líneas (categorías) distintas por cliente
-      (excluye Máquinas/Servicios por no ser portafolio vendible).
+    - amplitud_prom: promedio de SKUs (productos) distintos por cliente, sin
+      importar la categoría (excluye Máquinas/Servicios).
     - ny_clientes / ny_pct: clientes que compraron Galletas NY (indicador).
     - dormidos: clientes sin comprar hace ≥3 meses cuya ÚLTIMA compra fue con
       este vendedor (alimenta la meta automática de reactivados).
@@ -409,8 +410,10 @@ def _metricas_historia(hist: pd.DataFrame, client, anio: int, mes: int,
     attr["estado"] = attr["cliente_rut"].map(_estado)
 
     # Portafolio vendible del mes (sin Máquinas/Servicios) para la amplitud.
+    # Amplitud = SKUs (productos) DISTINTOS por cliente, sin importar si son de la
+    # misma categoría: lo que se premia es la variedad de productos colocados.
     cur_p = cur[~cur["linea"].isin(CAT_EXCLUIDAS)]
-    lineas_cli = (cur_p.groupby("cliente_rut")["linea"].nunique()
+    lineas_cli = (cur_p.groupby("cliente_rut")["producto_codigo"].nunique()
                     .rename("n_lineas").reset_index())
     ny_cli = (cur.groupby("cliente_rut")["es_ny"].any()
                 .rename("compro_ny").reset_index())
@@ -458,7 +461,7 @@ def render_tab(client, anio: int, mes: int):
         '(en evaluación, NO reemplaza el actual). La comisión es una <strong>tasa '
         'efectiva de hasta 5% sobre la venta real</strong>, repartida en 5 KPIs: '
         'Cuota 30% · Clientes nuevos 20% · Efectividad de cartera 20% · '
-        'Amplitud 15% · Cobertura de ruta 15%.</div>',
+        'Amplitud de SKU 15% · Cobertura de ruta 15%.</div>',
         unsafe_allow_html=True,
     )
 
@@ -553,9 +556,10 @@ def render_tab(client, anio: int, mes: int):
                 de clientes de Autoventa, campo Vend. exclusivo); si un vendedor no aparece
                 ahí, se estima con sus clientes de los últimos 3 meses. Cartera completa
                 activa (100%) = paga completo.</li>
-            <li><strong>Amplitud de portafolio</strong> = promedio de líneas (categorías)
-                distintas por cliente, contra una meta (ej. 2). Empuja abrir líneas nuevas
-                en cada cliente. Excluye Máquinas y Servicios.</li>
+            <li><strong>Amplitud de SKU</strong> = promedio de productos (SKUs) distintos
+                que lleva cada cliente, contra una meta (ej. 5). No importa si son de la
+                misma categoría: lo que se premia es la variedad de productos colocados.
+                Excluye Máquinas y Servicios.</li>
             <li><strong>Cobertura de ruta</strong> = visitas / agendamientos, del reporte
                 <em>Cobertura / Efectividad</em> de Autoventa. Es el <strong>único dato de
                 carga manual</strong>: ese reporte no está publicado en su API. Los
@@ -993,7 +997,7 @@ def _celda_kpi(r, k) -> str:
     if k == "cuota":
         detalle = f"{fmt_clp(real)} / {fmt_clp(meta)}"
     elif k == "amplitud":
-        detalle = f"{(real or 0):.1f} / {fmt_num(meta)} líneas x cliente"
+        detalle = f"{(real or 0):.1f} / {fmt_num(meta)} SKUs x cliente"
     elif k == "ruta":
         detalle = (f"{fmt_num(real)} visitas / {fmt_num(meta)} agendamientos"
                    if meta else "sin datos de Autoventa cargados")
@@ -1012,7 +1016,7 @@ def _tabla(df: pd.DataFrame):
         "<th title='Fact-NC / meta de venta'>Cuota</th>"
         "<th title='Clientes de 1ª compra + reactivados / meta automática (2% cartera + 10% dormidos)'>Nuevos+React</th>"
         "<th title='Clientes que compraron / clientes en cartera'>Efec. cartera</th>"
-        "<th title='Promedio de líneas (categorías) distintas por cliente / meta'>Amplitud</th>"
+        "<th title='Promedio de SKUs (productos) distintos por cliente / meta'>Amplitud SKU</th>"
         "<th title='Visitas / agendamientos (reporte Cobertura-Efectividad de Autoventa)'>Cob. ruta</th>"
         "<th title='Suma de los 5 KPIs (tope 5%)'>Tasa Efec.</th>"
         "<th title='Tasa efectiva × venta real'>Comisión $</th>"
@@ -1064,7 +1068,7 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
                "Nuevos+react→meta automática (2% cartera + 10% dormidos); "
                "Cobertura→cartera oficial del reporte Autoventa "
                "(o clientes de últimos 3 meses si el vendedor no está en ella); "
-               "Amplitud→2 líneas. "
+               "Amplitud→5 SKUs. "
                "Cualquier valor distinto de 0 reemplaza al automático.")
 
     vendedores = df[["vendedor_id", "nombre_canonico"]].sort_values("nombre_canonico")
@@ -1096,9 +1100,9 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
             help="0 = cartera asignada (o clientes de los últimos 3 meses).")
         c4, c5 = st.columns(2)
         m_lineas = c4.number_input(
-            "Meta amplitud (líneas x cliente)", min_value=0.0, step=0.5,
+            "Meta amplitud (SKUs x cliente)", min_value=0.0, step=0.5,
             value=float(_safe_num(fila.get("ov_meta_lineas"))),
-            help=f"0 = default ({DEFAULT_META_LINEAS:.0f} líneas).")
+            help=f"0 = default ({DEFAULT_META_SKU:.0f} SKUs distintos).")
         c5.markdown(
             "<div style='padding-top:1.9rem;color:#5a6072;font-size:.85rem'>"
             "La meta de <strong>Cobertura de ruta</strong> son los agendamientos "
