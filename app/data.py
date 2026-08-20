@@ -432,9 +432,22 @@ def get_dim_producto_all(client: Client) -> pd.DataFrame:
 
 
 def get_dim_cliente_geo(client: Client) -> pd.DataFrame:
-    """dim_cliente con rut, region, comuna (para análisis geográfico)."""
-    r = client.table("dim_cliente").select("rut,region,comuna").execute()
-    return pd.DataFrame(r.data) if r.data else pd.DataFrame()
+    """dim_cliente con rut, region, comuna (para análisis geográfico).
+    Paginado: dim_cliente pasa largo las 1000 filas de PostgREST y sin paginar
+    dos tercios de los clientes quedaban sin región (todo a 'Sin región')."""
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        r = (client.table("dim_cliente")
+             .select("rut,region,comuna")
+             .order("rut")
+             .range(offset, offset + _PAGE - 1).execute())
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
 def get_dim_sociedad(client: Client) -> pd.DataFrame:

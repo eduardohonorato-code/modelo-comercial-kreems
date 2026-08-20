@@ -49,6 +49,49 @@ def _canon_cat(c) -> str:
     return _CAT_CANON.get(cu, cu)
 
 
+# El ERP escribe la misma región de varias formas: "Biobío" y "Biobio",
+# "La Araucanía" y "Araucania", "Ñuble" y "Nuble". Así, una misma región
+# aparecía dos o tres veces, partida, en el análisis geográfico. Se normaliza a
+# una clave sin acentos (ni caracteres raros, por si algún export llega con la
+# codificación rota) y se muestra siempre con el mismo nombre.
+_REG_CANON = {
+    "BIOBIO": "Biobío", "BIOBO": "Biobío", "BOBO": "Biobío",
+    "DEL BIOBIO": "Biobío",
+    "ARAUCANIA": "Araucanía", "ARAUCANA": "Araucanía",
+    "LA ARAUCANIA": "Araucanía", "LA ARAUCANA": "Araucanía",
+    "VALPARAISO": "Valparaíso", "VALPARASO": "Valparaíso",
+    "NUBLE": "Ñuble", "UBLE": "Ñuble",
+    "LOS RIOS": "Los Ríos", "LOS ROS": "Los Ríos",
+    "LOS LAGOS": "Los Lagos", "MAULE": "Maule", "COQUIMBO": "Coquimbo",
+    "OHIGGINS": "O'Higgins", "O'HIGGINS": "O'Higgins",
+    "LIB. GRAL. B. OHIGGINS": "O'Higgins",
+    "METROPOLITANA": "Metropolitana", "REGION METROPOLITANA": "Metropolitana",
+    "ANTOFAGASTA": "Antofagasta", "ATACAMA": "Atacama", "TARAPACA": "Tarapacá",
+    "TARAPAC": "Tarapacá", "ARICA Y PARINACOTA": "Arica y Parinacota",
+    "AYSEN": "Aysén", "AYSN": "Aysén",
+    "MAGALLANES": "Magallanes",
+}
+
+
+def _canon_region(r) -> str:
+    """Nombre de región unificado (tolera acentos rotos y prefijos 'Región de')."""
+    import unicodedata
+    s = str(r).strip()
+    if not s or s.lower() in ("nan", "none"):
+        return "Sin región"
+    # Quita acentos y cualquier carácter que no sea letra/espacio/apóstrofo
+    # (ahí caen los "?" del mojibake, que es lo que partía las regiones).
+    k = "".join(c for c in unicodedata.normalize("NFKD", s.upper())
+                if not unicodedata.combining(c))
+    k = "".join(c for c in k if c.isalpha() or c in " '.")
+    k = " ".join(k.split())
+    for pref in ("REGION DE LA ", "REGION DEL ", "REGION DE ", "REGION ",
+                 "REGIN DE ", "REGIN DEL ", "REGIN "):
+        if k.startswith(pref):
+            k = k[len(pref):]
+    return _REG_CANON.get(k, s)
+
+
 # ─── Helpers UI ───────────────────────────────────────────────────────────────
 
 def _fact_nc(df: pd.DataFrame) -> float:
@@ -215,6 +258,14 @@ def _enrich(df: pd.DataFrame, df_prod_dim: pd.DataFrame,
     if not df_geo.empty and "cliente_rut" in df.columns:
         dg = df_geo.rename(columns={"rut": "cliente_rut"})
         df = df.merge(dg, on="cliente_rut", how="left")
+    if "region" in df.columns:
+        df["region"] = df["region"].map(_canon_region)
+
+    # Derivadas que comparten la pestaña de cajas y el informe Excel: centro de
+    # distribución normalizado y la marca de "esta línea cuenta como caja".
+    if "sucursal" in df.columns:
+        df["cd"] = _norm_cd(df["sucursal"])
+    df["es_caja"] = _mask_caja(df) if "unidad_medida" in df.columns else False
 
     if cats_sel:
         df = df[df["categoria"].isin(cats_sel)]
@@ -1241,6 +1292,103 @@ def _s06b_detalle_mensual_sku(cy: pd.DataFrame, cds_y: list, val_col: str,
                            key=f"dl_csv_{nbm}", use_container_width=True)
 
 
+# ─── Sección 07 · Informe Excel completo ──────────────────────────────────────
+
+def _s07_informe(client, df, df_prev, f_ini, f_fin, soc_ids, cats_sel):
+    _sec("Informe Excel completo")
+    st.markdown(
+        "Un solo archivo con **todo el análisis del período filtrado arriba**: "
+        "cuánto se vendió por región y por mes, por SKU, por caja, por centro de "
+        "distribución, por categoría, por sucursal, por vendedor y por cliente. "
+        "Cambia las fechas en los filtros de arriba y el informe sale con ese "
+        "rango — si eliges varios meses, las hojas *x Mes* traen una columna por mes."
+    )
+
+    hojas = [
+        ("Resumen", "Totales del período, mix de NC, top región/categoría/SKU y "
+                    "comparación con el período anterior."),
+        ("Mensual", "Una fila por mes: Fact-NC, cajas, unidades, facturas, "
+                    "ticket y variación vs el mes anterior."),
+        ("Región · Región x Mes · Región x Mes (cajas) · Comuna",
+         "Venta por región y comuna, y la matriz región × mes en pesos y en cajas."),
+        ("SKU · SKU x Mes · SKU x Mes (cajas) · SKU x Región",
+         "Cada producto con su clase ABC y precio por caja, más las matrices "
+         "por mes y por región."),
+        ("SKU x CD (cajas) · CD x Mes · CD x Mes (cajas)",
+         "Cajas por SKU y centro de distribución (Santiago / Concepción / "
+         "Temuco) y su evolución mensual."),
+        ("Categoría · Categoría x Mes · Subcategoría · Sucursal",
+         "El mismo corte por categoría de producto y por sucursal emisora."),
+        ("Vendedor · Vendedor x Mes · Clientes",
+         "Facturación por vendedor y el detalle de cada cliente con su ABC."),
+        ("Máquinas · Máquinas por vendedor",
+         "Movimientos de comodato (nuevas, cambios, retiros) y su estado de entrega."),
+        ("Detalle largo", "Todo en formato plano, para armar tus propias tablas "
+                          "dinámicas."),
+        ("Definiciones", "Qué significa cada métrica."),
+    ]
+    with st.expander("📑 Qué trae el archivo (24 hojas)", expanded=False):
+        st.dataframe(pd.DataFrame(hojas, columns=["Hoja", "Contenido"]),
+                     use_container_width=True, hide_index=True)
+
+    if df is None or df.empty:
+        _empty()
+        return
+
+    soc_lbl = st.session_state.get("anal_soc", "Ambas")
+    firma = (str(f_ini), str(f_fin), tuple(soc_ids or []), tuple(cats_sel or []),
+             len(df))
+    guardado = st.session_state.get("_anal_libro")
+
+    n_dias = (f_fin - f_ini).days + 1
+    st.caption(f"📅 {f_ini:%d/%m/%Y} → {f_fin:%d/%m/%Y} · {n_dias} día(s) · "
+               f"Sociedad: {soc_lbl} · "
+               f"Categorías: {', '.join(cats_sel) if cats_sel else 'todas'} · "
+               f"{fmt_num(len(df))} líneas de venta.")
+
+    if st.button("📗 Generar informe Excel", type="primary",
+                 key="btn_informe_analisis"):
+        with st.spinner("Armando el informe (puede tardar unos segundos)…"):
+            from app.export_analisis import libro_analisis
+            from app.data import get_dim_cliente_full
+
+            df_soc = get_dim_sociedad(client)
+            socs = (dict(zip(df_soc["id"], df_soc["nombre"]))
+                    if not df_soc.empty else {})
+            # Cosmético: si algo de esto falla, el informe igual sale (sin
+            # nombres de vendedor / cliente o sin la hoja de máquinas).
+            try:
+                maq = get_maquinas_rango(client, f_ini, f_fin, soc_ids)
+            except Exception:
+                maq = None
+            try:
+                vend = get_todos_vendedores(client)
+            except Exception:
+                vend = None
+            try:
+                cli = get_dim_cliente_full(client)
+            except Exception:
+                cli = None
+
+            data = libro_analisis(
+                df, f_ini, f_fin, soc_lbl, cats_sel,
+                df_prev=df_prev, maquinas=maq, vendedores=vend,
+                clientes=cli, sociedades=socs)
+        st.session_state["_anal_libro"] = (firma, data)
+        guardado = st.session_state["_anal_libro"]
+
+    if guardado and guardado[0] == firma:
+        nb = f"analisis_ventas_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}.xlsx"
+        st.download_button(
+            "⬇️ Descargar informe", guardado[1], nb,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_informe_analisis", use_container_width=True)
+        st.success(f"Informe listo · {len(guardado[1]) / 1024:,.0f} KB"
+                   .replace(",", "."))
+    elif guardado:
+        st.caption("Los filtros cambiaron: vuelve a generar el informe.")
+
+
 def render(client, anio: int, mes: int):
     f_ini, f_fin, soc_ids, cats_sel, df_prod_dim = _page_filters(
         client, anio, mes
@@ -1273,8 +1421,9 @@ def render(client, anio: int, mes: int):
     df      = df_all if not cats_sel else df_all[df_all["categoria"].isin(cats_sel)].copy()
     df_prev = _enrich(df_prev_raw, df_prod_dim, df_geo, cats_sel)
 
-    tab_ventas, tab_maquinas, tab_prod, tab_cajas = st.tabs(
-        ["📊 Ventas", "🧊 Máquinas", "🔬 Productos a fondo", "📦 Cajas por CD"]
+    tab_ventas, tab_maquinas, tab_prod, tab_cajas, tab_informe = st.tabs(
+        ["📊 Ventas", "🧊 Máquinas", "🔬 Productos a fondo", "📦 Cajas por CD",
+         "📗 Informe Excel"]
     )
 
     with tab_ventas:
@@ -1297,3 +1446,6 @@ def render(client, anio: int, mes: int):
 
     with tab_cajas:
         _s06_cajas_cd(client, df_all, f_ini, f_fin, soc_ids, df_prod_dim)
+
+    with tab_informe:
+        _s07_informe(client, df, df_prev, f_ini, f_fin, soc_ids, cats_sel)
