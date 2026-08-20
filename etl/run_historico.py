@@ -294,7 +294,8 @@ def procesar_carga(client, obuma_files: list[tuple[Path, str]],
     # Upserts idempotentes
     logger.info("\n-- Upserts a Supabase --")
     if not dim_cliente.empty:
-        upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut")
+        upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut",
+                     omitir_nulos=True)
     if not obuma["dim_producto"].empty:
         upsert_tabla(client, "dim_producto", obuma["dim_producto"], on_conflict="codigo")
     if not fact_ventas.empty:

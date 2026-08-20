@@ -287,8 +287,8 @@ def cargar_autoventa_api(
         .copy()
     )
     dim_cliente["razon_social"] = dim_cliente["cliente_rut_raw"].map(rut_a_nombre)
-    dim_cliente["tipo"] = None
-    dim_cliente["es_maquina"] = False
+    # `tipo` y `es_maquina` NO se mandan: Autoventa no los conoce y ponerlos en
+    # None/False borraba en dim_cliente lo que Obuma sí había cargado.
     dim_cliente = dim_cliente.drop(columns=["cliente_rut_raw"])
 
     # ── 6. dim_producto (SOLO para tapar el hueco de FK) ────────────────────

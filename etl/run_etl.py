@@ -359,7 +359,8 @@ def run(periodo: tuple | None = None):
         .reset_index()
         .rename(columns={"cliente_rut": "rut"})
     )
-    upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut")
+    upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut",
+                 omitir_nulos=True)
 
     # dim_producto (solo Obuma tiene datos completos de producto)
     upsert_tabla(client, "dim_producto", obuma["dim_producto"], on_conflict="codigo")

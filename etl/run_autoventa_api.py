@@ -232,7 +232,8 @@ def run(periodo: tuple, dry_run: bool = False):
         return
 
     logger.info("\n-- Upserts a Supabase --")
-    upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut")
+    upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut",
+                 omitir_nulos=True)
     _insertar_productos_faltantes(client, av.get("dim_producto"))
     upsert_tabla(client, "fact_pedidos", fact_pedidos,
                  on_conflict="sociedad_id,n_pedido,producto_codigo,linea")

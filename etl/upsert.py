@@ -18,6 +18,7 @@ def upsert_tabla(
     tabla: str,
     df: pd.DataFrame,
     on_conflict: str,
+    omitir_nulos: bool = False,
 ) -> int:
     """
     Hace upsert de `df` en `tabla` en lotes de BATCH_SIZE filas.
@@ -28,6 +29,11 @@ def upsert_tabla(
         df:          DataFrame con las filas a insertar/actualizar.
         on_conflict: columna(s) que forman la llave natural, separadas por coma.
                      Debe coincidir con el UNIQUE constraint de la tabla.
+        omitir_nulos: si es True, las columnas que vengan vacías NO se mandan, así
+                     el ON CONFLICT DO UPDATE no las pisa con NULL. Para las
+                     dimensiones que se alimentan de varias fuentes (dim_cliente:
+                     Obuma trae región/comuna/tipo, Autoventa no), donde "no sé"
+                     no debe borrar lo que otra fuente sí sabía.
     Returns:
         Número de filas procesadas.
     """
@@ -43,24 +49,47 @@ def upsert_tabla(
         .to_dict(orient="records")
     )
 
-    total = len(registros)
-    n_lotes = math.ceil(total / BATCH_SIZE)
-    procesados = 0
-
-    for i in range(n_lotes):
-        lote = registros[i * BATCH_SIZE : (i + 1) * BATCH_SIZE]
-        try:
-            client.table(tabla).upsert(lote, on_conflict=on_conflict).execute()
-            procesados += len(lote)
+    # PostgREST exige que todos los objetos de un mismo request traigan las
+    # mismas claves, así que al sacar los nulos se agrupa por "qué columnas
+    # quedaron" y se manda un request por grupo.
+    if omitir_nulos:
+        claves = [c.strip() for c in on_conflict.split(",")]
+        grupos: dict = {}
+        n_antes = sum(len(r) for r in registros)
+        for r in registros:
+            limpio = {k: v for k, v in r.items() if v is not None or k in claves}
+            grupos.setdefault(tuple(sorted(limpio)), []).append(limpio)
+        n_despues = sum(len(r) for g in grupos.values() for r in g)
+        if n_antes != n_despues:
             logger.info(
-                "  [%s] lote %d/%d → %d filas OK (total acum. %d)",
-                tabla, i + 1, n_lotes, len(lote), procesados,
-            )
-        except Exception as exc:
-            logger.error(
-                "  [%s] lote %d/%d FALLÓ: %s\n  Primera fila del lote: %s",
-                tabla, i + 1, n_lotes, exc, lote[0] if lote else "—",
-            )
-            raise
+                "  [%s] omitir_nulos: %d celdas vacías NO se mandan (no pisan lo "
+                "ya cargado) · %d combinaciones de columnas",
+                tabla, n_antes - n_despues, len(grupos))
+        particiones = list(grupos.values())
+    else:
+        particiones = [registros]
+
+    total = len(registros)
+    n_lotes = sum(math.ceil(len(p) / BATCH_SIZE) for p in particiones)
+    procesados = 0
+    i = 0
+
+    for parte in particiones:
+        for j in range(math.ceil(len(parte) / BATCH_SIZE)):
+            lote = parte[j * BATCH_SIZE : (j + 1) * BATCH_SIZE]
+            i += 1
+            try:
+                client.table(tabla).upsert(lote, on_conflict=on_conflict).execute()
+                procesados += len(lote)
+                logger.info(
+                    "  [%s] lote %d/%d → %d filas OK (total acum. %d de %d)",
+                    tabla, i, n_lotes, len(lote), procesados, total,
+                )
+            except Exception as exc:
+                logger.error(
+                    "  [%s] lote %d/%d FALLÓ: %s\n  Primera fila del lote: %s",
+                    tabla, i, n_lotes, exc, lote[0] if lote else "—",
+                )
+                raise
 
     return procesados

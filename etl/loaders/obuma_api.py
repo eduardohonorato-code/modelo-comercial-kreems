@@ -287,7 +287,10 @@ def cargar_obuma_api(
         + "-" + df["dia"].astype(str).str.zfill(2),
         errors="coerce",
     )
-    df["region"] = df["region_cod"].map(REGION_MAP).fillna(df["region_cod"])
+    # Si la API no manda el código de región queda "" (no un nulo): sin esto
+    # viajaba una cadena vacía al upsert y pisaba el nombre de región ya cargado.
+    df["region"] = (df["region_cod"].map(REGION_MAP).fillna(df["region_cod"])
+                    .replace("", pd.NA))
     df["sociedad_id"] = soc_id
     df["cliente_rut"] = normalizar_rut(df["cliente_rut_raw"])
 
@@ -332,8 +335,8 @@ def cargar_obuma_api(
         .drop_duplicates(subset=["cliente_rut"])
         .copy()
     )
-    dim_cliente["tipo"] = None
-    dim_cliente["es_maquina"] = False
+    # `tipo` y `es_maquina` no se mandan: la API no los trae y viajaban como
+    # None/False borrando lo que el Excel de Obuma sí había cargado.
 
     dim_producto = (
         df[["producto_codigo", "producto_nombre", "categoria", "subcategoria",

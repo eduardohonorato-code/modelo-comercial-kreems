@@ -160,10 +160,11 @@ def run(periodo: tuple, dry_run: bool = False):
     fact_ventas = aplicar_reasignacion(fact_ventas, reasignaciones)
 
     # dim_cliente: solo columnas seguras (NO pisar comuna/tipo del Excel con
-    # códigos/nulos de la API). region ya viene como nombre.
+    # códigos/nulos de la API). region ya viene como nombre; `es_maquina` se
+    # dejó fuera porque la API no lo sabe y lo reseteaba en cada corrida diaria.
     dim_cliente = (obuma["dim_cliente"]
                    .rename(columns={"cliente_rut": "rut"})
-                   [["rut", "razon_social", "region", "sociedad_id", "es_maquina"]])
+                   [["rut", "razon_social", "region", "sociedad_id"]])
 
     # Máquinas: derivar de las líneas FL-x de Obuma (gestionada/cambio/retiro) y
     # cruzar el estado de entrega con los despachos del mes que ya estén en
@@ -191,7 +192,8 @@ def run(periodo: tuple, dry_run: bool = False):
         return
 
     logger.info("\n-- Upserts a Supabase --")
-    upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut")
+    upsert_tabla(client, "dim_cliente", dim_cliente, on_conflict="rut",
+                 omitir_nulos=True)
     upsert_tabla(client, "dim_producto", obuma["dim_producto"], on_conflict="codigo")
     upsert_tabla(client, "fact_ventas", fact_ventas,
                  on_conflict="sociedad_id,tipo_dcto,n_dcto,producto_codigo,linea")

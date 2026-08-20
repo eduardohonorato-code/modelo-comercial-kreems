@@ -28,6 +28,22 @@ logger = logging.getLogger(__name__)
 SOCIEDAD_AUTOVENTA = SOCIEDAD_ID["grannatural"]
 
 
+def _fila_mas_completa(df: pd.DataFrame, columnas: list,
+                       llave: str = "cliente_rut") -> pd.DataFrame:
+    """Una fila por `llave`, quedándose con la que traiga más de `columnas`
+    llenas (los ERP repiten al cliente por cada dirección y solo algunas filas
+    traen comuna/región)."""
+    if df.empty:
+        return df.copy()
+    d = df.copy()
+    presentes = [c for c in columnas if c in d.columns]
+    d["_completitud"] = d[presentes].notna().sum(axis=1) if presentes else 0
+    d = (d.sort_values("_completitud", ascending=False, kind="stable")
+         .drop_duplicates(subset=[llave])
+         .drop(columns="_completitud"))
+    return d
+
+
 def _leer_pedidos(path: Path) -> pd.DataFrame:
     """CSV con delimitador ';' y BOM utf-8."""
     df = pd.read_csv(path, sep=";", encoding="utf-8-sig", low_memory=False)
@@ -205,26 +221,26 @@ def cargar_autoventa(
     # El resultado del % de match se reporta en run_etl.py usando los n_dcto de Obuma.
 
     # ── dim_cliente: RUTs de pedidos
-    dim_cliente_ped = (
+    # OJO: un cliente aparece varias veces (una por dirección de entrega) y no
+    # todas las filas traen comuna/región. Quedarse con la primera dejaba el
+    # cliente con la fila que tocara, y si esa venía vacía el upsert borraba en
+    # dim_cliente la región que Obuma sí sabía (caso SODEXO/ADIMER, ago-2026).
+    # `_fila_mas_completa` elige la fila con más datos. `tipo` y `es_maquina` no
+    # se inventan: Autoventa no los conoce y mandarlos vacíos los borraba.
+    dim_cliente_ped = _fila_mas_completa(
         ped[["cliente_rut", "Nombre cliente", "Comuna", "Ciudad", "sociedad_id"]]
         .dropna(subset=["cliente_rut"])
-        .rename(columns={"Nombre cliente": "razon_social", "Comuna": "comuna", "Ciudad": "region"})
-        .drop_duplicates(subset=["cliente_rut"])
-        .copy()
-    )
-    dim_cliente_ped["tipo"]       = None
-    dim_cliente_ped["es_maquina"] = False
+        .rename(columns={"Nombre cliente": "razon_social", "Comuna": "comuna",
+                         "Ciudad": "region"}),
+        ["comuna", "region", "razon_social"])
 
     # ── dim_cliente: RUTs de despachos (pueden no aparecer en pedidos ni Obuma)
-    dim_cliente_des = (
+    dim_cliente_des = _fila_mas_completa(
         des[["cliente_rut", "Cliente", "Comuna", "Cuidad", "sociedad_id"]]
         .dropna(subset=["cliente_rut"])
-        .rename(columns={"Cliente": "razon_social", "Comuna": "comuna", "Cuidad": "region"})
-        .drop_duplicates(subset=["cliente_rut"])
-        .copy()
-    )
-    dim_cliente_des["tipo"]       = None
-    dim_cliente_des["es_maquina"] = False
+        .rename(columns={"Cliente": "razon_social", "Comuna": "comuna",
+                         "Cuidad": "region"}),
+        ["comuna", "region", "razon_social"])
 
     # Combinar ambos: pedidos tiene prioridad sobre despachos
     dim_cliente_av = (
