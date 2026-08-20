@@ -1,6 +1,7 @@
 """Análisis de Ventas — 01 Productos · 02 Geografía · 03 Sucursales."""
 import datetime
 import calendar as _cal
+import re
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -71,6 +72,22 @@ _REG_CANON = {
     "AYSEN": "Aysén", "AYSN": "Aysén",
     "MAGALLANES": "Magallanes",
 }
+
+
+def _mapa_comuna_region(df_geo: pd.DataFrame) -> dict:
+    """COMUNA → región, armado con los clientes que sí la traen. Solo se queda
+    con las comunas que apuntan a una única región (si hay dos nombres distintos
+    para la misma comuna, se descarta: mejor 'Sin región' que una región falsa)."""
+    if df_geo is None or df_geo.empty or not {"region", "comuna"}.issubset(df_geo.columns):
+        return {}
+    g = df_geo.dropna(subset=["region", "comuna"]).copy()
+    if g.empty:
+        return {}
+    g["_r"] = g["region"].map(_canon_region)
+    g["_c"] = g["comuna"].astype(str).str.strip().str.upper()
+    por_comuna = g.groupby("_c")["_r"].agg(["nunique", "first"])
+    unicas = por_comuna[por_comuna["nunique"] == 1]
+    return dict(zip(unicas.index, unicas["first"]))
 
 
 def _canon_region(r) -> str:
@@ -258,6 +275,16 @@ def _enrich(df: pd.DataFrame, df_prod_dim: pd.DataFrame,
     if not df_geo.empty and "cliente_rut" in df.columns:
         dg = df_geo.rename(columns={"rut": "cliente_rut"})
         df = df.merge(dg, on="cliente_rut", how="left")
+        # Red de seguridad: a veces una carga deja el `region` de un cliente en
+        # NULL y conserva la comuna (le pasó a SODEXO en ago-2026 y se llevó
+        # $31,8M a "Sin región"). Si la comuna solo existe en una región, se
+        # deduce de los demás clientes de esa comuna.
+        if {"region", "comuna"}.issubset(df.columns):
+            falta = df["region"].isna() & df["comuna"].notna()
+            if falta.any():
+                df.loc[falta, "region"] = (
+                    df.loc[falta, "comuna"].astype(str).str.strip().str.upper()
+                    .map(_mapa_comuna_region(df_geo)))
     if "region" in df.columns:
         df["region"] = df["region"].map(_canon_region)
 
@@ -266,6 +293,16 @@ def _enrich(df: pd.DataFrame, df_prod_dim: pd.DataFrame,
     if "sucursal" in df.columns:
         df["cd"] = _norm_cd(df["sucursal"])
     df["es_caja"] = _mask_caja(df) if "unidad_medida" in df.columns else False
+
+    # Unidades individuales = cantidad × lo que trae el bulto. El factor se
+    # resuelve una vez por SKU (no por línea) para no penalizar rangos largos.
+    if {"categoria", "nombre"}.issubset(df.columns):
+        f = (df[["producto_codigo", "categoria", "nombre"]]
+             .drop_duplicates("producto_codigo"))
+        f["_f"] = [_und_por_bulto(c, n)
+                   for c, n in zip(f["categoria"], f["nombre"])]
+        df["unidades_ind"] = df["cantidad"] * df["producto_codigo"].map(
+            dict(zip(f["producto_codigo"], f["_f"]))).fillna(1)
 
     if cats_sel:
         df = df[df["categoria"].isin(cats_sel)]
@@ -290,7 +327,10 @@ def _s01_productos(df: pd.DataFrame, df_prev: pd.DataFrame):
 
     ventas = _fact_nc(df)
     skus   = int(df["producto_codigo"].nunique())
-    uds    = int(df["cantidad"].sum())
+    # Unidades individuales (paletas, galletas, potes), no bultos: la `cantidad`
+    # del ERP viene en la unidad de cada línea y una caja de 20 cuenta 1.
+    uds    = int(df["unidades_ind"].sum()) if "unidades_ind" in df.columns         else int(df["cantidad"].sum())
+    cajas  = float(df.loc[df["es_caja"], "cantidad"].sum()) if "es_caja" in df.columns else 0
     ndocs  = int(df["n_dcto"].nunique()) if "n_dcto" in df.columns else 0
     ticket = ventas / ndocs if ndocs else 0
 
@@ -300,7 +340,8 @@ def _s01_productos(df: pd.DataFrame, df_prev: pd.DataFrame):
     html = "".join([
         _kic("💰", "Ventas Totales (Fact-NC)", fmt_clp(ventas), delta=delta),
         _kic("📦", "SKUs Vendidos",            fmt_num(skus)),
-        _kic("🔢", "Unidades Vendidas",        fmt_num(uds)),
+        _kic("🔢", "Unidades Individuales",    fmt_num(uds),
+             sub=f"{fmt_num(round(cajas))} bultos facturados"),
         _kic("🧾", "Ticket Promedio",           fmt_clp(ticket), sub="por documento"),
     ])
     st.markdown(f'<div class="kpi-grid">{html}</div>', unsafe_allow_html=True)
@@ -1011,6 +1052,37 @@ _CD_ALIAS = {"C. MATRIZ": "CONCEPCION", "CASA MATRIZ": "CONCEPCION", "MATRIZ": "
 # (~$14.500 c/u): sin esto quedaban invisibles en esta pestaña.
 _CATS_COMO_CAJA = {"GALLETAS"}
 
+# Categorías que NUNCA son caja aunque el catálogo les ponga unidad "CAJA": los
+# fletes de máquina (FL-1/2/4) vienen tipificados como CAJA y sumaban al conteo
+# (11 "cajas" en agosto 2026 que en realidad eran fletes).
+_CATS_NO_CAJA = {"MAQUINAS", "SERVICIOS"}
+
+# ── Unidades individuales ─────────────────────────────────────────────────────
+# La `cantidad` del ERP viene en la unidad de CADA línea: una caja de paletas es
+# 1, un display de galletas es 1. Para saber cuántas paletas/galletas salieron de
+# verdad hay que multiplicar por lo que trae cada bulto.
+#   Paletas 20 · Galletas (display) 12 · Bacha 1 (es el balde) · Pote 6 (6x1L) ·
+#   Multipack 9. Fletes y servicios no son producto: 0.
+_UND_POR_BULTO = {"PALETAS": 20, "GALLETAS": 12, "BACHA": 1, "POTE": 6,
+                  "MULTIPACK": 9}
+_CATS_SIN_UNIDADES = {"MAQUINAS", "SERVICIOS"}
+# "COOKIES & CREAM 20 x125g" → 20 por caja. Si mañana entra un SKU de paletas en
+# otro formato, el nombre manda por sobre la tabla de arriba.
+_RE_PACK = re.compile(r"(\d+)\s*[xX]\s*\d+\s*[gG]\b")
+
+
+def _und_por_bulto(categoria: str, nombre) -> int:
+    cat = str(categoria).strip().upper()
+    if cat in _CATS_SIN_UNIDADES:
+        return 0
+    if cat == "PALETAS":
+        m = _RE_PACK.search(str(nombre or ""))
+        if m:
+            n = int(m.group(1))
+            if 1 <= n <= 100:      # descarta gramajes leídos por error
+                return n
+    return _UND_POR_BULTO.get(cat, 1)
+
 
 def _norm_cd(serie: pd.Series) -> pd.Series:
     """Normaliza el nombre del centro de distribución (mayúsculas + alias)."""
@@ -1019,10 +1091,13 @@ def _norm_cd(serie: pd.Series) -> pd.Series:
 
 
 def _mask_caja(df: pd.DataFrame) -> pd.Series:
-    """Líneas que cuentan como caja: unidad CAJA + las categorías de _CATS_COMO_CAJA."""
+    """Líneas que cuentan como caja: unidad CAJA + las categorías de
+    _CATS_COMO_CAJA, menos las de _CATS_NO_CAJA (fletes y servicios)."""
     m = df["unidad_medida"].astype(str).str.upper() == "CAJA"
     if "categoria" in df.columns:
-        m |= df["categoria"].astype(str).str.strip().str.upper().isin(_CATS_COMO_CAJA)
+        cat = df["categoria"].astype(str).str.strip().str.upper()
+        m |= cat.isin(_CATS_COMO_CAJA)
+        m &= ~cat.isin(_CATS_NO_CAJA)
     return m
 
 

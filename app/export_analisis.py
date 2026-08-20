@@ -14,8 +14,12 @@ Definiciones (idénticas a las de la app, ver CLAUDE.md §3):
   Fact-NC   = suma del neto; las notas de crédito ya entran con signo negativo.
   Cajas     = líneas cuya unidad de medida es CAJA, más Galletas NY (el ERP las
               tipifica como UN pero se venden por display de 12).
-  Unidades  = cantidad facturada; las líneas de Servicios se neutralizan porque
-              el ERP les manda una cantidad basura (el monto sí es real).
+  Cantidad facturada = la cantidad tal como la manda el ERP, en la unidad de
+              cada línea (una caja de 20 paletas cuenta 1). Las líneas de
+              Servicios se neutralizan: el ERP les manda una cantidad basura.
+  Unidades individuales = cantidad × lo que trae el bulto (paletas 20,
+              galletas 12, bacha 1, pote 6, multipack 9). Es lo que salió de
+              verdad a la calle.
 """
 import io
 
@@ -114,6 +118,10 @@ def _prep(df: pd.DataFrame) -> pd.DataFrame:
     if "es_caja" not in d.columns:
         d["es_caja"] = False
     d["_cajas"] = d["cantidad"].where(d["es_caja"], 0)
+    # Si la página no calculó las unidades individuales (df de otra fuente),
+    # se omiten en vez de inventar un factor.
+    d["_uind"] = (pd.to_numeric(d["unidades_ind"], errors="coerce").fillna(0)
+                  if "unidades_ind" in d.columns else None)
     for c in ("region", "comuna", "categoria", "subcategoria", "sucursal", "cd",
               "nombre", "fabricante", "unidad_medida"):
         if c in d.columns:
@@ -137,13 +145,16 @@ def _metricas(d: pd.DataFrame, keys, total_general: float | None = None,
         return pd.DataFrame()
     keys = [keys] if isinstance(keys, str) else list(keys)
     g = d.groupby(keys, dropna=False)
-    out = g.agg(**{
+    agregados = {
         "Fact-NC": ("neto", "sum"),
-        "Unidades": ("cantidad", "sum"),
+        "Cantidad facturada": ("cantidad", "sum"),
         "Cajas": ("_cajas", "sum"),
         "N° clientes": ("cliente_rut", "nunique"),
         "N° SKUs": ("producto_codigo", "nunique"),
-    })
+    }
+    if d["_uind"].notna().any():
+        agregados["Unidades individuales"] = ("_uind", "sum")
+    out = g.agg(**agregados)
     fac = d[~d["_nc"]]
     nc = d[d["_nc"]]
     out["Facturación bruta"] = fac.groupby(keys)["neto"].sum()
@@ -159,8 +170,9 @@ def _metricas(d: pd.DataFrame, keys, total_general: float | None = None,
 
     out = out.sort_values("Fact-NC", ascending=False)
     orden = keys + ["Fact-NC", "% del total", "Facturación bruta",
-                    "Notas de crédito", "Cajas", "Unidades", "N° facturas",
-                    "N° NC", "N° clientes", "N° SKUs", "Ticket promedio"]
+                    "Notas de crédito", "Cajas", "Unidades individuales",
+                    "Cantidad facturada", "N° facturas", "N° NC",
+                    "N° clientes", "N° SKUs", "Ticket promedio"]
     # Contar únicos de lo que ya es la llave del grupo da siempre 1: sobra.
     sobran = set()
     if "cliente_rut" in keys:
@@ -181,7 +193,8 @@ def _metricas(d: pd.DataFrame, keys, total_general: float | None = None,
 _FMT_METRICAS = {
     "Fact-NC": _FMT_CLP, "Facturación bruta": _FMT_CLP,
     "Notas de crédito": _FMT_CLP, "Ticket promedio": _FMT_CLP,
-    "% del total": _FMT_PCT, "Cajas": _FMT_NUM, "Unidades": _FMT_NUM,
+    "% del total": _FMT_PCT, "Cajas": _FMT_NUM,
+    "Unidades individuales": _FMT_NUM, "Cantidad facturada": _FMT_NUM,
     "N° facturas": _FMT_NUM, "N° NC": _FMT_NUM, "N° clientes": _FMT_NUM,
     "N° SKUs": _FMT_NUM,
 }
@@ -319,8 +332,10 @@ def libro_analisis(df: pd.DataFrame, f_ini, f_fin, soc_lbl: str,
         ("N° de notas de crédito", int(nc["n_dcto"].nunique())),
         ("Ticket promedio por factura", (total / n_fac) if n_fac else 0),
         ("", ""),
-        ("Cajas vendidas", float(d["_cajas"].sum())),
-        ("Unidades vendidas", float(d["cantidad"].sum())),
+        ("Cajas / bultos facturados", float(d["_cajas"].sum())),
+        ("Unidades individuales (paletas, galletas, potes…)",
+         float(d["_uind"].sum()) if d["_uind"].notna().any() else "—"),
+        ("Cantidad facturada (en la unidad del ERP)", float(d["cantidad"].sum())),
         ("SKUs distintos vendidos", int(d["producto_codigo"].nunique())),
         ("Clientes distintos facturados", int(d["cliente_rut"].nunique())),
         ("Regiones con venta",
@@ -574,12 +589,13 @@ def libro_analisis(df: pd.DataFrame, f_ini, f_fin, soc_lbl: str,
                           "Vendedor", "categoria", "subcategoria",
                           "producto_codigo", "nombre", "unidad_medida")
               if c in d.columns]
-    largo = (d.groupby(llaves, dropna=False)
-             .agg(**{"Fact-NC": ("neto", "sum"),
-                     "Cajas": ("_cajas", "sum"),
-                     "Unidades": ("cantidad", "sum"),
-                     "N° documentos": ("n_dcto", "nunique"),
-                     "N° clientes": ("cliente_rut", "nunique")})
+    agg_largo = {"Fact-NC": ("neto", "sum"), "Cajas": ("_cajas", "sum")}
+    if d["_uind"].notna().any():
+        agg_largo["Unidades individuales"] = ("_uind", "sum")
+    agg_largo.update({"Cantidad facturada": ("cantidad", "sum"),
+                      "N° documentos": ("n_dcto", "nunique"),
+                      "N° clientes": ("cliente_rut", "nunique")})
+    largo = (d.groupby(llaves, dropna=False).agg(**agg_largo)
              .reset_index().rename(columns=_ren))
     if "Mes" in largo.columns:
         largo["Mes"] = pd.Categorical(largo["Mes"], categories=meses, ordered=True)
@@ -588,7 +604,9 @@ def libro_analisis(df: pd.DataFrame, f_ini, f_fin, soc_lbl: str,
     else:
         largo = largo.sort_values("Fact-NC", ascending=False)
     _escribir(wb, "Detalle largo", largo,
-              {"Fact-NC": _FMT_CLP, "Cajas": _FMT_NUM, "Unidades": _FMT_NUM,
+              {"Fact-NC": _FMT_CLP, "Cajas": _FMT_NUM,
+               "Unidades individuales": _FMT_NUM,
+               "Cantidad facturada": _FMT_NUM,
                "N° documentos": _FMT_NUM, "N° clientes": _FMT_NUM},
               nota="Formato plano (una fila por combinación) para armar tablas "
                    "dinámicas propias. Es la misma data de las demás hojas.")
@@ -601,10 +619,19 @@ def libro_analisis(df: pd.DataFrame, f_ini, f_fin, soc_lbl: str,
         ("Notas de crédito", "Solo documentos de tipo nota de crédito (negativo)."),
         ("N° facturas", "Facturas distintas, contadas por número de documento."),
         ("Ticket promedio", "Fact-NC dividido por el N° de facturas."),
-        ("Cajas", "Líneas cuya unidad de medida es CAJA, más Galletas NY, que el "
-                  "ERP tipifica como UN pero se vende por display de 12."),
-        ("Unidades", "Cantidad facturada. Las líneas de Servicios quedan en 0: el "
-                     "ERP manda una cantidad corrupta (el monto sí es real)."),
+        ("Cajas", "Bultos facturados: líneas cuya unidad de medida es CAJA, más "
+                  "Galletas NY, que el ERP tipifica como UN pero se vende por "
+                  "display de 12. No incluye fletes de máquina ni servicios, "
+                  "aunque el catálogo les ponga unidad CAJA."),
+        ("Cantidad facturada", "La cantidad tal como viene del ERP, en la unidad "
+                               "de cada línea: una caja de 20 paletas cuenta 1. "
+                               "Las líneas de Servicios quedan en 0 porque el ERP "
+                               "manda una cantidad corrupta (el monto sí es real)."),
+        ("Unidades individuales", "Lo que salió de verdad a la calle: cantidad × "
+                                  "unidades por bulto (paletas 20, galletas 12, "
+                                  "bacha 1, pote 6, multipack 9). En paletas, si "
+                                  "el nombre del SKU declara otro formato, manda "
+                                  "el nombre. Fletes y servicios no suman."),
         ("Región / Comuna", "Del cliente, según dim_cliente. Los nombres se "
                             "unifican para que una misma región no aparezca dos "
                             "veces por acentos mal codificados."),
