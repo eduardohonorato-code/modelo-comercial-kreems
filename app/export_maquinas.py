@@ -55,6 +55,13 @@ ESTADOS = [ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO, SIN_INFO]
 # Entregada, el movimiento se ejecutó, aunque hubiera un intento rechazado antes.
 _PRIO_DESP = {"entregada": 0, "rechazada": 1, "pendiente": 2}
 
+# Meta comercial de gestiones semanales (definición de gerencia, ago-2026):
+# una "gestión" es un flete de máquina CON DTE emitido —da lo mismo si fue
+# instalación, cambio o retiro— y las 22 son del equipo completo, no por
+# vendedor. Los pedidos que siguen "Sin DTE" no suman: son el pendiente.
+META_GESTIONES_SEMANA = 22
+
+
 
 def _norm_doc(s: pd.Series) -> pd.Series:
     return s.astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
@@ -69,6 +76,23 @@ def _mes(f):
 
 def _pct(num, den):
     return (num / den) if den else 0.0
+
+
+def _semanas_del_rango(f_ini, f_fin) -> list:
+    """
+    [(semana, días dentro del rango)] de lunes a domingo, incluidas las semanas
+    sin ninguna gestión: una semana en cero es justo lo que hay que ver contra
+    la meta. Se devuelven TODAS las que tocan el rango, para que el total de la
+    hoja cuadre con el del informe; los días dentro del rango dicen cuáles
+    quedaron cortadas y no se pueden juzgar contra la meta.
+    """
+    ini, fin = pd.Timestamp(f_ini), pd.Timestamp(f_fin)
+    out = []
+    for per in pd.period_range(ini, fin, freq="W-SUN"):
+        dias = (min(per.end_time.normalize(), fin)
+                - max(per.start_time.normalize(), ini)).days + 1
+        out.append((per, int(dias)))
+    return out
 
 
 def _desc(ruts: pd.Series, clientes: pd.DataFrame | None, col: str) -> pd.Series:
@@ -297,6 +321,7 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                    vendedores: pd.DataFrame | None = None,
                    clientes: pd.DataFrame | None = None,
                    sociedades: dict | None = None,
+                   meta_semanal: int = META_GESTIONES_SEMANA,
                    hoy: date | None = None) -> bytes:
     """Devuelve el .xlsx del informe de seguimiento de máquinas."""
     from openpyxl import Workbook
@@ -331,6 +356,13 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
     retiros_ent = int(((m["tipo_mov"] == "retiro") & m["_entregada"]).sum())
     retiros_info = int(((m["tipo_mov"] == "retiro") & ~m["_sin_info"]).sum())
     dias_ent = m.loc[m["_entregada"], "Días factura a ruta"].dropna()
+    _sem_rango = _semanas_del_rango(f_ini, f_fin)
+    _cuenta_sem = m["fecha"].dt.to_period("W-SUN").value_counts()
+    _completas = [p for p, dias in _sem_rango if dias == 7]
+    n_semanas = len(_completas)
+    semanas_ok = sum(1 for p in _completas
+                     if int(_cuenta_sem.get(p, 0)) >= meta_semanal)
+    _dias_rango = (pd.Timestamp(f_fin) - pd.Timestamp(f_ini)).days + 1
     sin_dte_n = 0
     if pedidos_fl is not None and not pedidos_fl.empty:
         sin_dte_n = int((pedidos_fl["doc_venta"].astype(str).str.strip()
@@ -352,6 +384,16 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
         ("Parque neto del período (nuevas - retiros)", nuevas - retiros),
         ("Movimientos anulados por nota de crédito", anuladas),
         ("Gestionadas en Autoventa y aún sin factura (Sin DTE)", sin_dte_n),
+        ("", ""),
+        ("GESTIÓN SEMANAL (meta del equipo)", ""),
+        ("Meta de gestiones por semana (equipo)", meta_semanal),
+        ("Gestiones por semana (ritmo del período)",
+         round(tot / (_dias_rango / 7), 1) if _dias_rango else 0),
+        ("% de la meta al ritmo del período",
+         _pct(tot / (_dias_rango / 7), meta_semanal) if _dias_rango else 0),
+        ("Semanas completas en el rango", n_semanas),
+        ("Semanas completas que alcanzaron la meta", semanas_ok),
+        ("% de semanas en meta", _pct(semanas_ok, n_semanas)),
         ("", ""),
         ("ESTADO DE ENTREGA (cruce con despachos de Autoventa)", ""),
         ("Entregadas / ejecutadas confirmadas", ent),
@@ -412,6 +454,59 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                     "instalado, porque las máquinas colocadas antes de que empezara "
                     "este registro no están en ninguna base."),
               total_ultima=not mensual.empty)
+
+    # ── 2b. Semanal (seguimiento de la meta de gestiones) ────────────────────
+    sem = m.copy()
+    sem["_sem"] = sem["fecha"].dt.to_period("W-SUN")
+    grupos = dict(tuple(sem.groupby("_sem")))
+    # Todas las semanas del rango, incluidas las que no tuvieron ni una gestión:
+    # una semana en cero es justamente lo que hay que ver contra la meta.
+    vacio = m.iloc[0:0]
+    filas_sem = []
+    for per, dias in _semanas_del_rango(f_ini, f_fin):
+        g = grupos.get(per, vacio)
+        fila = {"Semana": f"{per.start_time:%d/%m} al {per.end_time:%d/%m}",
+                "_ord": per.start_time, "Días en el rango": dias}
+        fila.update(_conteos(g))
+        # Las semanas cortadas por el borde del rango van sin meta (None, que
+        # sale como celda vacía): exigirles 22 sería comparar contra días que
+        # el informe no está mirando.
+        fila["Meta semanal"] = meta_semanal if dias == 7 else None
+        fila["% Meta"] = _pct(len(g), meta_semanal) if dias == 7 else None
+        fila["Sobre / bajo la meta"] = (len(g) - meta_semanal if dias == 7
+                                        else None)
+        filas_sem.append(fila)
+    semanal = pd.DataFrame(filas_sem)
+    if not semanal.empty:
+        semanal = (semanal.sort_values("_ord").drop(columns="_ord")
+                   .rename(columns={"Movimientos": "Gestiones (con DTE)"}))
+        n_completas = int((semanal["Días en el rango"] == 7).sum())
+        semanal = _con_total(semanal, "Semana",
+                             _NO_SUM + ("Meta semanal", "% Meta",
+                                        "Días en el rango"))
+        # La meta del total es meta × semanas COMPLETAS: las cortadas por el
+        # borde del rango no se pueden exigir enteras.
+        fin_i = semanal.index[-1]
+        for c in ("Meta semanal", "% Meta"):
+            semanal[c] = semanal[c].astype(object)
+        semanal.loc[fin_i, "Meta semanal"] = (meta_semanal * n_completas
+                                              if n_completas else None)
+        semanal.loc[fin_i, "% Meta"] = (
+            _pct(semanal.loc[fin_i, "Gestiones (con DTE)"],
+                 meta_semanal * n_completas) if n_completas else None)
+    fmt_sem = dict(_FMT_AGRUP)
+    fmt_sem.update({"Gestiones (con DTE)": _FMT_NUM, "Meta semanal": _FMT_NUM,
+                    "Días en el rango": _FMT_NUM,
+                    "% Meta": _FMT_PCT, "Sobre / bajo la meta": _FMT_NUM})
+    _escribir(wb, "Semanal", semanal, fmt_sem,
+              nota=(f"Seguimiento de la meta de {meta_semanal} gestiones "
+                    "semanales del equipo. Una gestión = un flete de máquina con "
+                    "DTE emitido (instalación, cambio o retiro), contado en la "
+                    "semana del documento. Los pedidos que siguen 'Sin DTE' no "
+                    "suman aquí: están en su propia hoja. Semanas de lunes a "
+                    "domingo; se omiten las que quedan con menos de 4 días "
+                    "dentro del rango elegido."),
+              total_ultima=not semanal.empty)
 
     # ── 3. Por vendedor ──────────────────────────────────────────────────────
     vend = _agrupado(m, "Vendedor", "Vendedor", extra_clientes=True)
@@ -660,8 +755,15 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                        if clientes is not None and not clientes.empty else None)
             cod = sin_dte["producto_codigo"].astype(str).str.upper().str.strip()
             sin_dte["_mov"] = cod.map(FL_A_MOV)
+            # La antigüedad se cuenta desde que el vendedor ingresó el pedido.
+            # Mientras la base no tenga fecha_pedido (sql/036 + recarga), se cae
+            # a `fecha`, que para un pedido sin DTE es la de despacho pedida.
+            _fp = (pd.to_datetime(sin_dte["fecha_pedido"], errors="coerce")
+                   if "fecha_pedido" in sin_dte.columns
+                   else pd.Series(pd.NaT, index=sin_dte.index))
+            sin_dte["_ingreso"] = _fp.fillna(sin_dte["fecha"])
             tabla_sd = pd.DataFrame({
-                "Fecha pedido": sin_dte["fecha"].dt.date,
+                "Fecha pedido": sin_dte["_ingreso"].dt.date,
                 "N° pedido": sin_dte["n_pedido"],
                 "Código FL": cod,
                 "Movimiento": sin_dte["_mov"].map(MOV_LBL).fillna("(otro)"),
@@ -673,12 +775,12 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                 "Comuna": (sin_dte["cliente_rut"].map(cli_map["comuna"])
                            if cli_map is not None
                            and "comuna" in cli_map.columns else ""),
-                "Días sin facturar": (pd.Timestamp(hoy)
-                                      - sin_dte["fecha"]).dt.days,
-            }).sort_values("Días sin facturar", ascending=False)
+                "Días sin gestionar": (pd.Timestamp(hoy)
+                                       - sin_dte["_ingreso"]).dt.days,
+            }).sort_values("Días sin gestionar", ascending=False)
             _escribir(wb, "Sin facturar (Autoventa)", tabla_sd,
                       {"Fecha pedido": _FMT_FECHA,
-                       "Días sin facturar": _FMT_NUM},
+                       "Días sin gestionar": _FMT_NUM},
                       nota=("Fletes de máquina que el vendedor ya ingresó en "
                             "Autoventa y que Obuma todavía no factura "
                             "(doc_venta = 'Sin DTE'). NO cuentan como movimiento "

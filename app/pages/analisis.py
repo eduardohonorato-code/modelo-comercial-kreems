@@ -9,6 +9,7 @@ from plotly.subplots import make_subplots
 
 from app.styles import fmt_clp, fmt_num
 from app.auth import es_gerencia
+from app.export_maquinas import META_GESTIONES_SEMANA
 from app.data import (
     get_ventas_rango, get_dim_producto_all,
     get_dim_cliente_geo, get_dim_sociedad,
@@ -882,6 +883,8 @@ _DIAS_ANTES, _DIAS_DESPUES = 180, 90
 _HOJAS_MAQ = [
     ("Resumen", "Movimientos, estado de entrega, conversión y tiempos del período."),
     ("Mensual", "Nuevas, cambios, retiros y parque neto mes a mes."),
+    ("Semanal", f"Gestiones con DTE por semana contra la meta de "
+                f"{META_GESTIONES_SEMANA} del equipo."),
     ("Por vendedor", "Lo mismo por vendedor, con su % entregado."),
     ("Tipo x Estado", "Matriz de control: qué pasó con cada tipo de movimiento."),
     ("Geografía", "Movimientos por región y comuna del cliente."),
@@ -906,18 +909,64 @@ _HOJAS_MAQ = [
 ]
 
 
+# Rangos rápidos: el seguimiento de máquinas se mira hacia atrás (varios meses),
+# no mes a mes como el resto de la página, así que el informe trae su propio
+# selector en vez de obligar a pelear con los filtros de arriba.
+_RANGOS_MAQ = {
+    "Período filtrado arriba": None,
+    "Últimos 3 meses": 3,
+    "Últimos 6 meses": 6,
+    "Últimos 12 meses": 12,
+    "Todo el histórico": 999,
+}
+
+
+def _rango_informe(f_ini, f_fin):
+    """(inicio, fin) del informe según el rango rápido elegido."""
+    meses = _RANGOS_MAQ.get(st.session_state.get("maq_rango",
+                                                 "Período filtrado arriba"))
+    if meses is None:
+        return f_ini, f_fin
+    hoy = datetime.date.today()
+    fin = max(f_fin, hoy)
+    if meses >= 999:
+        return datetime.date(2023, 1, 1), fin
+    mes_ini = fin.month - meses + 1
+    anio = fin.year + (mes_ini - 1) // 12
+    mes = (mes_ini - 1) % 12 + 1
+    return datetime.date(anio, mes, 1), fin
+
+
 def _s04b_informe_maquinas(client, df_maq, f_ini, f_fin, soc_ids):
     _sec("Informe de seguimiento de máquinas")
     st.markdown(
-        "Un Excel con el **ciclo completo de cada máquina** del período filtrado "
-        "arriba: qué se instaló, qué se cambió, qué se retiró, y —cruzando con el "
-        "**detalle de despachos de Autoventa**— cuáles se confirmaron en terreno y "
-        "cuáles siguen pendientes."
+        "Un Excel con el **ciclo completo de cada máquina**: qué se instaló, qué "
+        "se cambió, qué se retiró, el **seguimiento semanal contra la meta de "
+        f"{META_GESTIONES_SEMANA} gestiones**, y —cruzando con el **detalle de "
+        "despachos de Autoventa**— cuáles se confirmaron en terreno y cuáles "
+        "siguen pendientes."
     )
     with st.expander(f"📑 Qué trae el archivo ({len(_HOJAS_MAQ)} hojas)",
                      expanded=False):
         st.dataframe(pd.DataFrame(_HOJAS_MAQ, columns=["Hoja", "Contenido"]),
                      use_container_width=True, hide_index=True)
+
+    st.selectbox("Período del informe", list(_RANGOS_MAQ), key="maq_rango",
+                 help="El seguimiento de máquinas se mira hacia atrás. Los "
+                      "movimientos existen desde 2023 (Acuña); el estado de "
+                      "entrega y los pedidos, desde feb-2026, cuando entró "
+                      "Autoventa.")
+    r_ini, r_fin = _rango_informe(f_ini, f_fin)
+    if (r_ini, r_fin) != (f_ini, f_fin):
+        st.caption(f"📅 El informe saldrá con {r_ini:%d/%m/%Y} → {r_fin:%d/%m/%Y}, "
+                   "no con el filtro de arriba.")
+        try:
+            df_maq = get_maquinas_rango(client, r_ini, r_fin, soc_ids)
+        except Exception:
+            st.warning("No se pudieron leer las máquinas de ese rango; se usa "
+                       "el período filtrado arriba.")
+            r_ini, r_fin = f_ini, f_fin
+    f_ini, f_fin = r_ini, r_fin
 
     soc_lbl = st.session_state.get("anal_soc", "Ambas")
     firma = (str(f_ini), str(f_fin), tuple(soc_ids or []), len(df_maq))
