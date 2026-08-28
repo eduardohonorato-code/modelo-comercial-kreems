@@ -4,18 +4,30 @@ name: ETL diario Kreems (nube)
 # servidores de GitHub, SIN depender del PC de la oficina. Así los datos quedan
 # frescos temprano en la mañana para el reporte de las 9 AM.
 #
-# Horario (GitHub usa UTC; Chile = UTC-4 en invierno / UTC-3 en verano):
-#   10:00 UTC -> 06:00 (invierno) / 07:00 (verano) Chile
-# Deja ~3 h de holgura antes del reporte de las 9 AM, de sobra para absorber los
-# retrasos habituales del cron de GitHub.
+# Horarios (GitHub usa UTC; Chile = UTC-4 en invierno / UTC-3 en verano):
+#   08:37 UTC -> 04:37 (invierno) / 05:37 (verano) Chile   <- corrida principal
+#   10:23 UTC -> 06:23 (invierno) / 07:23 (verano) Chile   <- respaldo
 #
-# UNA sola corrida diaria (2026-08-03). Antes eran dos (10:00 y 11:00 UTC) "por
-# redundancia", pero la cuota diaria de la API de Obuma es POR MÉTODO y es baja:
-# cada corrida gasta 5 consultas de `clientes.list` y la segunda dejaba el día sin
-# margen para un re-run manual (Error 005, ver etl/loaders/obuma_api.py).
-# La redundancia no hacía falta: un cron retrasado igual carga los datos, y si
-# GitHub llegara a saltarse un día, la corrida siguiente recarga el mes completo
-# (el ETL es idempotente). Para recuperar en el momento: Actions -> "Run workflow".
+# DOS reglas al elegir la hora (aprendidas midiendo 25 días de corridas reales,
+# 2026-08-28):
+#
+# 1. NUNCA en el minuto :00. El cron de GitHub es "best effort" y el minuto en
+#    punto es su hora peak: con "0 10 * * *" NINGUNA corrida arrancó a tiempo —
+#    el atraso típico fue de 14 a 60 min, con picos de 118 min, un día disparó
+#    10 h tarde (20:03 UTC) y otro no disparó nunca. Con minutos "raros" el
+#    scheduler está mucho menos congestionado.
+#
+# 2. DOS corridas separadas ~2 h. No es por el atraso (eso se absorbe con
+#    holgura), sino porque GitHub a veces se salta el disparo entero y ese día
+#    hay que correrlo a mano. Dos intentos independientes cubren ese caso.
+#    Cabe en la cuota: tras cachear las consultas repetidas cada corrida gasta
+#    5 consultas de `clientes.list` de un tope de ~20 al día, así que 2 corridas
+#    (10) todavía dejan margen para 2 re-runs manuales. Ver ObumaCuotaError en
+#    etl/loaders/obuma_api.py.
+#
+# El ETL es idempotente: que corran las dos NO duplica nada, y si un día se
+# saltan ambas, la corrida siguiente recarga el mes completo.
+# Para recuperar en el momento: Actions -> "Run workflow".
 #
 # Requiere estos Secrets del repo (Settings -> Secrets and variables -> Actions):
 #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OBUMA_API_KEY, AUTOVENTA_API_KEY_ADMIN
@@ -23,7 +35,8 @@ name: ETL diario Kreems (nube)
 
 on:
   schedule:
-    - cron: "0 10 * * *"
+    - cron: "37 8 * * *"    # principal
+    - cron: "23 10 * * *"   # respaldo, por si GitHub se salta la primera
   workflow_dispatch: {}   # permite ejecutarlo a mano desde la pestaña "Actions"
 
 concurrency:
