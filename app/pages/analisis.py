@@ -898,6 +898,8 @@ _HOJAS_MAQ = [
     ("Sin facturar (Autoventa)", "Fletes ingresados en Autoventa que Obuma "
                                  "todavía no factura: la diferencia con el "
                                  "conteo directo de Autoventa."),
+    ("Conciliación Autoventa", "La aritmética de por qué tu recuento y el del "
+                               "informe no dan igual."),
     ("Despachos (contexto)", "Todas las entregas del período y su nivel de rechazo."),
     ("Control del cruce", "% de movimientos confirmados por mes y sociedad."),
     ("Definiciones", "Qué significa cada código FL y cada estado."),
@@ -948,6 +950,17 @@ def _s04b_informe_maquinas(client, df_maq, f_ini, f_fin, soc_ids):
             except Exception:
                 ped_fl = None
             try:
+                # Máquinas de la ventana ancha: sirven para reconocer un
+                # despacho cuya factura quedó fuera del período, que si no se
+                # confundiría con uno sin factura.
+                maq_ctx = get_maquinas_rango(
+                    client,
+                    f_ini - datetime.timedelta(days=_DIAS_ANTES),
+                    f_fin + datetime.timedelta(days=_DIAS_DESPUES),
+                    soc_ids)
+            except Exception:
+                maq_ctx = None
+            try:
                 vend = get_todos_vendedores(client)
             except Exception:
                 vend = None
@@ -964,8 +977,9 @@ def _s04b_informe_maquinas(client, df_maq, f_ini, f_fin, soc_ids):
 
             data = libro_maquinas(df_maq, f_ini, f_fin, soc_lbl,
                                   despachos=desp, lineas_fl=fl,
-                                  pedidos_fl=ped_fl, vendedores=vend,
-                                  clientes=cli, sociedades=socs)
+                                  pedidos_fl=ped_fl, maquinas_ctx=maq_ctx,
+                                  vendedores=vend, clientes=cli,
+                                  sociedades=socs)
         st.session_state["_maq_libro"] = (firma, data)
         guardado = st.session_state["_maq_libro"]
 

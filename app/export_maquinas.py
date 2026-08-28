@@ -293,6 +293,7 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                    despachos: pd.DataFrame | None = None,
                    lineas_fl: pd.DataFrame | None = None,
                    pedidos_fl: pd.DataFrame | None = None,
+                   maquinas_ctx: pd.DataFrame | None = None,
                    vendedores: pd.DataFrame | None = None,
                    clientes: pd.DataFrame | None = None,
                    sociedades: dict | None = None,
@@ -524,11 +525,27 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                       if "transportista" in d.columns
                       else pd.Series(False, index=d.index))
 
-        mov_por_doc = (m.drop_duplicates("_doc")
+        # Un documento puede estar facturado FUERA del período (se factura el 31
+        # y sale a ruta el 3). Sin este contexto se le acusaría de no tener
+        # factura, que es un problema muy distinto.
+        ctx = m
+        if maquinas_ctx is not None and not maquinas_ctx.empty:
+            c = maquinas_ctx.copy()
+            c["_doc"] = _norm_doc(c["documento"])
+            c["fecha"] = pd.to_datetime(c["fecha"], errors="coerce")
+            c["Movimiento"] = c["tipo_mov"].map(MOV_LBL).fillna(c["tipo_mov"])
+            for col in ("Vendedor", "Cliente", "Comuna", "Región"):
+                if col not in c.columns:
+                    c[col] = None
+            ctx = pd.concat([m, c], ignore_index=True).drop_duplicates("_doc")
+        docs_facturados = set(ctx["_doc"])
+        mov_por_doc = (ctx.drop_duplicates("_doc")
                        .set_index("_doc")[["Movimiento", "Vendedor", "Cliente",
                                            "Comuna", "Región", "fecha"]])
-        dm = (d[d["_es_maq_mov"] | marca_etl | transp_maq]
+        dm = (d[d["_doc"].isin(docs_facturados) | marca_etl | transp_maq]
               .join(mov_por_doc, on="_doc"))
+        dm["_sin_factura"] = ~dm["_doc"].isin(docs_facturados)
+        dm["_otro_periodo"] = (~dm["_sin_factura"]) & (~dm["_es_maq_mov"])
         nom_vend = (dict(zip(vendedores["id"], vendedores["nombre_canonico"]))
                     if vendedores is not None and not vendedores.empty else {})
         desp_det = pd.DataFrame({
@@ -540,6 +557,11 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
             "Vendedor": dm["Vendedor"].fillna(
                 dm["vendedor_id"].map(nom_vend)).fillna("Sin asignar"),
             "Fecha factura": dm["fecha"].dt.date,
+            "Factura": pd.Series(
+                ["Sin factura (Sin DTE)" if sf else
+                 ("De otro período" if op else "Del período")
+                 for sf, op in zip(dm["_sin_factura"], dm["_otro_periodo"])],
+                index=dm.index),
             "Estado despacho": dm["estado"],
             "Transportista": dm.get("transportista"),
             "Devolución": (dm["devolucion"].map({True: "Sí", False: "No"})
@@ -564,6 +586,39 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                         "salieron a ruta y cuyo flete todavía no se factura — son "
                         "la diferencia entre este informe y el conteo directo de "
                         "Autoventa. Ver la hoja 'Sin facturar (Autoventa)'."))
+
+        # ── 11b. Conciliación con el conteo directo de Autoventa ────────────
+        # La pregunta que aparece cada semana: "yo cuento N y el informe M".
+        # Casi siempre son las mismas dos causas, así que van con su aritmética.
+        n_mov = len(m)
+        rutados_periodo = int(m["Fecha ruta"].between(
+            pd.Timestamp(f_ini), pd.Timestamp(f_fin)).sum())
+        n_otro = int(dm["_otro_periodo"].sum())
+        n_sin_fact = int(dm["_sin_factura"].sum())
+        conc = pd.DataFrame([
+            ("Movimientos facturados con fecha de factura en el período",
+             n_mov, "Es el número de la hoja 'Detalle movimientos'."),
+            ("(−) De esos, sin despacho en el período (no salieron a ruta, o "
+             "la ruta cae fuera)", n_mov - rutados_periodo,
+             "Pendientes, sin despacho, o entregados en otro período."),
+            ("(=) Facturados en el período y despachados en el período",
+             rutados_periodo, ""),
+            ("(+) Despachados en el período con factura de otro período",
+             n_otro, "Se facturó antes (fin de mes) y salió a ruta ahora."),
+            ("(+) Despachados en el período SIN factura en Obuma",
+             n_sin_fact, "Pedido 'Sin DTE': ver hoja 'Sin facturar (Autoventa)'."),
+            ("(=) Total de despachos de máquina del período",
+             rutados_periodo + n_otro + n_sin_fact,
+             "Esto es lo que cuenta el Detalle de despachos de Autoventa."),
+        ], columns=["Concepto", "N° documentos", "Explicación"])
+        _escribir(wb, "Conciliación Autoventa", conc,
+                  {"N° documentos": _FMT_NUM},
+                  nota=("Por qué este informe y el conteo directo de Autoventa "
+                        "dan distinto. Los dos están bien: cuentan cosas "
+                        "distintas. Este cuenta la máquina cuando Obuma factura "
+                        "el flete; Autoventa, cuando sale a ruta. Ojo: Acuña no "
+                        "pasa por Autoventa, así que sus movimientos entran en la "
+                        "primera fila y no en el despacho."))
 
         def _cuenta(serie, valor):
             return int((serie.astype(str).str.lower() == valor).sum())
