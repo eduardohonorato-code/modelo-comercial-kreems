@@ -1,0 +1,121 @@
+name: Recarga de meses (a mano)
+
+# Recarga un RANGO de meses en los servidores de GitHub, sin depender del PC.
+# Para qué: el ETL diario solo toca el mes en curso (y el anterior a principio de
+# mes). Cuando hay que rellenar histórico —por ejemplo al agregar una columna
+# nueva, como fecha_pedido en sql/036— hacen falta varios meses seguidos, que en
+# el PC son ~3 minutos por mes con el computador obligatoriamente prendido.
+#
+# El ETL es idempotente: correr un mes una vez BASTA, y correrlo de nuevo no
+# duplica nada (upsert por llave natural).
+#
+# Ojo con la fuente: por defecto recarga solo Autoventa (pedidos), que no gasta
+# cuota de Obuma. La opción "ambos" agrega las ventas de Obuma, cuya API sí tiene
+# tope diario (ver ObumaCuotaError en etl/loaders/obuma_api.py): no la uses para
+# rangos largos sin necesidad.
+#
+# Uso: Actions -> "Recarga de meses (a mano)" -> Run workflow -> desde/hasta.
+
+on:
+  workflow_dispatch:
+    inputs:
+      desde:
+        description: "Primer mes a recargar (AAAA-MM)"
+        required: true
+        type: string
+      hasta:
+        description: "Último mes a recargar (AAAA-MM). Vacío = igual que desde"
+        required: false
+        type: string
+      fuente:
+        description: "Qué recargar"
+        required: true
+        default: autoventa
+        type: choice
+        options:
+          - autoventa
+          - obuma
+          - ambos
+
+concurrency:
+  group: etl-kreems          # nunca dos cargas escribiendo a la vez
+  cancel-in-progress: false
+
+jobs:
+  recargar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Validar secrets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AUTOVENTA_API_KEY_ADMIN: ${{ secrets.AUTOVENTA_API_KEY_ADMIN }}
+          OBUMA_API_KEY: ${{ secrets.OBUMA_API_KEY }}
+        run: |
+          faltan=""
+          [ -z "$SUPABASE_URL" ] && faltan="$faltan SUPABASE_URL"
+          [ -z "$SUPABASE_SERVICE_ROLE_KEY" ] && faltan="$faltan SUPABASE_SERVICE_ROLE_KEY"
+          [ -z "$AUTOVENTA_API_KEY_ADMIN" ] && faltan="$faltan AUTOVENTA_API_KEY_ADMIN"
+          if [ -n "$faltan" ]; then
+            echo "Faltan estos Repository secrets:$faltan"
+            exit 1
+          fi
+
+      - name: Recargar los meses del rango
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AUTOVENTA_API_KEY_ADMIN: ${{ secrets.AUTOVENTA_API_KEY_ADMIN }}
+          AUTOVENTA_EMPRESA_ID: ${{ secrets.AUTOVENTA_EMPRESA_ID }}
+          OBUMA_API_KEY: ${{ secrets.OBUMA_API_KEY }}
+          DESDE: ${{ inputs.desde }}
+          HASTA: ${{ inputs.hasta }}
+          FUENTE: ${{ inputs.fuente }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          python - <<'PY' > meses.txt
+          import os
+          from datetime import date
+          desde = os.environ["DESDE"].strip()
+          hasta = (os.environ.get("HASTA") or desde).strip()
+          a1, m1 = (int(x) for x in desde.split("-"))
+          a2, m2 = (int(x) for x in hasta.split("-"))
+          if (a2, m2) < (a1, m1):
+              raise SystemExit(f"'hasta' ({hasta}) es anterior a 'desde' ({desde})")
+          y, m = a1, m1
+          while (y, m) <= (a2, m2):
+              print(f"{y:04d}-{m:02d}")
+              y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+          PY
+          echo "Meses a recargar:"; cat meses.txt
+          while read -r periodo; do
+            [ -z "$periodo" ] && continue
+            echo "::group::$periodo"
+            if [ "$FUENTE" != "autoventa" ]; then
+              python -m etl.run_obuma_api --periodo "$periodo"
+            fi
+            if [ "$FUENTE" != "obuma" ]; then
+              python -m etl.run_autoventa_api --periodo "$periodo"
+            fi
+            echo "::endgroup::"
+          done < meses.txt
+
+      - name: Guardar el log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recarga-log
+          path: |
+            etl_auto.log
+            etl_run.log
+          if-no-files-found: ignore
