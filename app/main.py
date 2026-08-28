@@ -23,6 +23,7 @@ st.set_page_config(
 from app.auth import (login, logout, is_authenticated, es_gerencia,
                       get_rol, MESES, get_client_auth, cambiar_password)
 from app.styles import CSS, logo_img
+from app.version import VERSION
 # Los módulos de páginas (app.pages) NO se importan aquí: cargan plotly/data y
 # enlentecen la pantalla de login. Se importan dentro de main() tras autenticar.
 
@@ -70,7 +71,10 @@ def pantalla_login():
             else:
                 st.error(msg)
 
-    st.markdown("</div></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<p style='text-align:center;color:#94A3B8;font-size:.72rem;"
+        f"margin-top:.75rem'>versión {VERSION}</p></div></div>",
+        unsafe_allow_html=True)
 
 
 # ── SIDEBAR ────────────────────────────────────────────────────────────────────
@@ -171,6 +175,10 @@ def sidebar():
         if st.button("Cerrar sesión", key="btn_logout", use_container_width=True):
             logout()
             st.rerun()
+
+        st.markdown(
+            f"<p style='text-align:center;color:#94A3B8;font-size:.7rem;"
+            f"margin-top:.5rem'>v {VERSION}</p>", unsafe_allow_html=True)
 
     return anio, mes
 
