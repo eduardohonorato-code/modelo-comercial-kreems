@@ -136,8 +136,15 @@ def cargar_autoventa(
     )
 
     # ── fact_pedidos ─────────────────────────────────────────────────────────
+    # Fecha en que el vendedor ingresó el pedido (la gestión se mide con esta,
+    # no con la del DTE). El export la trae como "Fecha pedido"; si esa columna
+    # no viene, la fila queda sin el dato en vez de inventarlo.
+    if "Fecha pedido" in ped.columns:
+        _fp = parsear_fecha(ped["Fecha pedido"])
+        ped["fecha_pedido"] = _fp.dt.date.astype("object").where(_fp.notna())
+
     cols_ped = [
-        "n_pedido", "num_documento", "doc_venta", "fecha",
+        "n_pedido", "num_documento", "doc_venta", "fecha", "fecha_pedido",
         "vendedor_id", "cliente_rut", "producto_codigo",
         "sociedad_id", "neto", "neto_nc", "linea",
     ]

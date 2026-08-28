@@ -154,6 +154,11 @@ def cargar_autoventa_api(
                 "num_documento": num_doc,
                 "doc_venta": doc_venta,
                 "fecha": fecha,
+                # created_at de la LÍNEA = cuándo el vendedor ingresó el pedido.
+                # No es la fecha del DTE: entre una y otra pasan semanas, y la
+                # gestión del vendedor se mide con esta.
+                "fecha_pedido": str(ln.get("created_at") or "")[:10] or None,
+                "estado_pedido": ln.get("status") or None,
                 "vendedor_nombre": ln.get("created_by_name") or inv.get("created_by_name"),
                 "cliente_rut_raw": rut,
                 "producto_codigo": str(ln.get("product_code") or "").strip(),
@@ -197,6 +202,10 @@ def cargar_autoventa_api(
                 "num_documento": pd.NA,
                 "doc_venta": "Sin DTE",
                 "fecha": fdes[:10],
+                "fecha_pedido": (str(ln.get("created_at")
+                                     or req.get("created_at") or "")[:10]
+                                 or None),
+                "estado_pedido": ln.get("status") or req.get("status") or None,
                 "vendedor_nombre": ln.get("created_by_name") or req.get("created_by_name"),
                 "cliente_rut_raw": rut,
                 "producto_codigo": str(ln.get("product_code") or "").strip(),
@@ -269,8 +278,9 @@ def cargar_autoventa_api(
     ).astype("Int64")
 
     fact_pedidos = df[[
-        "n_pedido", "num_documento", "doc_venta", "fecha", "vendedor_id",
-        "cliente_rut", "producto_codigo", "sociedad_id", "neto", "neto_nc", "linea",
+        "n_pedido", "num_documento", "doc_venta", "fecha", "fecha_pedido",
+        "estado_pedido", "vendedor_id", "cliente_rut", "producto_codigo",
+        "sociedad_id", "neto", "neto_nc", "linea",
     ]].copy()
 
     # ── 5. dim_cliente (RUTs nuevos que no vengan de Obuma) ─────────────────
