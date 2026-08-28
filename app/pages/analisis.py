@@ -781,9 +781,12 @@ de Autoventa, cruzando por número de documento:
 > *gestionadas / pendientes*.
 """)
 
-    # El detalle (tabla y desglose por vendedor) es solo para gerencia.
+    # El detalle (tabla, desglose por vendedor e informe) es solo para gerencia.
     if not es_gerencia():
         return
+
+    st.divider()
+    _s04b_informe_maquinas(client, df, f_ini, f_fin, soc_ids)
 
     st.divider()
 
@@ -867,9 +870,6 @@ de Autoventa, cruzando por número de documento:
              "Entregadas", "% Entreg.", "Movidas"]],
         use_container_width=True, hide_index=True,
     )
-
-    st.divider()
-    _s04b_informe_maquinas(client, df, f_ini, f_fin, soc_ids)
 
 
 # ─── Sección 04b · Informe de seguimiento de máquinas ─────────────────────────
@@ -1481,6 +1481,9 @@ def _s07_informe(client, df, df_prev, f_ini, f_fin, soc_ids, cats_sel):
         "Cambia las fechas en los filtros de arriba y el informe sale con ese "
         "rango — si eliges varios meses, las hojas *x Mes* traen una columna por mes."
     )
+    st.caption("🧊 ¿Buscas el seguimiento de máquinas (entregadas, cambios, "
+               "retiros y su estado de despacho)? Es un informe aparte, en la "
+               "pestaña **Máquinas**.")
 
     hojas = [
         ("Resumen", "Totales del período, mix de NC, top región/categoría/SKU y "
