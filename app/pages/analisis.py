@@ -868,6 +868,109 @@ de Autoventa, cruzando por número de documento:
         use_container_width=True, hide_index=True,
     )
 
+    st.divider()
+    _s04b_informe_maquinas(client, df, f_ini, f_fin, soc_ids)
+
+
+# ─── Sección 04b · Informe de seguimiento de máquinas ─────────────────────────
+
+# Ventana de despachos más ancha que el período: una máquina facturada a fin de
+# mes sale a ruta al mes siguiente (se han visto hasta 32 días de desfase), y
+# alguna trae la ruta fechada antes de la factura.
+_DIAS_ANTES, _DIAS_DESPUES = 180, 90
+
+_HOJAS_MAQ = [
+    ("Resumen", "Movimientos, estado de entrega, conversión y tiempos del período."),
+    ("Mensual", "Nuevas, cambios, retiros y parque neto mes a mes."),
+    ("Por vendedor", "Lo mismo por vendedor, con su % entregado."),
+    ("Tipo x Estado", "Matriz de control: qué pasó con cada tipo de movimiento."),
+    ("Geografía", "Movimientos por región y comuna del cliente."),
+    ("Detalle movimientos", "Una fila por máquina: documento, cliente, código FL, "
+                            "despacho que la confirma y días de desfase."),
+    ("Pendientes por confirmar", "Facturadas y todavía sin entrega confirmada, "
+                                 "ordenadas por antigüedad. La hoja de trabajo."),
+    ("Rechazadas", "Salieron a ruta y volvieron rechazadas: hay que reprogramar."),
+    ("Retiros", "Todos los FL-2, con la confirmación de que la máquina volvió."),
+    ("Clientes", "Un cliente por fila, con su saldo nuevas − retiros."),
+    ("Despachos de máquina", "Las filas del detalle de despachos de Autoventa que "
+                             "cruzan con una máquina."),
+    ("Despachos (contexto)", "Todas las entregas del período y su nivel de rechazo."),
+    ("Control del cruce", "% de movimientos confirmados por mes y sociedad."),
+    ("Definiciones", "Qué significa cada código FL y cada estado."),
+]
+
+
+def _s04b_informe_maquinas(client, df_maq, f_ini, f_fin, soc_ids):
+    _sec("Informe de seguimiento de máquinas")
+    st.markdown(
+        "Un Excel con el **ciclo completo de cada máquina** del período filtrado "
+        "arriba: qué se instaló, qué se cambió, qué se retiró, y —cruzando con el "
+        "**detalle de despachos de Autoventa**— cuáles se confirmaron en terreno y "
+        "cuáles siguen pendientes."
+    )
+    with st.expander(f"📑 Qué trae el archivo ({len(_HOJAS_MAQ)} hojas)",
+                     expanded=False):
+        st.dataframe(pd.DataFrame(_HOJAS_MAQ, columns=["Hoja", "Contenido"]),
+                     use_container_width=True, hide_index=True)
+
+    soc_lbl = st.session_state.get("anal_soc", "Ambas")
+    firma = (str(f_ini), str(f_fin), tuple(soc_ids or []), len(df_maq))
+    guardado = st.session_state.get("_maq_libro")
+
+    if st.button("🧊 Generar informe de máquinas", type="primary",
+                 key="btn_informe_maquinas"):
+        with st.spinner("Cruzando máquinas con despachos…"):
+            from app.export_maquinas import libro_maquinas
+            from app.data import (get_despachos_rango, get_lineas_fl,
+                                  get_dim_cliente_full)
+
+            # Cosmético: si algo de esto falla, el informe igual sale (con menos
+            # columnas), pero el estado de entrega SIN despachos queda como
+            # "Sin información", nunca como "pendiente".
+            try:
+                desp = get_despachos_rango(
+                    client,
+                    f_ini - datetime.timedelta(days=_DIAS_ANTES),
+                    f_fin + datetime.timedelta(days=_DIAS_DESPUES),
+                    soc_ids)
+            except Exception:
+                desp = None
+            try:
+                fl = get_lineas_fl(client, f_ini, f_fin, soc_ids)
+            except Exception:
+                fl = None
+            try:
+                vend = get_todos_vendedores(client)
+            except Exception:
+                vend = None
+            try:
+                cli = get_dim_cliente_full(client)
+            except Exception:
+                cli = None
+            try:
+                df_soc = get_dim_sociedad(client)
+                socs = (dict(zip(df_soc["id"], df_soc["nombre"]))
+                        if not df_soc.empty else {})
+            except Exception:
+                socs = {}
+
+            data = libro_maquinas(df_maq, f_ini, f_fin, soc_lbl,
+                                  despachos=desp, lineas_fl=fl, vendedores=vend,
+                                  clientes=cli, sociedades=socs)
+        st.session_state["_maq_libro"] = (firma, data)
+        guardado = st.session_state["_maq_libro"]
+
+    if guardado and guardado[0] == firma:
+        nb = f"seguimiento_maquinas_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}.xlsx"
+        st.download_button(
+            "⬇️ Descargar informe de máquinas", guardado[1], nb,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_informe_maquinas", use_container_width=True)
+        st.success(f"Informe listo · {len(guardado[1]) / 1024:,.0f} KB"
+                   .replace(",", "."))
+    elif guardado:
+        st.caption("Los filtros cambiaron: vuelve a generar el informe.")
+
 
 # ─── Sección 05 · Productos a fondo ───────────────────────────────────────────
 

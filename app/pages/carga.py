@@ -77,13 +77,43 @@ def _leer_periodo(client, tabla: str, col_fecha: str, ini: str, fin: str, select
     return pd.DataFrame(rows)
 
 
+def _maquinas_por_documento(client, documentos: list) -> "pd.DataFrame":
+    """
+    fact_maquinas de una lista de documentos, sin filtrar por fecha.
+
+    Hace falta porque la ruta puede caer en un mes distinto al de la factura
+    (una máquina facturada a fin de mes se entrega al mes siguiente): esas
+    quedaban con estado 'gestionada' para siempre, porque la sincronización
+    comparaba el mes de la factura contra el mes de la ruta.
+    """
+    import pandas as pd
+    filas, paso = [], 100
+    for i in range(0, len(documentos), paso):
+        try:
+            r = (client.table("fact_maquinas")
+                 .select("documento,fecha,vendedor_id,cliente_rut,tipo_mov,"
+                         "estado,sociedad_id")
+                 .in_("documento", documentos[i:i + paso])
+                 .execute())
+        except Exception:
+            continue
+        filas.extend(r.data or [])
+    return pd.DataFrame(filas)
+
+
 def _sincronizar_estado_maquinas(client, anio: int, mes: int) -> dict | None:
     """
-    Reconcilia el estado (entregada/rechazada/gestionada) de TODAS las máquinas
-    del mes contra los despachos que ya están en la base. Necesario porque las
-    máquinas de Gran Natural entran por API: al subir los despachos aquí, así
-    toman su estado de entrega. Idempotente.
+    Reconcilia el estado (entregada/rechazada/gestionada) de las máquinas contra
+    los despachos que ya están en la base. Necesario porque las máquinas de Gran
+    Natural entran por API: al subir los despachos aquí, así toman su estado de
+    entrega. Idempotente.
+
+    Se sincronizan las máquinas facturadas en el mes MÁS las de cualquier mes
+    cuyo documento aparezca en los despachos recién cargados (facturación de un
+    mes, ruta del siguiente).
     """
+    import pandas as pd
+
     from etl.maquinas import aplicar_estado_despachos
     from etl.upsert import upsert_tabla
 
@@ -92,8 +122,16 @@ def _sincronizar_estado_maquinas(client, anio: int, mes: int) -> dict | None:
                          "documento,estado,fecha_ruta")
     if desp.empty:
         return None
-    maq = _leer_periodo(client, "fact_maquinas", "fecha", ini, fin,
-                        "documento,fecha,vendedor_id,cliente_rut,tipo_mov,estado,sociedad_id")
+    cols_maq = ("documento,fecha,vendedor_id,cliente_rut,tipo_mov,estado,"
+                "sociedad_id")
+    maq = _leer_periodo(client, "fact_maquinas", "fecha", ini, fin, cols_maq)
+    docs_desp = sorted(set(desp["documento"].dropna().astype(str).str.strip()))
+    otras = _maquinas_por_documento(client, docs_desp)
+    if not otras.empty:
+        maq = (pd.concat([maq, otras], ignore_index=True)
+               if not maq.empty else otras)
+        maq = maq.drop_duplicates(
+            subset=["sociedad_id", "documento", "cliente_rut", "tipo_mov"])
 
     # Reconciliar es_maquina en los despachos del mes según las máquinas (Obuma):
     # un despacho es de máquina si su documento es una máquina derivada de Obuma.
@@ -103,11 +141,13 @@ def _sincronizar_estado_maquinas(client, anio: int, mes: int) -> dict | None:
     try:
         (client.table("fact_despachos").update({"es_maquina": False})
          .gte("fecha_ruta", ini).lt("fecha_ruta", fin).execute())
-        if machine_docs:
+        # Por tandas: la lista de documentos viaja en la URL y con muchos
+        # documentos el request se pasa de largo.
+        for i in range(0, len(machine_docs), 100):
             r = (client.table("fact_despachos").update({"es_maquina": True})
                  .gte("fecha_ruta", ini).lt("fecha_ruta", fin)
-                 .in_("documento", machine_docs).execute())
-            n_maquina_desp = len(r.data or [])
+                 .in_("documento", machine_docs[i:i + 100]).execute())
+            n_maquina_desp += len(r.data or [])
     except Exception:
         pass
 

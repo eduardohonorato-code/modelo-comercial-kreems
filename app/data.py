@@ -200,6 +200,85 @@ def get_maquinas_historico(client: Client, anio: int) -> pd.DataFrame:
     return df
 
 
+def get_despachos_rango(client: Client, fecha_ini, fecha_fin,
+                        sociedad_ids=None) -> pd.DataFrame:
+    """
+    fact_despachos por rango de FECHA DE RUTA, paginado. RLS aplica.
+
+    Ojo con el rango: la fecha de ruta de un despacho puede caer en un mes
+    distinto al de la factura de la máquina (se factura a fin de mes y se
+    entrega al mes siguiente). Quien cruce máquinas con despachos debe pedir
+    una ventana más ancha que el período analizado.
+    """
+    fi = fecha_ini.isoformat() if hasattr(fecha_ini, "isoformat") else str(fecha_ini)
+    ff = fecha_fin.isoformat() if hasattr(fecha_fin, "isoformat") else str(fecha_fin)
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        q = (client.table("fact_despachos")
+             .select("documento,fecha_ruta,vendedor_id,cliente_rut,estado,"
+                     "devolucion,peso,es_maquina,transportista,sociedad_id")
+             .gte("fecha_ruta", fi).lte("fecha_ruta", ff)
+             .order("id")
+             .range(offset, offset + _PAGE - 1))
+        if sociedad_ids:
+            q = q.in_("sociedad_id", sociedad_ids)
+        r = q.execute()
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["fecha_ruta"] = pd.to_datetime(df["fecha_ruta"], errors="coerce")
+    return df
+
+
+# Códigos de flete que identifican un movimiento de máquina en Obuma.
+CODIGOS_FL = ["FL-1", "FL-2", "FL-3", "FL-4", "FL-5"]
+
+
+def get_lineas_fl(client: Client, fecha_ini, fecha_fin,
+                  sociedad_ids=None) -> pd.DataFrame:
+    """
+    Líneas de flete de máquina (FL-x) de fact_ventas en el rango, paginado.
+
+    `fact_maquinas` guarda el movimiento ya resumido (nueva/cambio/retiro), así
+    que pierde tres datos que el informe de máquinas sí necesita: el código FL
+    exacto (FL-1/3/5 son cambios distintos entre sí), la cantidad de máquinas
+    del documento (hay FL-4 con 2) y si el documento es una NOTA DE CRÉDITO
+    (movimiento anulado). Se leen desde el hecho de ventas, que es su origen.
+    """
+    fi = fecha_ini.isoformat() if hasattr(fecha_ini, "isoformat") else str(fecha_ini)
+    ff = fecha_fin.isoformat() if hasattr(fecha_fin, "isoformat") else str(fecha_fin)
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        q = (client.table("fact_ventas")
+             .select("n_dcto,fecha,tipo_dcto,producto_codigo,cliente_rut,"
+                     "vendedor_id,cantidad,sociedad_id")
+             .in_("producto_codigo", CODIGOS_FL)
+             .gte("fecha", fi).lte("fecha", ff)
+             .order("id")
+             .range(offset, offset + _PAGE - 1))
+        if sociedad_ids:
+            q = q.in_("sociedad_id", sociedad_ids)
+        r = q.execute()
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    return df
+
+
+
 # ── Calendario laboral ───────────────────────────────────────────────────────
 
 def get_calendario(client: Client, anio: int, mes: int) -> dict:
