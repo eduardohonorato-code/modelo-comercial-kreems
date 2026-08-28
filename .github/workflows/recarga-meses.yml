@@ -76,7 +76,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           AUTOVENTA_API_KEY_ADMIN: ${{ secrets.AUTOVENTA_API_KEY_ADMIN }}
-          AUTOVENTA_EMPRESA_ID: ${{ secrets.AUTOVENTA_EMPRESA_ID }}
+          AUTOVENTA_EMPRESA_ID: ${{ secrets.AUTOVENTA_EMPRESA_ID || '548' }}
           OBUMA_API_KEY: ${{ secrets.OBUMA_API_KEY }}
           DESDE: ${{ inputs.desde }}
           HASTA: ${{ inputs.hasta }}

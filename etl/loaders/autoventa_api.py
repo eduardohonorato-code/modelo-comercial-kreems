@@ -36,10 +36,12 @@ from etl.config import SOCIEDAD_ID
 
 logger = logging.getLogger(__name__)
 
-API_BASE = os.environ.get(
-    "AUTOVENTA_API_BASE",
-    "https://api.autoventa.io/api/1/companies/" + os.environ.get("AUTOVENTA_EMPRESA_ID", "548"),
-)
+# `or` en vez del default de os.environ.get: en GitHub Actions un secret que no
+# existe llega como cadena VACÍA, no ausente, así que el default nunca aplicaba y
+# la URL quedaba ".../companies//clients" → HTTP 404 con una página HTML.
+_EMPRESA_ID = os.environ.get("AUTOVENTA_EMPRESA_ID") or "548"
+API_BASE = (os.environ.get("AUTOVENTA_API_BASE")
+            or f"https://api.autoventa.io/api/1/companies/{_EMPRESA_ID}")
 
 # Pedidos Autoventa = Gran Natural (igual que el loader Excel)
 SOCIEDAD_AUTOVENTA = SOCIEDAD_ID["grannatural"]
