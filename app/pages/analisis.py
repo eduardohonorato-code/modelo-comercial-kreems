@@ -898,9 +898,10 @@ _HOJAS_MAQ = [
     ("Despachos de máquina", "Las filas del detalle de despachos de Autoventa que "
                              "cruzan con una máquina, incluidas las despachadas "
                              "y aún sin factura."),
-    ("Sin facturar (Autoventa)", "Fletes ingresados en Autoventa que Obuma "
-                                 "todavía no factura: la diferencia con el "
-                                 "conteo directo de Autoventa."),
+    ("Pendientes de gestionar", "Pedidos de flete ingresados y todavía sin DTE, "
+                                "por antigüedad. La cola del vendedor."),
+    ("Gestión por vendedor", "Pedidos ingresados, concretados con DTE, en cola y "
+                             "cuánto demora la gestión."),
     ("Conciliación Autoventa", "La aritmética de por qué tu recuento y el del "
                                "informe no dan igual."),
     ("Despachos (contexto)", "Todas las entregas del período y su nivel de rechazo."),
@@ -977,7 +978,7 @@ def _s04b_informe_maquinas(client, df_maq, f_ini, f_fin, soc_ids):
         with st.spinner("Cruzando máquinas con despachos…"):
             from app.export_maquinas import libro_maquinas
             from app.data import (get_despachos_rango, get_lineas_fl,
-                                  get_pedidos_fl, get_dim_cliente_full)
+                                  get_pedidos_fl_todos, get_dim_cliente_full)
 
             # Cosmético: si algo de esto falla, el informe igual sale (con menos
             # columnas), pero el estado de entrega SIN despachos queda como
@@ -995,7 +996,10 @@ def _s04b_informe_maquinas(client, df_maq, f_ini, f_fin, soc_ids):
             except Exception:
                 fl = None
             try:
-                ped_fl = get_pedidos_fl(client, f_ini, f_fin, soc_ids)
+                # Todos los pedidos FL (son pocos): el informe los corta por
+                # fecha de ingreso y por fecha de DTE, y la cola de pendientes
+                # se muestra completa, no solo la del período.
+                ped_fl = get_pedidos_fl_todos(client, soc_ids)
             except Exception:
                 ped_fl = None
             try:

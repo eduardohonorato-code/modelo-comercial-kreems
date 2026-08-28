@@ -279,6 +279,43 @@ def get_lineas_fl(client: Client, fecha_ini, fecha_fin,
 
 
 
+def get_pedidos_fl_todos(client: Client, sociedad_ids=None) -> pd.DataFrame:
+    """
+    TODOS los pedidos de flete de máquina, sin filtrar por fecha, paginado.
+
+    Son pocos (~500 filas en todo el histórico) y el informe necesita cortarlos
+    por dos fechas distintas: la de ingreso del pedido (la gestión del vendedor)
+    y la del DTE. Traerlos completos y filtrar en pandas evita andar haciendo
+    una consulta por cada corte —y evita perder el pedido que se ingresó en un
+    mes y se facturó en otro, que es justamente el caso interesante.
+    """
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        q = (client.table("fact_pedidos")
+             .select("n_pedido,num_documento,doc_venta,fecha,fecha_pedido,"
+                     "estado_pedido,vendedor_id,cliente_rut,producto_codigo,"
+                     "sociedad_id,facturado")
+             .in_("producto_codigo", CODIGOS_FL)
+             .order("id")
+             .range(offset, offset + _PAGE - 1))
+        if sociedad_ids:
+            q = q.in_("sociedad_id", sociedad_ids)
+        r = q.execute()
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    for c in ("fecha", "fecha_pedido"):
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df
+
+
 def get_pedidos_fl(client: Client, fecha_ini, fecha_fin,
                    sociedad_ids=None, solo_sin_dte: bool = False) -> pd.DataFrame:
     """
@@ -295,8 +332,9 @@ def get_pedidos_fl(client: Client, fecha_ini, fecha_fin,
     _PAGE, offset, rows = 1000, 0, []
     while True:
         q = (client.table("fact_pedidos")
-             .select("n_pedido,num_documento,doc_venta,fecha,vendedor_id,"
-                     "cliente_rut,producto_codigo,sociedad_id,facturado")
+             .select("n_pedido,num_documento,doc_venta,fecha,fecha_pedido,"
+                     "estado_pedido,vendedor_id,cliente_rut,producto_codigo,"
+                     "sociedad_id,facturado")
              .in_("producto_codigo", CODIGOS_FL)
              .gte("fecha", fi).lte("fecha", ff)
              .order("id")
