@@ -37,6 +37,13 @@ MOV_LBL = {"nueva": "Nueva (FL-4)", "cambio": "Cambio (FL-1/3/5)",
 FL_A_MOV = {"FL-4": "nueva", "FL-1": "cambio", "FL-3": "cambio",
             "FL-5": "cambio", "FL-2": "retiro"}
 
+# Transportistas dedicados a máquinas ("Máquinas Externo RM", "Máquinas Kreems 1").
+# Sirven para reconocer un despacho de máquina que TODAVÍA no tiene factura en
+# Obuma, que es justo lo que hace diferir este conteo del de Autoventa. No es un
+# filtro suficiente por sí solo: 40 movimientos de 2026 salieron con el
+# transportista de la ruta normal (Cancino Temuco, sobre todo).
+_TRANSP_MAQUINA = "quina"
+
 ENTREGADA = "Entregada"
 RECHAZADA = "Rechazada"
 EN_RUTA = "Pendiente en ruta"
@@ -62,6 +69,14 @@ def _mes(f):
 
 def _pct(num, den):
     return (num / den) if den else 0.0
+
+
+def _desc(ruts: pd.Series, clientes: pd.DataFrame | None, col: str) -> pd.Series:
+    """Columna descriptiva de dim_cliente para una serie de RUT."""
+    if clientes is None or clientes.empty or col not in clientes.columns:
+        return pd.Series("(sin dato)", index=ruts.index)
+    mapa = clientes.drop_duplicates("rut").set_index("rut")[col]
+    return ruts.map(mapa).fillna("(sin dato)")
 
 
 # ── Preparación del detalle ──────────────────────────────────────────────────
@@ -277,6 +292,7 @@ def _agrupado(m: pd.DataFrame, por, etiqueta: str,
 def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                    despachos: pd.DataFrame | None = None,
                    lineas_fl: pd.DataFrame | None = None,
+                   pedidos_fl: pd.DataFrame | None = None,
                    vendedores: pd.DataFrame | None = None,
                    clientes: pd.DataFrame | None = None,
                    sociedades: dict | None = None,
@@ -314,6 +330,10 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
     retiros_ent = int(((m["tipo_mov"] == "retiro") & m["_entregada"]).sum())
     retiros_info = int(((m["tipo_mov"] == "retiro") & ~m["_sin_info"]).sum())
     dias_ent = m.loc[m["_entregada"], "Días factura a ruta"].dropna()
+    sin_dte_n = 0
+    if pedidos_fl is not None and not pedidos_fl.empty:
+        sin_dte_n = int((pedidos_fl["doc_venta"].astype(str).str.strip()
+                         .str.lower() == "sin dte").sum())
 
     # ── 1. Resumen ───────────────────────────────────────────────────────────
     ind = [
@@ -330,6 +350,7 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
         ("Retiros por término (FL-2)", retiros),
         ("Parque neto del período (nuevas - retiros)", nuevas - retiros),
         ("Movimientos anulados por nota de crédito", anuladas),
+        ("Gestionadas en Autoventa y aún sin factura (Sin DTE)", sin_dte_n),
         ("", ""),
         ("ESTADO DE ENTREGA (cruce con despachos de Autoventa)", ""),
         ("Entregadas / ejecutadas confirmadas", ent),
@@ -484,23 +505,40 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
         docs_mov = set(m["_doc"])
         d = despachos.copy()
         d["fecha_ruta"] = pd.to_datetime(d["fecha_ruta"], errors="coerce")
+        # Las hojas de despachos se acotan al período del informe: la ventana
+        # ancha existe solo para cruzar el movimiento con su ruta, y si se
+        # dejara entrar entera, aparecerían despachos de máquinas facturadas
+        # fuera del período marcados como si les faltara la factura.
+        d = d[(d["fecha_ruta"] >= pd.Timestamp(f_ini))
+              & (d["fecha_ruta"] <= pd.Timestamp(f_fin))]
         d["_doc"] = _norm_doc(d["documento"])
         d["Mes ruta"] = [_mes(f) for f in d["fecha_ruta"]]
         d["_es_maq_mov"] = d["_doc"].isin(docs_mov)
         marca_etl = (d["es_maquina"].fillna(False).astype(bool)
                      if "es_maquina" in d.columns
                      else pd.Series(False, index=d.index))
+        # También los que salieron con transportista de máquinas aunque no
+        # crucen con Obuma: son máquinas despachadas y todavía sin facturar.
+        transp_maq = (d["transportista"].astype(str)
+                      .str.contains(_TRANSP_MAQUINA, case=False, na=False)
+                      if "transportista" in d.columns
+                      else pd.Series(False, index=d.index))
 
         mov_por_doc = (m.drop_duplicates("_doc")
                        .set_index("_doc")[["Movimiento", "Vendedor", "Cliente",
                                            "Comuna", "Región", "fecha"]])
-        dm = d[d["_es_maq_mov"] | marca_etl].join(mov_por_doc, on="_doc")
+        dm = (d[d["_es_maq_mov"] | marca_etl | transp_maq]
+              .join(mov_por_doc, on="_doc"))
+        nom_vend = (dict(zip(vendedores["id"], vendedores["nombre_canonico"]))
+                    if vendedores is not None and not vendedores.empty else {})
         desp_det = pd.DataFrame({
             "Fecha ruta": dm["fecha_ruta"].dt.date,
             "Mes ruta": dm["Mes ruta"],
             "Documento": dm["_doc"],
             "Movimiento": dm["Movimiento"].fillna(
-                "AVISO: sin movimiento en Obuma"),
+                "AVISO: despachada y sin factura en Obuma"),
+            "Vendedor": dm["Vendedor"].fillna(
+                dm["vendedor_id"].map(nom_vend)).fillna("Sin asignar"),
             "Fecha factura": dm["fecha"].dt.date,
             "Estado despacho": dm["estado"],
             "Transportista": dm.get("transportista"),
@@ -508,18 +546,24 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                            if "devolucion" in dm.columns else ""),
             "Peso (Kg)": pd.to_numeric(dm.get("peso"), errors="coerce"),
             "RUT": dm["cliente_rut"],
-            "Cliente": dm["Cliente"],
-            "Comuna": dm["Comuna"],
-            "Región": dm["Región"],
+            "Cliente": dm["Cliente"].fillna(_desc(dm["cliente_rut"], clientes,
+                                                  "razon_social")),
+            "Comuna": dm["Comuna"].fillna(_desc(dm["cliente_rut"], clientes,
+                                                "comuna")),
+            "Región": dm["Región"].fillna(_desc(dm["cliente_rut"], clientes,
+                                                "region")),
         }).sort_values("Fecha ruta", ascending=False)
         _escribir(wb, "Despachos de máquina", desp_det,
                   {"Fecha ruta": _FMT_FECHA, "Fecha factura": _FMT_FECHA,
                    "Peso (Kg)": _FMT_DEC},
                   nota=("Filas del Detalle de despachos de Autoventa que "
-                        "corresponden a un documento de máquina. Las marcadas "
-                        "'AVISO: sin movimiento en Obuma' son despachos de máquina "
-                        "cuyo documento no tiene línea FL facturada: hay que "
-                        "revisarlos uno por uno."))
+                        "corresponden a una máquina: las que cruzan con un "
+                        "movimiento de Obuma, más las que salieron con un "
+                        "transportista de máquinas. Las marcadas 'AVISO: "
+                        "despachada y sin factura en Obuma' son máquinas que ya "
+                        "salieron a ruta y cuyo flete todavía no se factura — son "
+                        "la diferencia entre este informe y el conteo directo de "
+                        "Autoventa. Ver la hoja 'Sin facturar (Autoventa)'."))
 
         def _cuenta(serie, valor):
             return int((serie.astype(str).str.lower() == valor).sum())
@@ -544,11 +588,49 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                   {"Despachos": _FMT_NUM, "Entregados": _FMT_NUM,
                    "Rechazados": _FMT_NUM, "Pendientes": _FMT_NUM,
                    "De máquina": _FMT_NUM, "% Rechazo": _FMT_PCT},
-                  nota=("TODOS los despachos de la ventana consultada (no solo "
-                        "máquinas), para poner en contexto el nivel de rechazo. La "
-                        "ventana es más ancha que el período del informe porque una "
-                        "máquina facturada a fin de mes se entrega al mes siguiente."),
+                  nota=("TODOS los despachos del período (no solo máquinas), "
+                        "para poner en contexto el nivel de rechazo de las rutas."),
                   total_ultima=not gen.empty)
+
+    # ── 12b. Gestionadas en Autoventa y todavía sin factura ──────────────────
+    if pedidos_fl is not None and not pedidos_fl.empty:
+        pf = pedidos_fl.copy()
+        pf["fecha"] = pd.to_datetime(pf["fecha"], errors="coerce")
+        sin_dte = pf[pf["doc_venta"].astype(str).str.strip().str.lower()
+                     == "sin dte"].copy()
+        if not sin_dte.empty:
+            nom_v = (dict(zip(vendedores["id"], vendedores["nombre_canonico"]))
+                     if vendedores is not None and not vendedores.empty else {})
+            cli_map = (clientes.drop_duplicates("rut").set_index("rut")
+                       if clientes is not None and not clientes.empty else None)
+            cod = sin_dte["producto_codigo"].astype(str).str.upper().str.strip()
+            sin_dte["_mov"] = cod.map(FL_A_MOV)
+            tabla_sd = pd.DataFrame({
+                "Fecha pedido": sin_dte["fecha"].dt.date,
+                "N° pedido": sin_dte["n_pedido"],
+                "Código FL": cod,
+                "Movimiento": sin_dte["_mov"].map(MOV_LBL).fillna("(otro)"),
+                "Vendedor": sin_dte["vendedor_id"].map(nom_v).fillna("Sin asignar"),
+                "RUT": sin_dte["cliente_rut"],
+                "Cliente": (sin_dte["cliente_rut"].map(cli_map["razon_social"])
+                            if cli_map is not None
+                            and "razon_social" in cli_map.columns else ""),
+                "Comuna": (sin_dte["cliente_rut"].map(cli_map["comuna"])
+                           if cli_map is not None
+                           and "comuna" in cli_map.columns else ""),
+                "Días sin facturar": (pd.Timestamp(hoy)
+                                      - sin_dte["fecha"]).dt.days,
+            }).sort_values("Días sin facturar", ascending=False)
+            _escribir(wb, "Sin facturar (Autoventa)", tabla_sd,
+                      {"Fecha pedido": _FMT_FECHA,
+                       "Días sin facturar": _FMT_NUM},
+                      nota=("Fletes de máquina que el vendedor ya ingresó en "
+                            "Autoventa y que Obuma todavía no factura "
+                            "(doc_venta = 'Sin DTE'). NO cuentan como movimiento "
+                            "en el resto del informe, porque el movimiento se "
+                            "deriva de la factura: por eso Autoventa muestra más "
+                            "máquinas que este informe. Cuando se emita el "
+                            "documento aparecerán solas."))
 
     # ── 13. Control del cruce ────────────────────────────────────────────────
     ctrl = []
@@ -623,6 +705,12 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
          "El documento es una nota de crédito que revierte un flete de máquina. "
          "Sigue contando como movimiento en la base; la columna 'Tipo documento' "
          "del detalle los deja a la vista."),
+        ("Gestionada en Autoventa sin factura",
+         "El vendedor ingresó el flete en Autoventa (y la máquina puede haber "
+         "salido a ruta), pero Obuma todavía no emite el documento. No cuenta "
+         "como movimiento aquí, porque el movimiento se deriva de la factura. "
+         "Es la razón habitual de que Autoventa muestre más máquinas que este "
+         "informe; la hoja 'Sin facturar (Autoventa)' las lista una por una."),
         ("Llave del cruce",
          "Obuma 'N° DCTO' = Autoventa 'Documento'. Si un documento tiene varios "
          "despachos manda el mejor resultado (Entregada, luego Rechazada, luego "

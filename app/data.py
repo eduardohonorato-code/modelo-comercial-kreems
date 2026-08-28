@@ -279,6 +279,47 @@ def get_lineas_fl(client: Client, fecha_ini, fecha_fin,
 
 
 
+def get_pedidos_fl(client: Client, fecha_ini, fecha_fin,
+                   sociedad_ids=None, solo_sin_dte: bool = False) -> pd.DataFrame:
+    """
+    Pedidos de flete de máquina (FL-x) de Autoventa en el rango, paginado.
+
+    Es la otra mitad del seguimiento: Autoventa registra —y despacha— la máquina
+    apenas el vendedor la gestiona, mientras que el movimiento solo existe para
+    la app cuando Obuma factura el flete. Los pedidos con `doc_venta = 'Sin DTE'`
+    son justamente los que ya se movieron en terreno y todavía no facturan: son
+    la diferencia entre el conteo de este sistema y el de Autoventa.
+    """
+    fi = fecha_ini.isoformat() if hasattr(fecha_ini, "isoformat") else str(fecha_ini)
+    ff = fecha_fin.isoformat() if hasattr(fecha_fin, "isoformat") else str(fecha_fin)
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        q = (client.table("fact_pedidos")
+             .select("n_pedido,num_documento,doc_venta,fecha,vendedor_id,"
+                     "cliente_rut,producto_codigo,sociedad_id,facturado")
+             .in_("producto_codigo", CODIGOS_FL)
+             .gte("fecha", fi).lte("fecha", ff)
+             .order("id")
+             .range(offset, offset + _PAGE - 1))
+        if solo_sin_dte:
+            q = q.eq("doc_venta", "Sin DTE")
+        if sociedad_ids:
+            q = q.in_("sociedad_id", sociedad_ids)
+        r = q.execute()
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    return df
+
+
+
 # ── Calendario laboral ───────────────────────────────────────────────────────
 
 def get_calendario(client: Client, anio: int, mes: int) -> dict:

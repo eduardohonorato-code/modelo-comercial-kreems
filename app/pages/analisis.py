@@ -893,7 +893,11 @@ _HOJAS_MAQ = [
     ("Retiros", "Todos los FL-2, con la confirmación de que la máquina volvió."),
     ("Clientes", "Un cliente por fila, con su saldo nuevas − retiros."),
     ("Despachos de máquina", "Las filas del detalle de despachos de Autoventa que "
-                             "cruzan con una máquina."),
+                             "cruzan con una máquina, incluidas las despachadas "
+                             "y aún sin factura."),
+    ("Sin facturar (Autoventa)", "Fletes ingresados en Autoventa que Obuma "
+                                 "todavía no factura: la diferencia con el "
+                                 "conteo directo de Autoventa."),
     ("Despachos (contexto)", "Todas las entregas del período y su nivel de rechazo."),
     ("Control del cruce", "% de movimientos confirmados por mes y sociedad."),
     ("Definiciones", "Qué significa cada código FL y cada estado."),
@@ -922,7 +926,7 @@ def _s04b_informe_maquinas(client, df_maq, f_ini, f_fin, soc_ids):
         with st.spinner("Cruzando máquinas con despachos…"):
             from app.export_maquinas import libro_maquinas
             from app.data import (get_despachos_rango, get_lineas_fl,
-                                  get_dim_cliente_full)
+                                  get_pedidos_fl, get_dim_cliente_full)
 
             # Cosmético: si algo de esto falla, el informe igual sale (con menos
             # columnas), pero el estado de entrega SIN despachos queda como
@@ -940,6 +944,10 @@ def _s04b_informe_maquinas(client, df_maq, f_ini, f_fin, soc_ids):
             except Exception:
                 fl = None
             try:
+                ped_fl = get_pedidos_fl(client, f_ini, f_fin, soc_ids)
+            except Exception:
+                ped_fl = None
+            try:
                 vend = get_todos_vendedores(client)
             except Exception:
                 vend = None
@@ -955,7 +963,8 @@ def _s04b_informe_maquinas(client, df_maq, f_ini, f_fin, soc_ids):
                 socs = {}
 
             data = libro_maquinas(df_maq, f_ini, f_fin, soc_lbl,
-                                  despachos=desp, lineas_fl=fl, vendedores=vend,
+                                  despachos=desp, lineas_fl=fl,
+                                  pedidos_fl=ped_fl, vendedores=vend,
                                   clientes=cli, sociedades=socs)
         st.session_state["_maq_libro"] = (firma, data)
         guardado = st.session_state["_maq_libro"]
