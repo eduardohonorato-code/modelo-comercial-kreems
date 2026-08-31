@@ -43,6 +43,37 @@ def _cumple(valor, meta, mejor: str):
     return valor >= meta if mejor == "alto" else valor <= meta
 
 
+def _logro(valor, meta, mejor: str):
+    """
+    Cumplimiento como fracción de la meta, comparable entre indicadores.
+
+    Sin esto no se puede leer una tabla de KPIs de un vistazo: quedarse en 11 de
+    22 gestiones y en 83% de un 90% se ven igual de rojos, cuando el primero es
+    la mitad de la meta y el segundo está a un suspiro. Donde menos es mejor
+    (rechazo, días, cola) se invierte la razón, así que 1,0 siempre significa
+    "en meta", para arriba es mejor y para abajo peor.
+    """
+    if meta is None or valor is None or pd.isna(valor):
+        return None
+    if mejor == "alto":
+        if meta == 0:
+            return 1.0 if valor >= 0 else 0.0
+        return max(valor / meta, 0.0)
+    if meta == 0:                      # tolerancia cero (cola vencida)
+        return 1.0 if valor == 0 else 0.0
+    if valor == 0:                     # cero rechazos, cero días: inmejorable
+        return 1.5
+    return max(meta / valor, 0.0)
+
+
+def _severidad(logro, cumple):
+    if cumple is None or logro is None:
+        return "sin_meta"
+    if cumple:
+        return "ok"
+    return "alerta" if logro >= 0.8 else "critico"
+
+
 def calcular_flujo(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin) -> list[dict]:
     """Las cuatro etapas del recorrido, con lo que se pierde en cada salto."""
     ini, fin = pd.Timestamp(f_ini), pd.Timestamp(f_fin)
@@ -174,9 +205,91 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     ]
     for x in k:
         x["cumple"] = _cumple(x["valor"], x["meta"], x["mejor"])
+        x["logro"] = _logro(x["valor"], x["meta"], x["mejor"])
+        x["severidad"] = _severidad(x["logro"], x["cumple"])
+        x["logro_txt"] = ("—" if x["logro"] is None
+                          else f'{min(x["logro"], 9.99) * 100:.0f}%')
         x["valor_txt"] = _fmt(x["valor"], x["formato"])
         x["meta_txt"] = _fmt(x["meta"], x["formato"])
     return k
+
+
+def generar_alertas(mov: pd.DataFrame, ped: pd.DataFrame, kpis: list,
+                    hoy: date | None = None) -> list[dict]:
+    """
+    Lo que hay que hacer algo al respecto, en orden de urgencia.
+
+    Un tablero en rojo no dice qué hacer el lunes. Esto traduce cada indicador
+    fuera de meta a una frase con el número concreto y de quién es, y deja fuera
+    lo que está en meta: si todo aparece, nada resalta.
+    """
+    hoy = hoy or date.today()
+    por_clave = {k["clave"]: k for k in kpis}
+    out = []
+
+    def _add(clave, texto, accion):
+        k = por_clave.get(clave)
+        if not k or k["severidad"] in ("ok", "sin_meta"):
+            return
+        out.append({"severidad": k["severidad"], "indicador": k["nombre"],
+                    "texto": texto, "accion": accion,
+                    "responsable": k["responsable"], "logro": k["logro"] or 0})
+
+    if not ped.empty:
+        cola = ped[ped["_sin_dte"] & ~ped["_fantasma"]]
+        if len(cola):
+            edad = (pd.Timestamp(hoy) - cola["_ingreso"]).dt.days
+            viejos = int((edad > 30).sum())
+            _add("cola_vencida",
+                 f"{viejos} pedidos llevan más de 30 días sin documento "
+                 f"(el más antiguo, {int(edad.max())} días)",
+                 "Emitir o cerrar los más viejos: el vendedor ya hizo su parte")
+        _add("pct_concretado",
+             f"{len(cola)} pedidos ingresados siguen sin DTE",
+             "Revisar qué los traba antes de pedir más volumen")
+    _add("dias_gestion",
+         f"un pedido espera {por_clave['dias_gestion']['valor_txt']} días de "
+         "mediana hasta que se emite el documento",
+         "Acortar el tiempo de emisión")
+
+    if not mov.empty:
+        rech = mov[mov["_rechazada"]]
+        if len(rech):
+            top = rech["Motivo del rechazo"].value_counts()
+            motivo = top.index[0] if len(top) else "sin motivo"
+            _add("pct_rechazo",
+                 f"{len(rech)} despachos volvieron rechazados; el motivo más "
+                 f"común es «{motivo}» ({int(top.iloc[0])} casos)",
+                 "Coordinar con el cliente antes de subir la máquina al camión")
+        nuevas = int((mov["tipo_mov"] == "nueva").sum())
+        retiros = int((mov["tipo_mov"] == "retiro").sum())
+        _add("parque_neto",
+             f"el parque cayó {retiros - nuevas} máquinas: {nuevas} "
+             f"instalaciones contra {retiros} retiros",
+             "Sin instalaciones nuevas, la meta de gestiones se cumple retirando")
+        nue_info = int(((mov["tipo_mov"] == "nueva") & ~mov["_sin_info"]).sum())
+        nue_ent = int(((mov["tipo_mov"] == "nueva") & mov["_entregada"]).sum())
+        if nue_info:
+            _add("conversion_inst",
+                 f"{nue_info - nue_ent} de {nue_info} instalaciones no se "
+                 "confirmaron en terreno",
+                 "Cada una es una máquina facturada que no está dando venta")
+        _add("pct_entregado",
+             f"{int(mov['_pendiente'].sum())} movimientos siguen sin confirmar "
+             "entrega", "Cerrar los despachos pendientes")
+        sin_info = int(mov["_sin_info"].sum())
+        if sin_info:
+            _add("cobertura",
+                 f"{sin_info} movimientos no tienen despacho con que cruzarse",
+                 "Cargar el Excel de despachos del mes; Acuña nunca lo tendrá")
+    _add("gestiones_semana",
+         f"el equipo va en {por_clave['gestiones_semana']['valor_txt']} "
+         f"gestiones por semana contra una meta de "
+         f"{por_clave['gestiones_semana']['meta_txt']}",
+         "Es el volumen del que dependen los demás indicadores")
+
+    orden = {"critico": 0, "alerta": 1}
+    return sorted(out, key=lambda a: (orden.get(a["severidad"], 2), a["logro"]))
 
 
 def semanal(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,

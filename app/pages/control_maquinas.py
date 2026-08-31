@@ -22,7 +22,7 @@ from app.auth import es_gerencia
 from app.data import (get_objetivos_maquinas, upsert_objetivos_maquinas,
                       get_dim_cliente_full)
 from app.kpis_maquinas import (cargar_todo, calcular_kpis, calcular_flujo,
-                               semanal)
+                               generar_alertas, semanal)
 
 _C = {"azul": "#C01E6E", "chart": "#E62984", "verde": "#1A7F4B",
       "amrl": "#D4881E", "rojo": "#C0392B", "slate": "#64748B"}
@@ -69,23 +69,114 @@ def _rango(anio: int, mes: int):
     return datetime.date(ini_num // 12, ini_num % 12 + 1, 1), fin_mes
 
 
-def _tarjeta(k: dict) -> str:
-    """Tarjeta de indicador con el semáforo de su meta."""
-    if k["cumple"] is True:
-        color, chip, chip_cls = "verde", "en meta", "verde"
-    elif k["cumple"] is False:
-        color, chip, chip_cls = "rojo", f"meta {k['meta_txt']}", "rojo"
-    else:
-        color, chip, chip_cls = "", "sin meta", "slate"
+# Los cuatro que van arriba, grandes: uno por etapa del recorrido. El resto vive
+# en la tabla — diez tarjetas iguales no dejan ver cuál importa.
+_DESTACADOS = ["gestiones_semana", "pct_concretado", "pct_entregado", "parque_neto"]
+
+_COLOR_SEV = {"ok": "verde", "alerta": "amarillo", "critico": "rojo",
+              "sin_meta": "gris"}
+_TXT_SEV = {"ok": "en meta", "alerta": "cerca", "critico": "lejos",
+            "sin_meta": "sin meta"}
+
+
+def _barra(logro, sev: str, alto: str = ".45rem") -> str:
+    """
+    Barra de cumplimiento: el 100% es la meta, no el máximo de la escala.
+
+    Se corta a 130% para que un indicador muy sobrecumplido no aplaste
+    visualmente a los demás y la comparación entre filas siga sirviendo.
+    """
+    if logro is None:
+        return ""
+    pct = max(min(logro, 1.3), 0) / 1.3 * 100
+    color = "var(--%s)" % _COLOR_SEV.get(sev, "gris")
     return (
-        f'<div class="kpi-card">'
-        f'<div class="kpi-label">{k["nombre"]}</div>'
-        f'<div class="kpi-value {color}">{k["valor_txt"]}</div>'
-        f'<div class="kpi-sub"><span style="color:var(--{chip_cls},#64748B)">'
-        f'{chip}</span> · {k["detalle"]}</div>'
-        f'<div class="kpi-sub" style="opacity:.65">{k["responsable"]}</div>'
-        f'</div>'
+        '<div style="background:var(--gris-light);border-radius:99px;'
+        'height:%s;overflow:hidden;margin:.35rem 0 .2rem">'
+        '<div style="width:%.0f%%;height:100%%;background:%s;'
+        'border-radius:99px"></div></div>' % (alto, pct, color)
     )
+
+
+def _tarjeta_destacada(k: dict) -> str:
+    """Tarjeta grande: el número, contra qué se compara y cuán lejos está."""
+    color = _COLOR_SEV.get(k["severidad"], "")
+    cls = ("kpi-value " + color if color in ("verde", "rojo", "amarillo")
+           else "kpi-value")
+    meta = ("meta %s · <b>%s</b> de la meta" % (k["meta_txt"], k["logro_txt"])
+            if k["meta"] is not None else "sin meta fijada")
+    return (
+        '<div class="kpi-card" style="text-align:left">'
+        '<div class="kpi-label">%s</div>'
+        '<div class="%s">%s</div>'
+        '%s'
+        '<div class="kpi-sub">%s</div>'
+        '<div class="kpi-sub" style="opacity:.7">%s</div>'
+        '</div>' % (k["nombre"], cls, k["valor_txt"],
+                    _barra(k["logro"], k["severidad"], ".5rem"),
+                    meta, k["detalle"])
+    )
+
+
+def _tabla_cumplimiento(kpis: list) -> str:
+    """Todos los indicadores en una tabla que se lee de un vistazo."""
+    filas = []
+    for k in kpis:
+        sev = k["severidad"]
+        color = _COLOR_SEV.get(sev, "gris")
+        chip = ('<span style="background:var(--%s);color:#fff;border-radius:99px;'
+                'padding:.12rem .5rem;font-size:.66rem;font-weight:700;'
+                'white-space:nowrap">%s</span>' % (color, _TXT_SEV[sev]))
+        filas.append(
+            '<tr style="border-bottom:1px solid var(--gris-light)">'
+            '<td style="padding:.55rem .7rem"><b>%s</b>'
+            '<div style="color:var(--gris);font-size:.72rem">%s · %s</div></td>'
+            '<td style="padding:.55rem .7rem;text-align:right;'
+            'font-variant-numeric:tabular-nums;font-weight:700;'
+            'font-size:1rem">%s</td>'
+            '<td style="padding:.55rem .7rem;text-align:right;'
+            'font-variant-numeric:tabular-nums;color:var(--gris)">%s</td>'
+            '<td style="padding:.55rem .7rem;min-width:130px">%s'
+            '<div style="font-size:.7rem;color:var(--gris)">%s de la meta</div>'
+            '</td>'
+            '<td style="padding:.55rem .7rem;text-align:center">%s</td>'
+            '</tr>' % (k["nombre"], k["grupo"], k["responsable"],
+                       k["valor_txt"], k["meta_txt"],
+                       _barra(k["logro"], sev), k["logro_txt"], chip)
+        )
+    return (
+        '<div style="overflow-x:auto;background:var(--bg-card);'
+        'border-radius:12px;box-shadow:var(--sombra)">'
+        '<table style="width:100%;border-collapse:collapse;font-size:.85rem">'
+        '<thead><tr style="background:var(--rosa-deep);color:#fff">'
+        '<th style="text-align:left;padding:.55rem .7rem">Indicador</th>'
+        '<th style="text-align:right;padding:.55rem .7rem">Resultado</th>'
+        '<th style="text-align:right;padding:.55rem .7rem">Meta</th>'
+        '<th style="text-align:left;padding:.55rem .7rem">Cumplimiento</th>'
+        '<th style="text-align:center;padding:.55rem .7rem">Estado</th>'
+        '</tr></thead><tbody>' + "".join(filas) + '</tbody></table></div>'
+    )
+
+
+def _panel_alertas(alertas: list) -> str:
+    """Las alertas ya vienen ordenadas por urgencia; se muestran las cinco primeras."""
+    if not alertas:
+        return ('<div class="estado-vacio">Todos los indicadores con meta están '
+                'en verde.</div>')
+    filas = []
+    for a in alertas[:5]:
+        color = _COLOR_SEV.get(a["severidad"], "gris")
+        texto = a["texto"][0].upper() + a["texto"][1:]
+        filas.append(
+            '<div style="display:flex;gap:.7rem;padding:.6rem 0;'
+            'border-bottom:1px solid var(--gris-light)">'
+            '<div style="width:4px;border-radius:99px;background:var(--%s);'
+            'flex:none"></div><div>'
+            '<div style="font-weight:600;font-size:.88rem">%s</div>'
+            '<div style="color:var(--gris);font-size:.78rem">%s · <b>%s</b></div>'
+            '</div></div>' % (color, texto, a["accion"], a["responsable"])
+        )
+    return "".join(filas)
 
 
 def render(client, anio: int, mes: int):
@@ -112,25 +203,38 @@ def render(client, anio: int, mes: int):
         return
 
     kpis = calcular_kpis(mov, ped, f_ini, f_fin, metas)
+    alertas = generar_alertas(mov, ped, kpis)
     en_meta = sum(1 for k in kpis if k["cumple"] is True)
     con_meta = sum(1 for k in kpis if k["cumple"] is not None)
+    criticos = sum(1 for k in kpis if k["severidad"] == "critico")
 
     if metas.get("_origen") == "default":
         st.info("Todavía no hay metas guardadas: se están usando las de "
                 "referencia. Fíjalas abajo para que queden registradas.")
     elif metas.get("_origen") == "heredado":
-        st.caption(f"Metas heredadas de {metas['mes']:02d}/{metas['anio']}: este "
-                   "mes no tiene metas propias.")
+        st.caption("Metas heredadas de %02d/%d: este mes no tiene metas propias."
+                   % (metas["mes"], metas["anio"]))
 
-    _sec(f"Indicadores · {en_meta} de {con_meta} en meta")
-    for grupo in ("Volumen", "Gestión", "Terreno", "Resultado", "Control del dato"):
-        del_grupo = [k for k in kpis if k["grupo"] == grupo]
-        if not del_grupo:
-            continue
-        st.markdown(f'<p class="nav-section-label">{grupo}</p>',
-                    unsafe_allow_html=True)
-        st.markdown('<div class="kpi-grid">' + "".join(_tarjeta(k) for k in del_grupo)
-                    + '</div>', unsafe_allow_html=True)
+    # ── Titulares: uno por etapa del recorrido ───────────────────────────────
+    dest = [k for c in _DESTACADOS for k in kpis if k["clave"] == c]
+    st.markdown('<div class="kpi-grid-4">'
+                + "".join(_tarjeta_destacada(k) for k in dest)
+                + '</div>', unsafe_allow_html=True)
+
+    # ── Qué requiere acción ──────────────────────────────────────────────────
+    st.divider()
+    _sec("Qué requiere acción" + (f" · {criticos} indicadores lejos de la meta"
+                                  if criticos else ""))
+    st.markdown(_panel_alertas(alertas), unsafe_allow_html=True)
+
+    # ── Todos los indicadores ────────────────────────────────────────────────
+    st.divider()
+    _sec(f"Todos los indicadores · {en_meta} de {con_meta} en meta")
+    st.markdown(_tabla_cumplimiento(kpis), unsafe_allow_html=True)
+    st.caption("El cumplimiento es la fracción de la meta alcanzada: 100% es "
+               "estar en meta. En los indicadores donde menos es mejor "
+               "—rechazo, días de gestión, cola— la razón va invertida, así que "
+               "100% siempre significa lo mismo.")
 
     # ── El recorrido ─────────────────────────────────────────────────────────
     st.divider()
@@ -255,11 +359,17 @@ def render(client, anio: int, mes: int):
 
 
 def _editor_metas(client, anio: int, mes: int, metas: dict):
+    """El editor va plegado: se toca una vez al mes y compite con los datos."""
     st.divider()
-    _sec(f"Metas de {mes:02d}/{anio}")
-    st.caption("Se guardan por mes, igual que los objetivos de venta: cambiar "
-               "la meta de este mes no reescribe contra qué se midieron los "
-               "meses anteriores.")
+    exp = st.expander(f"🎯 Metas de {mes:02d}/{anio} — editar", expanded=False)
+    with exp:
+        st.caption("Se guardan por mes, igual que los objetivos de venta: "
+                   "cambiar la meta de este mes no reescribe contra qué se "
+                   "midieron los meses anteriores.")
+        _form_metas(client, anio, mes, metas)
+
+
+def _form_metas(client, anio: int, mes: int, metas: dict):
     with st.form("form_metas_maquinas"):
         cols = st.columns(3)
         nuevos = {}
