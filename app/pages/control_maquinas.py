@@ -27,11 +27,17 @@ from app.kpis_maquinas import (cargar_todo, calcular_kpis, calcular_flujo,
 _C = {"azul": "#C01E6E", "chart": "#E62984", "verde": "#1A7F4B",
       "amrl": "#D4881E", "rojo": "#C0392B", "slate": "#64748B"}
 
+# La meta se mide por semana, así que las semanas van primero. Las opciones de
+# semana son relativas a HOY (lunes a domingo); las de mes, al período del
+# sidebar, que es como se mira el cierre.
 _RANGOS = {
-    "Mes en curso": 1,
-    "Últimos 3 meses": 3,
-    "Últimos 6 meses": 6,
-    "Últimos 12 meses": 12,
+    "Semana en curso": ("semana", 0),
+    "Semana pasada": ("semana", 1),
+    "Últimas 4 semanas": ("semana", 4),
+    "Mes en curso": ("mes", 1),
+    "Últimos 3 meses": ("mes", 3),
+    "Últimos 6 meses": ("mes", 6),
+    "Últimos 12 meses": ("mes", 12),
 }
 
 # Metas editables: (clave, etiqueta, tipo, ayuda)
@@ -57,15 +63,70 @@ _CAMPOS_META = [
 ]
 
 
+# Qué contesta cada indicador y de dónde sale el número, para la revisión
+# tarjeta por tarjeta.
+_AYUDA = [
+    ("Pedidos ingresados por semana",
+     "Cuánto pidió el vendedor. Es lo único que controla entero.",
+     "Pedidos de flete de Autoventa, contados por su fecha de INGRESO."),
+    ("Gestiones con DTE por semana",
+     "El volumen que llega a documento emitido: la meta de las 22.",
+     "Líneas FL facturadas en Obuma, contadas en la semana del documento. "
+     "Instalación, cambio y retiro suman igual."),
+    ("% Concretado (pedido a DTE)",
+     "De lo que se ingresa, cuánto termina con documento.",
+     "Pedidos con DTE ÷ pedidos ingresados. Los anulados o reingresados con "
+     "otro número no cuentan."),
+    ("Días de ingreso a DTE",
+     "Cuánto espera un pedido hasta que se emite el documento.",
+     "Mediana de días entre la fecha del pedido y la del DTE."),
+    ("Cola vencida",
+     "El atraso acumulado: pedidos que ya llevan más de un mes.",
+     "Pedidos sin DTE con más de 30 días desde que se ingresaron. Salen todos "
+     "los abiertos, no solo los del período."),
+    ("% Entregado",
+     "De lo que salió a ruta, cuánto se confirmó entregado.",
+     "Entregadas ÷ movimientos con información de despacho. Lo que no tiene "
+     "despacho cargado queda fuera del cálculo, no cuenta como fallado."),
+    ("% Rechazo",
+     "Cuánto vuelve del camión sin entregar.",
+     "Rechazadas ÷ movimientos con información de despacho."),
+    ("Conversión de instalación",
+     "De las máquinas nuevas gestionadas, cuántas quedaron instaladas.",
+     "Instalaciones (FL-4) entregadas ÷ instalaciones con información."),
+    ("Parque neto",
+     "Si el parque en la calle crece o cae.",
+     "Instalaciones (FL-4) menos retiros (FL-2). Es el crecimiento, NO el "
+     "parque total: las máquinas puestas antes de 2026 no están registradas."),
+    ("Cobertura del cruce",
+     "Cuánto del período se puede juzgar. Si esto cae, lo de terreno miente.",
+     "Movimientos con despacho cruzado ÷ total. Acuña no pasa por Autoventa, "
+     "así que sus movimientos nunca tienen despacho."),
+]
+
+
 def _sec(title: str):
     st.markdown(f'<div class="seccion-titulo">{title}</div>',
                 unsafe_allow_html=True)
 
 
 def _rango(anio: int, mes: int):
-    meses = _RANGOS.get(st.session_state.get("cm_rango", "Últimos 3 meses"), 3)
-    fin_mes = datetime.date(anio + (mes // 12), (mes % 12) + 1, 1) - datetime.timedelta(days=1)
-    ini_num = (anio * 12 + mes - 1) - (meses - 1)
+    """(inicio, fin) del período elegido. Semanas de lunes a domingo."""
+    tipo, n = _RANGOS.get(st.session_state.get("cm_rango", "Semana pasada"),
+                          ("semana", 1))
+    if tipo == "semana":
+        hoy = datetime.date.today()
+        lunes = hoy - datetime.timedelta(days=hoy.weekday())
+        if n == 0:                       # semana en curso: hasta hoy
+            return lunes, hoy
+        if n == 1:                       # la semana cerrada anterior
+            fin = lunes - datetime.timedelta(days=1)
+            return fin - datetime.timedelta(days=6), fin
+        fin = lunes - datetime.timedelta(days=1)   # n semanas cerradas
+        return fin - datetime.timedelta(days=7 * n - 1), fin
+    fin_mes = (datetime.date(anio + (mes // 12), (mes % 12) + 1, 1)
+               - datetime.timedelta(days=1))
+    ini_num = (anio * 12 + mes - 1) - (n - 1)
     return datetime.date(ini_num // 12, ini_num % 12 + 1, 1), fin_mes
 
 
@@ -158,6 +219,29 @@ def _tabla_cumplimiento(kpis: list) -> str:
     )
 
 
+def _mapa_vendedor(mov) -> dict:
+    """id → nombre, reutilizando lo que ya trae el detalle de movimientos."""
+    if mov is None or mov.empty or "Vendedor" not in mov.columns:
+        return {}
+    return dict(mov.drop_duplicates("vendedor_id")
+                .set_index("vendedor_id")["Vendedor"])
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def _dim_cliente_nombres(_client) -> dict:
+    """RUT → razón social. Cosmético: si falla, la tabla sale con el RUT."""
+    try:
+        from app.data import get_dim_cliente_full
+        d = get_dim_cliente_full(_client)
+        return dict(zip(d["rut"], d["razon_social"])) if not d.empty else {}
+    except Exception:
+        return {}
+
+
+def _nombre_cliente(client, ruts):
+    return ruts.map(_dim_cliente_nombres(client)).fillna("(sin nombre)")
+
+
 def _panel_alertas(alertas: list) -> str:
     """Las alertas ya vienen ordenadas por urgencia; se muestran las cinco primeras."""
     if not alertas:
@@ -188,9 +272,14 @@ def render(client, anio: int, mes: int):
     with c1:
         st.selectbox("Período", list(_RANGOS), key="cm_rango", index=1)
     f_ini, f_fin = _rango(anio, mes)
+    dias_rango = (f_fin - f_ini).days + 1
     with c2:
+        extra = ""
+        if dias_rango < 7:
+            extra = (f" La semana va a medias ({dias_rango} de 7 días), así que "
+                     "el volumen todavía no se puede juzgar contra la meta.")
         st.caption(f"📅 {f_ini:%d/%m/%Y} → {f_fin:%d/%m/%Y}. Las metas son las "
-                   f"vigentes para {mes:02d}/{anio}; se editan más abajo.")
+                   f"vigentes para {mes:02d}/{anio}; se editan más abajo.{extra}")
 
     metas = get_objetivos_maquinas(client, anio, mes)
     with st.spinner("Cargando movimientos, pedidos y despachos…"):
@@ -235,6 +324,10 @@ def render(client, anio: int, mes: int):
                "estar en meta. En los indicadores donde menos es mejor "
                "—rechazo, días de gestión, cola— la razón va invertida, así que "
                "100% siempre significa lo mismo.")
+    with st.expander("ℹ️ Cómo se calcula cada indicador", expanded=False):
+        st.dataframe(pd.DataFrame(_AYUDA, columns=["Indicador", "Qué mide",
+                                                   "De dónde sale"]),
+                     use_container_width=True, hide_index=True)
 
     # ── El recorrido ─────────────────────────────────────────────────────────
     st.divider()
@@ -282,51 +375,74 @@ def render(client, anio: int, mes: int):
         st.plotly_chart(fig2, use_container_width=True)
 
     # ── Lo que está trabado ──────────────────────────────────────────────────
-    col1, col2 = st.columns(2)
-    with col1:
-        _sec("Sin gestionar, por antigüedad")
-        if ped is not None and not ped.empty:
-            cola = ped[ped["_sin_dte"] & ~ped["_fantasma"]].copy()
-            if cola.empty:
-                st.success("No hay pedidos esperando documento.")
-            else:
-                cola["Días"] = (pd.Timestamp(datetime.date.today())
-                                - cola["_ingreso"]).dt.days
-                tramos = pd.cut(cola["Días"], [-1, 7, 30, 90, 10**6],
-                                labels=["Hasta 7 días", "8 a 30", "31 a 90",
-                                        "Más de 90"])
-                res = tramos.value_counts().reindex(
-                    ["Hasta 7 días", "8 a 30", "31 a 90", "Más de 90"]).fillna(0)
-                fig3 = go.Figure(go.Bar(
-                    x=res.index.tolist(), y=res.values.tolist(),
-                    marker_color=[_C["verde"], _C["amrl"], _C["rojo"], "#7B241C"],
-                    text=res.values.tolist(), textposition="auto"))
-                fig3.update_layout(height=260, margin=dict(l=0, r=0, t=10, b=0),
-                                   yaxis=dict(showgrid=False),
-                                   plot_bgcolor="rgba(0,0,0,0)",
-                                   paper_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig3, use_container_width=True)
-                st.caption(f"{len(cola)} pedidos ingresados esperando que se "
-                           "emita el documento.")
-    with col2:
-        _sec("Por qué vuelven rechazados")
-        rech = mov[mov["_rechazada"]]
-        if rech.empty:
-            st.success("Sin rechazos en el período.")
-        else:
-            mot = rech["Motivo del rechazo"].value_counts().head(7)
-            fig4 = go.Figure(go.Bar(
-                x=mot.values.tolist(), y=mot.index.tolist(), orientation="h",
-                marker_color=_C["rojo"], text=mot.values.tolist(),
-                textposition="auto"))
-            fig4.update_layout(height=260, margin=dict(l=0, r=0, t=10, b=0),
-                               yaxis=dict(autorange="reversed"),
-                               xaxis=dict(showgrid=False),
+    st.divider()
+    _sec("Pedidos sin DTE · lo que está esperando documento")
+    cola = (ped[ped["_sin_dte"] & ~ped["_fantasma"]].copy()
+            if ped is not None and not ped.empty else pd.DataFrame())
+    if cola.empty:
+        st.success("No hay pedidos esperando documento.")
+    else:
+        cola["Días"] = (pd.Timestamp(datetime.date.today())
+                        - cola["_ingreso"]).dt.days
+        c1, c2 = st.columns([38, 62])
+        with c1:
+            tramos = pd.cut(cola["Días"], [-1, 7, 30, 90, 10 ** 6],
+                            labels=["Hasta 7 días", "8 a 30", "31 a 90",
+                                    "Más de 90"])
+            res = tramos.value_counts().reindex(
+                ["Hasta 7 días", "8 a 30", "31 a 90", "Más de 90"]).fillna(0)
+            fig3 = go.Figure(go.Bar(
+                x=res.index.tolist(), y=res.values.tolist(),
+                marker_color=[_C["verde"], _C["amrl"], _C["rojo"], "#7B241C"],
+                text=res.values.tolist(), textposition="auto"))
+            fig3.update_layout(height=290, margin=dict(l=0, r=0, t=10, b=0),
+                               yaxis=dict(showgrid=False),
                                plot_bgcolor="rgba(0,0,0,0)",
                                paper_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig4, use_container_width=True)
-            st.caption("Sale del comentario del repartidor: el campo de motivo "
-                       "del ERP llega vacío.")
+            st.plotly_chart(fig3, use_container_width=True)
+            st.caption(f"{len(cola)} pedidos ingresados esperando que se emita "
+                       "el documento. Salen todos los abiertos, sin importar el "
+                       "período: el de hace tres meses es el que más urge.")
+        with c2:
+            vmap = _mapa_vendedor(mov)
+            detalle = pd.DataFrame({
+                "Días": cola["Días"],
+                "Fecha pedido": cola["_ingreso"].dt.date,
+                "N° pedido": cola["n_pedido"],
+                "Movimiento": cola["_mov"].map(
+                    {"nueva": "Instalación", "cambio": "Cambio",
+                     "retiro": "Retiro"}).fillna("(otro)"),
+                "Vendedor": cola["vendedor_id"].map(vmap).fillna("Sin asignar"),
+                "Cliente": _nombre_cliente(client, cola["cliente_rut"]),
+                "RUT": cola["cliente_rut"],
+            }).sort_values("Días", ascending=False)
+            st.dataframe(detalle, use_container_width=True, hide_index=True,
+                         height=290)
+            st.download_button(
+                "⬇️ Descargar la cola en CSV",
+                detalle.to_csv(index=False).encode("utf-8-sig"),
+                f"sin_dte_{datetime.date.today():%Y%m%d}.csv", "text/csv",
+                key="dl_cola")
+
+    st.divider()
+    _sec("Por qué vuelven rechazados")
+    rech = mov[mov["_rechazada"]]
+    if rech.empty:
+        st.success("Sin rechazos en el período.")
+    else:
+        mot = rech["Motivo del rechazo"].value_counts().head(8)
+        fig4 = go.Figure(go.Bar(
+            x=mot.values.tolist(), y=mot.index.tolist(), orientation="h",
+            marker_color=_C["rojo"], text=mot.values.tolist(),
+            textposition="auto"))
+        fig4.update_layout(height=290, margin=dict(l=0, r=0, t=10, b=0),
+                           yaxis=dict(autorange="reversed"),
+                           xaxis=dict(showgrid=False),
+                           plot_bgcolor="rgba(0,0,0,0)",
+                           paper_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig4, use_container_width=True)
+        st.caption("Sale del comentario del repartidor: el campo de motivo del "
+                   "ERP llega vacío.")
 
     # ── Informe ──────────────────────────────────────────────────────────────
     st.divider()

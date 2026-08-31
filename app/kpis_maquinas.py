@@ -116,7 +116,14 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     hoy = hoy or date.today()
     ini, fin = pd.Timestamp(f_ini), pd.Timestamp(f_fin)
     dias = (fin - ini).days + 1
-    semanas = dias / 7 if dias else 1
+    # Un rango de una semana o menos se compara CONTRA LA META SEMANAL tal cual.
+    # Dividir por los días transcurridos extrapolaría: un miércoles con 6
+    # gestiones diría "14 por semana" y daría por cumplido algo que todavía no
+    # pasó. Con la semana a medias, el aviso va en el detalle.
+    semana_unica = dias <= 7
+    semanas = 1 if semana_unica else dias / 7
+    nota_semana = (f" · semana a medias: {dias} de 7 días"
+                   if semana_unica and dias < 7 else "")
 
     vacio = mov.empty
     tot = len(mov)
@@ -151,13 +158,14 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
              valor=ingresados / semanas if semanas else None,
              meta=metas.get("meta_pedidos_semana"), formato="dec", mejor="alto",
              responsable=VENDEDOR,
-             detalle=f"{ingresados} pedidos en el período"),
+             detalle=f"{ingresados} pedidos en el período{nota_semana}"),
         dict(clave="gestiones_semana", grupo="Volumen",
              nombre="Gestiones con DTE por semana",
              valor=tot / semanas if semanas else None,
              meta=metas.get("meta_gestiones_semana"), formato="dec", mejor="alto",
              responsable=AMBOS,
-             detalle=f"{tot} gestiones · meta del equipo, no por vendedor"),
+             detalle=(f"{tot} gestiones · meta del equipo, no por "
+                      f"vendedor{nota_semana}")),
         dict(clave="pct_concretado", grupo="Gestión",
              nombre="% Concretado (pedido a DTE)",
              valor=concretado, meta=metas.get("meta_pct_concretado"),
