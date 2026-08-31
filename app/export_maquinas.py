@@ -114,9 +114,24 @@ def _prep_pedidos(pedidos_fl: pd.DataFrame | None) -> pd.DataFrame:
     p["_ingreso"] = fp.fillna(p["fecha"])
     p["_cod"] = p["producto_codigo"].astype(str).str.upper().str.strip()
     p["_mov"] = p["_cod"].map(FL_A_MOV)
-    p["_sin_dte"] = (p["doc_venta"].astype(str).str.strip().str.lower()
-                     == "sin dte")
-    p["_dias_a_dte"] = (p["fecha"] - p["_ingreso"]).dt.days.where(~p["_sin_dte"])
+    # "Sin DTE" en doc_venta no siempre significa sin gestionar: cuando el flete
+    # se factura en la OTRA sociedad (serie de Obuma, no de Autoventa), el pedido
+    # se queda con doc_venta = "Sin DTE" para siempre aunque el trabajo esté
+    # hecho y facturado. La propia API lo delata con estado = 'invoiced'. Caso
+    # real: los 6 retiros de El Trébol (Vilcún) ingresados el 30-03-2026 y
+    # facturados al día siguiente en la serie 85152-85155, que llevaban 154 días
+    # inflando la cola de Macarena.
+    _est = (p["estado_pedido"].astype(str).str.strip().str.lower()
+            if "estado_pedido" in p.columns
+            else pd.Series("", index=p.index))
+    p["_facturado_otra_serie"] = (_est == "invoiced") & (
+        p["doc_venta"].astype(str).str.strip().str.lower() == "sin dte")
+    p["_sin_dte"] = ((p["doc_venta"].astype(str).str.strip().str.lower()
+                      == "sin dte") & ~p["_facturado_otra_serie"])
+    # Los días hasta el DTE solo se pueden medir donde hay documento propio: en
+    # los facturados en otra serie, `fecha` es la de despacho, no la del DTE.
+    _con_doc = p["num_documento"].notna()
+    p["_dias_a_dte"] = (p["fecha"] - p["_ingreso"]).dt.days.where(_con_doc)
     # Un pedido sin `estado_pedido` es uno que la última recarga NO tocó: ya no
     # viene en la API. En la práctica significa anulado o vuelto a ingresar con
     # otro número, y si se deja pasar infla la cola de pendientes con trabajo
