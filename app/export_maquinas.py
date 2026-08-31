@@ -117,6 +117,12 @@ def _prep_pedidos(pedidos_fl: pd.DataFrame | None) -> pd.DataFrame:
     p["_sin_dte"] = (p["doc_venta"].astype(str).str.strip().str.lower()
                      == "sin dte")
     p["_dias_a_dte"] = (p["fecha"] - p["_ingreso"]).dt.days.where(~p["_sin_dte"])
+    # Un pedido sin `estado_pedido` es uno que la última recarga NO tocó: ya no
+    # viene en la API. En la práctica significa anulado o vuelto a ingresar con
+    # otro número, y si se deja pasar infla la cola de pendientes con trabajo
+    # que en realidad no existe.
+    p["_fantasma"] = (p["estado_pedido"].isna() if "estado_pedido" in p.columns
+                      else pd.Series(False, index=p.index))
     return p
 
 
@@ -393,7 +399,8 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
     ped_periodo = (ped[ped["_ingreso"].between(pd.Timestamp(f_ini),
                                                pd.Timestamp(f_fin))]
                    if not ped.empty else ped)
-    sin_dte_n = int(ped["_sin_dte"].sum()) if not ped.empty else 0
+    sin_dte_n = int((ped["_sin_dte"] & ~ped["_fantasma"]).sum()) if not ped.empty else 0
+    fantasmas_n = int((ped["_sin_dte"] & ped["_fantasma"]).sum()) if not ped.empty else 0
     ingresados = len(ped_periodo)
     dias_dte = (ped["_dias_a_dte"].dropna() if not ped.empty
                 else pd.Series(dtype=float))
@@ -415,6 +422,7 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
         ("Movimientos anulados por nota de crédito", anuladas),
         ("Pedidos de máquina ingresados en el período", ingresados),
         ("Pendientes de gestionar hoy (Sin DTE, todo el histórico)", sin_dte_n),
+        ("Pendientes que ya no aparecen en Autoventa (revisar)", fantasmas_n),
         ("Días entre el ingreso del pedido y su DTE (mediana)",
          float(dias_dte.median()) if len(dias_dte) else ""),
         ("", ""),
@@ -796,7 +804,10 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                 "RUT": sin_dte["cliente_rut"],
                 "Cliente": _desc(sin_dte["cliente_rut"], clientes, "razon_social"),
                 "Comuna": _desc(sin_dte["cliente_rut"], clientes, "comuna"),
-                "Estado en Autoventa": sin_dte.get("estado_pedido", ""),
+                "Estado en Autoventa": sin_dte["estado_pedido"].fillna(
+                    "no aparece en la API"),
+                "Sigue vigente": sin_dte["_fantasma"].map({True: "revisar",
+                                                           False: "sí"}),
                 "Días sin gestionar": (pd.Timestamp(hoy)
                                        - sin_dte["_ingreso"]).dt.days,
             }).sort_values("Días sin gestionar", ascending=False)
@@ -810,14 +821,18 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                             "pero son la cola de la que salen las próximas. "
                             "Salen todos los que siguen abiertos hoy, sin "
                             "importar el período del informe: un pedido de hace "
-                            "tres meses sin gestionar es el que más urge."))
+                            "tres meses sin gestionar es el que más urge. Los "
+                            "marcados 'revisar' en Sigue vigente ya no vienen en "
+                            "la API de Autoventa: lo más probable es que se "
+                            "anularan o se reingresaran con otro número, así que "
+                            "no cuentan como cola real."))
 
         # Gestión por vendedor: lo que pidió, lo que se le concretó y su cola.
         g_ing = ped.groupby("vendedor_id").size().rename("Pedidos ingresados")
         g_dte = (ped[~ped["_sin_dte"]].groupby("vendedor_id").size()
                  .rename("Gestionados (con DTE)"))
-        g_pen = (ped[ped["_sin_dte"]].groupby("vendedor_id").size()
-                 .rename("Pendientes (Sin DTE)"))
+        g_pen = (ped[ped["_sin_dte"] & ~ped["_fantasma"]]
+                 .groupby("vendedor_id").size().rename("Pendientes (Sin DTE)"))
         g_dias = (ped.groupby("vendedor_id")["_dias_a_dte"].median()
                   .rename("Días ingreso a DTE (mediana)"))
         gest = pd.concat([g_ing, g_dte, g_pen, g_dias], axis=1).fillna(0)

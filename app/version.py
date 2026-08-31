@@ -7,4 +7,4 @@ cambio todavía no llegó". Con esto basta mirar el pie del login.
 
 Al hacer un cambio que el usuario deba ver, subir VERSION en el mismo commit.
 """
-VERSION = "2026-08-28e · gestión de pedidos"
+VERSION = "2026-08-29 · pedidos con fecha de ingreso"
