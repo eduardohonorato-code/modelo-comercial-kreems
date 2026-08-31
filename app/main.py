@@ -363,7 +363,7 @@ def main():
           else contextlib.nullcontext()):
         from app.pages import (vendedor, gerencia, analisis, carga,
                                 inicio, admin, comisiones, clientes,
-                                presupuesto, control_maquinas)
+                                presupuesto)
 
         client = get_client_auth()
         if client is None:
@@ -401,7 +401,21 @@ def main():
 
         elif pagina == "control_maquinas":
             st.markdown(f"## 🧊 Control de Máquinas — {nombre_mes} {anio}")
-            control_maquinas.render(client, anio, mes)
+            # Import acotado a su propia página: si una página nueva no carga,
+            # que se caiga ella y no la app entera. Pasó al estrenar esta
+            # sección — Streamlit Cloud se quedó con el app.data viejo en
+            # memoria tras el despliegue y el ImportError tumbaba hasta Inicio.
+            try:
+                from app.pages import control_maquinas
+            except ImportError:
+                st.error(
+                    "Esta sección no cargó porque la app quedó con una mezcla "
+                    "de versiones tras el último despliegue. Reinicia desde "
+                    "**Manage app → Reboot app** y vuelve a entrar; el resto "
+                    "de la app funciona normal mientras tanto."
+                )
+            else:
+                control_maquinas.render(client, anio, mes)
 
         elif pagina == "presupuesto":
             if not es_gerencia():

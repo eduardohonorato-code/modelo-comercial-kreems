@@ -20,9 +20,9 @@ import streamlit as st
 
 from app.auth import es_gerencia
 from app.data import (get_objetivos_maquinas, upsert_objetivos_maquinas,
-                      get_dim_cliente_full, OBJETIVOS_MAQUINAS_DEFAULT)
+                      get_dim_cliente_full)
 from app.kpis_maquinas import (cargar_todo, calcular_kpis, calcular_flujo,
-                               semanal, LOGISTICA, VENDEDOR)
+                               semanal)
 
 _C = {"azul": "#C01E6E", "chart": "#E62984", "verde": "#1A7F4B",
       "amrl": "#D4881E", "rojo": "#C0392B", "slate": "#64748B"}
