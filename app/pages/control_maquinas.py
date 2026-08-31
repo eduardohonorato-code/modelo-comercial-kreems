@@ -263,6 +263,67 @@ def _panel_alertas(alertas: list) -> str:
     return "".join(filas)
 
 
+def _seccion_sin_dte(client, mov, ped):
+    """
+    La cola de pedidos ingresados que todavía no tienen documento.
+
+    Va arriba, junto a las alertas, y no al final entre los gráficos: es la
+    lista con la que efectivamente se trabaja, y enterrarla equivale a no
+    tenerla. Muestra todo lo abierto hoy, sin importar el período elegido,
+    porque un pedido trabado hace tres meses hay que verlo igual aunque se esté
+    mirando la semana pasada.
+    """
+    cola = (ped[ped["_sin_dte"] & ~ped["_fantasma"]].copy()
+            if ped is not None and not ped.empty else pd.DataFrame())
+    st.divider()
+    _sec("Pedidos sin DTE · %d esperando documento" % len(cola))
+    if cola.empty:
+        st.success("No hay pedidos esperando documento.")
+    else:
+        cola["Días"] = (pd.Timestamp(datetime.date.today())
+                        - cola["_ingreso"]).dt.days
+        c1, c2 = st.columns([38, 62])
+        with c1:
+            tramos = pd.cut(cola["Días"], [-1, 7, 30, 90, 10 ** 6],
+                            labels=["Hasta 7 días", "8 a 30", "31 a 90",
+                                    "Más de 90"])
+            res = tramos.value_counts().reindex(
+                ["Hasta 7 días", "8 a 30", "31 a 90", "Más de 90"]).fillna(0)
+            fig3 = go.Figure(go.Bar(
+                x=res.index.tolist(), y=res.values.tolist(),
+                marker_color=[_C["verde"], _C["amrl"], _C["rojo"], "#7B241C"],
+                text=res.values.tolist(), textposition="auto"))
+            fig3.update_layout(height=290, margin=dict(l=0, r=0, t=10, b=0),
+                               yaxis=dict(showgrid=False),
+                               plot_bgcolor="rgba(0,0,0,0)",
+                               paper_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig3, use_container_width=True)
+            st.caption(f"{len(cola)} pedidos ingresados esperando que se emita "
+                       "el documento. Salen todos los abiertos, sin importar el "
+                       "período: el de hace tres meses es el que más urge.")
+        with c2:
+            vmap = _mapa_vendedor(mov)
+            detalle = pd.DataFrame({
+                "Días": cola["Días"],
+                "Fecha pedido": cola["_ingreso"].dt.date,
+                "N° pedido": cola["n_pedido"],
+                "Movimiento": cola["_mov"].map(
+                    {"nueva": "Instalación", "cambio": "Cambio",
+                     "retiro": "Retiro"}).fillna("(otro)"),
+                "Vendedor": cola["vendedor_id"].map(vmap).fillna("Sin asignar"),
+                "Cliente": _nombre_cliente(client, cola["cliente_rut"]),
+                "RUT": cola["cliente_rut"],
+            }).sort_values("Días", ascending=False)
+            st.dataframe(detalle, use_container_width=True, hide_index=True,
+                         height=290)
+            st.download_button(
+                "⬇️ Descargar la cola en CSV",
+                detalle.to_csv(index=False).encode("utf-8-sig"),
+                f"sin_dte_{datetime.date.today():%Y%m%d}.csv", "text/csv",
+                key="dl_cola")
+
+
+
 def render(client, anio: int, mes: int):
     if not es_gerencia():
         st.warning("Solo el rol **gerencia/admin** puede ver el control de máquinas.")
@@ -315,6 +376,9 @@ def render(client, anio: int, mes: int):
     _sec("Qué requiere acción" + (f" · {criticos} indicadores lejos de la meta"
                                   if criticos else ""))
     st.markdown(_panel_alertas(alertas), unsafe_allow_html=True)
+
+    # ── La cola de sin DTE, pegada a las alertas ─────────────────────────────
+    _seccion_sin_dte(client, mov, ped)
 
     # ── Todos los indicadores ────────────────────────────────────────────────
     st.divider()
@@ -375,55 +439,6 @@ def render(client, anio: int, mes: int):
         st.plotly_chart(fig2, use_container_width=True)
 
     # ── Lo que está trabado ──────────────────────────────────────────────────
-    st.divider()
-    _sec("Pedidos sin DTE · lo que está esperando documento")
-    cola = (ped[ped["_sin_dte"] & ~ped["_fantasma"]].copy()
-            if ped is not None and not ped.empty else pd.DataFrame())
-    if cola.empty:
-        st.success("No hay pedidos esperando documento.")
-    else:
-        cola["Días"] = (pd.Timestamp(datetime.date.today())
-                        - cola["_ingreso"]).dt.days
-        c1, c2 = st.columns([38, 62])
-        with c1:
-            tramos = pd.cut(cola["Días"], [-1, 7, 30, 90, 10 ** 6],
-                            labels=["Hasta 7 días", "8 a 30", "31 a 90",
-                                    "Más de 90"])
-            res = tramos.value_counts().reindex(
-                ["Hasta 7 días", "8 a 30", "31 a 90", "Más de 90"]).fillna(0)
-            fig3 = go.Figure(go.Bar(
-                x=res.index.tolist(), y=res.values.tolist(),
-                marker_color=[_C["verde"], _C["amrl"], _C["rojo"], "#7B241C"],
-                text=res.values.tolist(), textposition="auto"))
-            fig3.update_layout(height=290, margin=dict(l=0, r=0, t=10, b=0),
-                               yaxis=dict(showgrid=False),
-                               plot_bgcolor="rgba(0,0,0,0)",
-                               paper_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig3, use_container_width=True)
-            st.caption(f"{len(cola)} pedidos ingresados esperando que se emita "
-                       "el documento. Salen todos los abiertos, sin importar el "
-                       "período: el de hace tres meses es el que más urge.")
-        with c2:
-            vmap = _mapa_vendedor(mov)
-            detalle = pd.DataFrame({
-                "Días": cola["Días"],
-                "Fecha pedido": cola["_ingreso"].dt.date,
-                "N° pedido": cola["n_pedido"],
-                "Movimiento": cola["_mov"].map(
-                    {"nueva": "Instalación", "cambio": "Cambio",
-                     "retiro": "Retiro"}).fillna("(otro)"),
-                "Vendedor": cola["vendedor_id"].map(vmap).fillna("Sin asignar"),
-                "Cliente": _nombre_cliente(client, cola["cliente_rut"]),
-                "RUT": cola["cliente_rut"],
-            }).sort_values("Días", ascending=False)
-            st.dataframe(detalle, use_container_width=True, hide_index=True,
-                         height=290)
-            st.download_button(
-                "⬇️ Descargar la cola en CSV",
-                detalle.to_csv(index=False).encode("utf-8-sig"),
-                f"sin_dte_{datetime.date.today():%Y%m%d}.csv", "text/csv",
-                key="dl_cola")
-
     st.divider()
     _sec("Por qué vuelven rechazados")
     rech = mov[mov["_rechazada"]]
