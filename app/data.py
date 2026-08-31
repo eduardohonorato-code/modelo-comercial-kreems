@@ -359,6 +359,60 @@ def get_pedidos_fl(client: Client, fecha_ini, fecha_fin,
 
 
 
+# Metas por defecto del control de máquinas: las 22 gestiones semanales las fijó
+# gerencia (ago-2026); el resto son las propuestas sobre la línea base de
+# marzo-agosto 2026. Se usan solo si la tabla no tiene ninguna fila todavía.
+OBJETIVOS_MAQUINAS_DEFAULT = {
+    "meta_gestiones_semana": 22,
+    "meta_pedidos_semana": None,
+    "meta_pct_concretado": 0.90,
+    "meta_dias_gestion": 7,
+    "meta_cola_vencida": 0,
+    "meta_pct_entregado": 0.85,
+    "meta_pct_rechazo": 0.10,
+    "meta_conversion_inst": 0.85,
+    "meta_parque_neto": 0,
+}
+
+
+def get_objetivos_maquinas(client: Client, anio: int, mes: int) -> dict:
+    """
+    Metas del mes. Si ese mes no tiene fila, hereda la del mes más reciente ya
+    definido —así una meta fijada en agosto sigue rigiendo en septiembre sin
+    tener que copiarla— y en última instancia cae a los valores por defecto.
+    Fail-soft: si la tabla todavía no existe, devuelve los defaults.
+    """
+    try:
+        r = (client.table("objetivos_maquinas").select("*")
+             .lte("anio", anio).order("anio", desc=True).order("mes", desc=True)
+             .limit(24).execute())
+    except Exception:
+        return dict(OBJETIVOS_MAQUINAS_DEFAULT, anio=anio, mes=mes, _origen="default")
+    filas = [f for f in (r.data or [])
+             if (f["anio"], f["mes"]) <= (anio, mes)]
+    if not filas:
+        return dict(OBJETIVOS_MAQUINAS_DEFAULT, anio=anio, mes=mes, _origen="default")
+    fila = max(filas, key=lambda f: (f["anio"], f["mes"]))
+    out = dict(OBJETIVOS_MAQUINAS_DEFAULT)
+    for k in OBJETIVOS_MAQUINAS_DEFAULT:
+        if fila.get(k) is not None:
+            out[k] = fila[k]
+    out["anio"], out["mes"] = fila["anio"], fila["mes"]
+    out["_origen"] = ("propio" if (fila["anio"], fila["mes"]) == (anio, mes)
+                      else "heredado")
+    return out
+
+
+def upsert_objetivos_maquinas(client: Client, anio: int, mes: int, valores: dict):
+    """Guarda las metas del mes (rol gerencia; la RLS lo exige)."""
+    fila = {"anio": anio, "mes": mes}
+    fila.update({k: v for k, v in valores.items()
+                 if k in OBJETIVOS_MAQUINAS_DEFAULT})
+    return (client.table("objetivos_maquinas")
+            .upsert(fila, on_conflict="anio,mes").execute())
+
+
+
 # ── Calendario laboral ───────────────────────────────────────────────────────
 
 def get_calendario(client: Client, anio: int, mes: int) -> dict:
