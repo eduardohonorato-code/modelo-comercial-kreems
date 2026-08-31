@@ -124,6 +124,11 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     semanas = 1 if semana_unica else dias / 7
     nota_semana = (f" · semana a medias: {dias} de 7 días"
                    if semana_unica and dias < 7 else "")
+    # En un período de varias semanas, el indicador es el PROMEDIO semanal
+    # contra la meta semanal, no la suma contra la meta: decirlo en el detalle
+    # evita la pregunta de si las 22 son de la semana o del período entero.
+    nota_prom = ("" if semana_unica
+                 else f" · promedio de {semanas:.0f} semanas")
 
     vacio = mov.empty
     tot = len(mov)
@@ -158,14 +163,15 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
              valor=ingresados / semanas if semanas else None,
              meta=metas.get("meta_pedidos_semana"), formato="dec", mejor="alto",
              responsable=VENDEDOR,
-             detalle=f"{ingresados} pedidos en el período{nota_semana}"),
+             detalle=(f"{ingresados} pedidos en el período"
+                      f"{nota_semana}{nota_prom}")),
         dict(clave="gestiones_semana", grupo="Volumen",
              nombre="Gestiones con DTE por semana",
              valor=tot / semanas if semanas else None,
              meta=metas.get("meta_gestiones_semana"), formato="dec", mejor="alto",
              responsable=AMBOS,
-             detalle=(f"{tot} gestiones · meta del equipo, no por "
-                      f"vendedor{nota_semana}")),
+             detalle=(f"{tot} gestiones · meta semanal del equipo, no por "
+                      f"vendedor{nota_semana}{nota_prom}")),
         dict(clave="pct_concretado", grupo="Gestión",
              nombre="% Concretado (pedido a DTE)",
              valor=concretado, meta=metas.get("meta_pct_concretado"),
@@ -204,7 +210,10 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
              valor=nuevas - retiros,
              meta=(meta_parque * n_meses if meta_parque is not None else None),
              formato="num", mejor="alto", responsable=AMBOS,
-             detalle=f"{nuevas} instalaciones contra {retiros} retiros"),
+             detalle=(f"{nuevas} instalaciones contra {retiros} retiros"
+                      + (f" · meta de {_fmt(meta_parque, 'num')} por mes × "
+                         f"{n_meses} meses" if meta_parque is not None
+                         and n_meses > 1 else ""))),
         dict(clave="cobertura", grupo="Control del dato",
              nombre="Cobertura del cruce",
              valor=_pct(con_info, tot) if tot else None,
