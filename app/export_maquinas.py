@@ -168,11 +168,15 @@ def clasificar_motivo(motivo: pd.Series, comentario: pd.Series) -> pd.Series:
     algo; si no —que es el caso hoy— clasifica el comentario del repartidor.
     """
     est = motivo.fillna("").astype(str).str.strip() if motivo is not None else None
-    txt = _sin_acentos(comentario) if comentario is not None else None
-    if txt is None:
-        return pd.Series("Sin comentario", index=motivo.index)
+    if comentario is None:
+        return pd.Series("Sin dato cargado", index=motivo.index)
+    txt = _sin_acentos(comentario)
     out = pd.Series("Otros (ver comentario)", index=txt.index, dtype=object)
+    # Distinguir "el repartidor no escribió nada" de "ese mes se cargó antes de
+    # que guardáramos la columna": el primero es un problema de terreno, el
+    # segundo es un hueco nuestro y no se puede leer como falta de detalle.
     out[txt.str.strip().isin(["", "rechazado", "rechazada"])] = "Sin detalle"
+    out[comentario.isna()] = "Sin dato cargado"
     for etiqueta, claves in _MOTIVOS:
         pendiente = out.isin(["Otros (ver comentario)", "Sin detalle"])
         calza = txt.str.contains("|".join(claves), regex=True, na=False)
@@ -688,6 +692,9 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                    "Cambios": _FMT_NUM, "Retiros": _FMT_NUM,
                    "Clientes": _FMT_NUM, "% del total": _FMT_PCT},
                   nota=("Por qué vuelven rechazados los despachos de máquina. "
+                        "'Sin dato cargado' son los meses que se cargaron antes "
+                        "de que guardáramos el comentario del repartidor: se "
+                        "recuperan volviendo a subir ese Excel de despachos. "
                         "OJO con la fuente: el campo 'Motivo rechazo' del ERP "
                         "llega vacío, así que esto sale de clasificar por "
                         "palabras clave el comentario que escribe el repartidor. "
