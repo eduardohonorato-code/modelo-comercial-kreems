@@ -132,11 +132,30 @@ def _prep_pedidos(pedidos_fl: pd.DataFrame | None) -> pd.DataFrame:
 # primera regla que calza gana— y lo que no calza queda en "Otros", a la vista,
 # nunca repartido a la fuerza en una categoría.
 _MOTIVOS = [
+    # Primero los motivos propios de máquina: un rechazo de comodato no se
+    # parece en nada a uno de producto. Casi todos son retiros que el cliente
+    # no deja llevar, y esa distinción es la que sirve para actuar.
+    ("Cliente no entrega: máquina con producto",
+     ("aun con producto", "aun con mercaderia", "aun tiene helado",
+      "aun con helado", "maquina con producto", "aun tiene producto",
+      "tener aun mercaderia", "aun con mercaderia")),
+    ("Cliente se niega a entregar la máquina",
+     ("no entrega maquina", "no entregaa", "no quiso entregar",
+      "no quiere entregar", "no entrega,")),
+    ("Cliente desiste o la quiere en temporada",
+     ("se arrepiente", "desiste", "no quiere maquina", "temporada", "verano",
+      "no tiene espacio", "rechaza maquina")),
+    ("No hubo quien autorizara la entrega",
+     ("no tiene autorizacion", "encargado no se encontraba", "no se encuentra",
+      "fuera de la ciudad", "no llego", "dependiente")),
+    ("Descoordinación de la entrega",
+     ("descordinacion", "descoordinacion", "vendedor no pasa")),
+    ("El cambio no hacía falta", ("no presenta problemas",)),
     ("Sin dinero o medio de pago", ("dinero", "medio de pago", "efectivo",
                                     "no tiene plata", "sin plata", "pago",
                                     "transfer")),
-    ("Local cerrado",              ("cerrado", "cerrada", "cerro", "no abrio",
-                                    "no abre")),
+    ("Local cerrado",              ("cerrado", "cerrada", "cerro", "cierre",
+                                    "no abrio", "no abre")),
     ("Ya tenía stock o duplicado", ("stock", "duplicad", "ya recibi",
                                     "recibio pedido", "recibio el pedido",
                                     "ya lo recibio", "no necesita")),
