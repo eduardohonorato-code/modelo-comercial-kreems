@@ -126,6 +126,63 @@ def _prep_pedidos(pedidos_fl: pd.DataFrame | None) -> pd.DataFrame:
     return p
 
 
+# Motivos de rechazo, clasificados por palabras clave sobre el comentario que
+# escribe el repartidor. NO es un dato del ERP: su campo "Motivo rechazo" llega
+# vacío, así que el texto libre es lo único que hay. El orden importa —la
+# primera regla que calza gana— y lo que no calza queda en "Otros", a la vista,
+# nunca repartido a la fuerza en una categoría.
+_MOTIVOS = [
+    ("Sin dinero o medio de pago", ("dinero", "medio de pago", "efectivo",
+                                    "no tiene plata", "sin plata", "pago",
+                                    "transfer")),
+    ("Local cerrado",              ("cerrado", "cerrada", "cerro", "no abrio",
+                                    "no abre")),
+    ("Ya tenía stock o duplicado", ("stock", "duplicad", "ya recibi",
+                                    "recibio pedido", "recibio el pedido",
+                                    "ya lo recibio", "no necesita")),
+    ("No se pudo contactar",       ("no hay respuesta", "sin respuesta",
+                                    "no contesta", "no responde",
+                                    "ya no trabaja")),
+    ("Cliente pide otra fecha",    ("reagend", "proxima semana", "otro dia",
+                                    "para la proxima", "reprogram",
+                                    "mas adelante", "espere")),
+    ("No se alcanzó la ruta",      ("distancia", "no se pudo realizar",
+                                    "fuera de ruta", "no pasa por la ruta",
+                                    "sin tiempo", "alcanzo")),
+    ("Máquina aún en uso",         ("maquina aun en uso", "aun en uso",
+                                    "no retirad", "sigue usando")),
+    ("Pedido equivocado",          ("equivocad", "no corresponde",
+                                    "no es lo que", "solicito", "razon social",
+                                    "penso que", "solamente habia pedido")),
+]
+
+
+def _sin_acentos(s: pd.Series) -> pd.Series:
+    return (s.fillna("").astype(str).str.lower()
+            .str.normalize("NFKD").str.encode("ascii", "ignore").str.decode("ascii"))
+
+
+def clasificar_motivo(motivo: pd.Series, comentario: pd.Series) -> pd.Series:
+    """
+    Motivo de rechazo legible. Usa el campo estructurado del ERP si viene con
+    algo; si no —que es el caso hoy— clasifica el comentario del repartidor.
+    """
+    est = motivo.fillna("").astype(str).str.strip() if motivo is not None else None
+    txt = _sin_acentos(comentario) if comentario is not None else None
+    if txt is None:
+        return pd.Series("Sin comentario", index=motivo.index)
+    out = pd.Series("Otros (ver comentario)", index=txt.index, dtype=object)
+    out[txt.str.strip().isin(["", "rechazado", "rechazada"])] = "Sin detalle"
+    for etiqueta, claves in _MOTIVOS:
+        pendiente = out.isin(["Otros (ver comentario)", "Sin detalle"])
+        calza = txt.str.contains("|".join(claves), regex=True, na=False)
+        out[pendiente & calza] = etiqueta
+    if est is not None:
+        tiene = est.str.len() > 0
+        out[tiene] = est[tiene]
+    return out
+
+
 def _desc(ruts: pd.Series, clientes: pd.DataFrame | None, col: str) -> pd.Series:
     """Columna descriptiva de dim_cliente para una serie de RUT."""
     if clientes is None or clientes.empty or col not in clientes.columns:
@@ -198,15 +255,19 @@ def preparar_movimientos(maquinas: pd.DataFrame,
         d["_prio"] = d["_est"].map(_PRIO_DESP).fillna(9)
         d = d.sort_values(["_prio", "fecha_ruta"])
         n_int = d.groupby("_doc").size().rename("_intentos")
+        d["_motivo"] = clasificar_motivo(d.get("motivo_rechazo"),
+                                         d.get("comentario_entrega"))
+        d["_coment"] = (d["comentario_entrega"]
+                        if "comentario_entrega" in d.columns else "")
         dd = (d.drop_duplicates("_doc")
               [["_doc", "fecha_ruta", "estado", "_est", "transportista",
-                "devolucion", "peso"]]
+                "devolucion", "peso", "_motivo", "_coment"]]
               .rename(columns={"estado": "_estado_desp"}))
         dd = dd.merge(n_int, left_on="_doc", right_index=True, how="left")
         m = m.merge(dd, on="_doc", how="left")
     else:
         for c in ("_estado_desp", "_est", "transportista", "devolucion",
-                  "peso", "_intentos"):
+                  "peso", "_intentos", "_motivo", "_coment"):
             m[c] = pd.NA
         m["fecha_ruta"] = pd.NaT
 
@@ -252,6 +313,8 @@ def preparar_movimientos(maquinas: pd.DataFrame,
     m["Intentos de despacho"] = pd.to_numeric(m.get("_intentos"), errors="coerce")
     m["Transportista"] = m.get("transportista", pd.Series(index=m.index, dtype=str))
     m["Peso (Kg)"] = pd.to_numeric(m.get("peso"), errors="coerce")
+    m["Motivo del rechazo"] = m["_motivo"].where(m["_est"] == "rechazada", "")
+    m["Comentario de entrega"] = m["_coment"].fillna("")
     m["_entregada"] = m["Estado entrega"] == ENTREGADA
     m["_rechazada"] = m["Estado entrega"] == RECHAZADA
     m["_pendiente"] = m["Estado entrega"].isin([EN_RUTA, SIN_DESPACHO])
@@ -267,6 +330,7 @@ _COLS_DETALLE = [
     "Región", "Estado entrega", "Fecha ruta", "Días factura a ruta",
     "Transportista", "Intentos de despacho", "Devolución", "Peso (Kg)",
     "Confirmado en Autoventa", "Días sin confirmar",
+    "Motivo del rechazo", "Comentario de entrega",
 ]
 _FMT_DETALLE = {
     "Fecha": _FMT_FECHA, "Fecha ruta": _FMT_FECHA,
@@ -604,6 +668,34 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
     _escribir(wb, "Rechazadas", _detalle(rechz), _FMT_DETALLE,
               nota=("El despacho salió a ruta y volvió rechazado: la máquina no se "
                     "instaló, o no se pudo retirar. Son las que hay que reprogramar."))
+
+    # ── 8b. Motivos de rechazo ───────────────────────────────────────────────
+    if not rechz.empty:
+        mot = (rechz.groupby("Motivo del rechazo")
+               .agg(**{"Rechazos": ("_doc", "count"),
+                       "Instalaciones": ("tipo_mov",
+                                         lambda s: int((s == "nueva").sum())),
+                       "Cambios": ("tipo_mov",
+                                   lambda s: int((s == "cambio").sum())),
+                       "Retiros": ("tipo_mov",
+                                   lambda s: int((s == "retiro").sum())),
+                       "Clientes": ("cliente_rut", "nunique")})
+               .reset_index().sort_values("Rechazos", ascending=False))
+        mot["% del total"] = mot["Rechazos"] / mot["Rechazos"].sum()
+        mot = _con_total(mot, "Motivo del rechazo", ("Clientes",))
+        _escribir(wb, "Motivos de rechazo", mot,
+                  {"Rechazos": _FMT_NUM, "Instalaciones": _FMT_NUM,
+                   "Cambios": _FMT_NUM, "Retiros": _FMT_NUM,
+                   "Clientes": _FMT_NUM, "% del total": _FMT_PCT},
+                  nota=("Por qué vuelven rechazados los despachos de máquina. "
+                        "OJO con la fuente: el campo 'Motivo rechazo' del ERP "
+                        "llega vacío, así que esto sale de clasificar por "
+                        "palabras clave el comentario que escribe el repartidor. "
+                        "Es una lectura de texto libre, no un dato del sistema: "
+                        "'Otros' y 'Sin detalle' son los que hay que ir a leer a "
+                        "mano en la hoja Rechazadas. Si logística empieza a "
+                        "llenar el campo del ERP, esta hoja lo usa solo."),
+                  total_ultima=not mot.empty)
 
     # ── 9. Retiros ───────────────────────────────────────────────────────────
     ret = m[m["tipo_mov"] == "retiro"].sort_values("fecha", ascending=False)

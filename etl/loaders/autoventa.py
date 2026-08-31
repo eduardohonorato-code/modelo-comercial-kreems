@@ -68,6 +68,7 @@ _COLS_PEDIDOS_VACIO = [
 _COLS_DESPACHOS_VACIO = [
     "Rut", "Fecha ruta", "Documento", "Estado", "Devolución", "Peso (Kgs)",
     "Transportista", "Vendedor", "Cliente", "Comuna", "Cuidad",
+    "Motivo rechazo", "Comentrario entrega",
 ]
 
 
@@ -185,6 +186,13 @@ def cargar_autoventa(
     des["devolucion"]   = des["Devolución"].fillna(0).astype(bool)
     des["peso"]         = limpiar_monto(des.get("Peso (Kgs)", pd.Series(dtype=float)))
     des["transportista"]= des.get("Transportista", pd.Series(dtype=str))
+    # Por qué las dos: "Motivo rechazo" es el campo estructurado del ERP y a
+    # ago-2026 llega SIEMPRE vacío; el motivo real lo escribe el repartidor en
+    # el comentario de entrega. El ERP escribe "Comentrario" con typo, así que
+    # se aceptan las dos grafías.
+    des["motivo_rechazo"] = des.get("Motivo rechazo", pd.Series(dtype=str))
+    des["comentario_entrega"] = des.get(
+        "Comentrario entrega", des.get("Comentario entrega", pd.Series(dtype=str)))
 
     des["vendedor_id"]  = mapear_vendedor_id(
         des["Vendedor"], mapeo_vendedor, log_no_mapeados, fuente="autoventa_despachos",
@@ -198,7 +206,8 @@ def cargar_autoventa(
     # ── fact_despachos ───────────────────────────────────────────────────────
     cols_des = [
         "documento", "fecha_ruta", "vendedor_id", "cliente_rut",
-        "estado", "devolucion", "peso", "es_maquina", "transportista", "sociedad_id",
+        "estado", "devolucion", "peso", "es_maquina", "transportista",
+        "motivo_rechazo", "comentario_entrega", "sociedad_id",
     ]
     fact_despachos = des[[c for c in cols_des if c in des.columns]].copy()
     fact_despachos["fecha_ruta"] = fact_despachos["fecha_ruta"].dt.date.astype(str)

@@ -216,7 +216,8 @@ def get_despachos_rango(client: Client, fecha_ini, fecha_fin,
     while True:
         q = (client.table("fact_despachos")
              .select("documento,fecha_ruta,vendedor_id,cliente_rut,estado,"
-                     "devolucion,peso,es_maquina,transportista,sociedad_id")
+                     "devolucion,peso,es_maquina,transportista,motivo_rechazo,"
+                     "comentario_entrega,sociedad_id")
              .gte("fecha_ruta", fi).lte("fecha_ruta", ff)
              .order("id")
              .range(offset, offset + _PAGE - 1))
