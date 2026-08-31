@@ -141,6 +141,7 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     retiros = int((mov["tipo_mov"] == "retiro").sum()) if not vacio else 0
     nue_ent = int(((mov["tipo_mov"] == "nueva") & mov["_entregada"]).sum()) if not vacio else 0
     nue_info = int(((mov["tipo_mov"] == "nueva") & ~mov["_sin_info"]).sum()) if not vacio else 0
+    en_ruta = int((mov["Estado entrega"] == EN_RUTA).sum()) if not vacio else 0
 
     # Los pedidos fantasma (anulados o reingresados con otro número: ya no vienen
     # en la API) quedan fuera del numerador Y del denominador. Contarlos como
@@ -150,6 +151,7 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     ped_per = (ped_vivos[ped_vivos["_ingreso"].between(ini, fin)]
                if not ped_vivos.empty else ped_vivos)
     ingresados = len(ped_per)
+    con_dte_periodo = int((~ped_per["_sin_dte"]).sum()) if ingresados else 0
     if not ped.empty:
         cola = ped[ped["_sin_dte"] & ~ped["_fantasma"]]
         edad = (pd.Timestamp(hoy) - cola["_ingreso"]).dt.days
@@ -183,7 +185,11 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
              nombre="% Concretado (pedido a DTE)",
              valor=concretado, meta=metas.get("meta_pct_concretado"),
              formato="pct", mejor="alto", responsable=LOGISTICA,
-             detalle=f"{n_cola} pedidos en cola hoy"),
+             # El detalle decía "26 pedidos en cola hoy", que es el total
+             # abierto de todos los meses, mientras el % mira solo el período:
+             # dos alcances distintos en la misma tarjeta se leen mal.
+             detalle=(f"{con_dte_periodo} de {ingresados} pedidos ingresados "
+                      f"en el período ya tienen documento")),
         dict(clave="dias_gestion", grupo="Gestión",
              nombre="Días de ingreso a DTE (mediana)",
              valor=float(dias_gestion) if dias_gestion is not None
@@ -200,7 +206,8 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
              valor=_pct(ent, con_info) if con_info else None,
              meta=metas.get("meta_pct_entregado"), formato="pct", mejor="alto",
              responsable=LOGISTICA,
-             detalle=f"{ent} de {con_info} con información"),
+             detalle=(f"{ent} de {con_info} gestiones del período" +
+                      (f" · {en_ruta} aún en ruta" if en_ruta else ""))),
         dict(clave="pct_rechazo", grupo="Terreno",
              nombre="% Rechazo",
              valor=_pct(rech, con_info) if con_info else None,
@@ -298,9 +305,12 @@ def generar_alertas(mov: pd.DataFrame, ped: pd.DataFrame, kpis: list,
                  f"{nue_info - nue_ent} de {nue_info} instalaciones no se "
                  "confirmaron en terreno",
                  "Cada una es una máquina facturada que no está dando venta")
+        en_ruta_n = int((mov["Estado entrega"] == EN_RUTA).sum())
+        sin_desp_n = int((mov["Estado entrega"] == SIN_DESPACHO).sum())
         _add("pct_entregado",
-             f"{int(mov['_pendiente'].sum())} movimientos siguen sin confirmar "
-             "entrega", "Cerrar los despachos pendientes")
+             f"{en_ruta_n + sin_desp_n} movimientos siguen sin confirmar "
+             f"entrega ({en_ruta_n} en ruta, {sin_desp_n} sin despacho)",
+             "En un período recién cerrado, parte de esto todavía va a llegar")
         sin_info = int(mov["_sin_info"].sum())
         if sin_info:
             _add("cobertura",

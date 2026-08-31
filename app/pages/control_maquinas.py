@@ -263,7 +263,7 @@ def _panel_alertas(alertas: list) -> str:
     return "".join(filas)
 
 
-def _seccion_sin_dte(client, mov, ped):
+def _seccion_sin_dte(client, mov, ped, f_ini=None, f_fin=None):
     """
     La cola de pedidos ingresados que todavía no tienen documento.
 
@@ -298,9 +298,15 @@ def _seccion_sin_dte(client, mov, ped):
                                plot_bgcolor="rgba(0,0,0,0)",
                                paper_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig3, use_container_width=True)
+            del_periodo = (int(cola["_ingreso"].between(
+                pd.Timestamp(f_ini), pd.Timestamp(f_fin)).sum())
+                if f_ini and f_fin else None)
+            extra = (f" **{del_periodo} de ellos se ingresaron en el período "
+                     f"elegido**; el resto viene de antes."
+                     if del_periodo is not None else "")
             st.caption(f"{len(cola)} pedidos ingresados esperando que se emita "
                        "el documento. Salen todos los abiertos, sin importar el "
-                       "período: el de hace tres meses es el que más urge.")
+                       f"período: el de hace tres meses es el que más urge.{extra}")
         with c2:
             vmap = _mapa_vendedor(mov)
             detalle = pd.DataFrame({
@@ -378,7 +384,7 @@ def render(client, anio: int, mes: int):
     st.markdown(_panel_alertas(alertas), unsafe_allow_html=True)
 
     # ── La cola de sin DTE, pegada a las alertas ─────────────────────────────
-    _seccion_sin_dte(client, mov, ped)
+    _seccion_sin_dte(client, mov, ped, f_ini, f_fin)
 
     # ── Todos los indicadores ────────────────────────────────────────────────
     st.divider()
