@@ -71,8 +71,10 @@ _AYUDA = [
      "Pedidos de flete de Autoventa, contados por su fecha de INGRESO."),
     ("Gestiones con DTE por semana",
      "El volumen que llega a documento emitido: la meta de las 22.",
-     "Líneas FL facturadas en Obuma, contadas en la semana del documento. "
-     "Instalación, cambio y retiro suman igual."),
+     "Líneas FL facturadas en Obuma, contadas en la semana del DOCUMENTO. "
+     "Instalación, cambio y retiro suman igual. Ojo: no son los pedidos "
+     "ingresados esa semana — la mayoría son pedidos de semanas anteriores que "
+     "recién ahora se facturaron."),
     ("% Concretado (pedido a DTE)",
      "De lo que se ingresa, cuánto termina con documento.",
      "Pedidos con DTE ÷ pedidos ingresados. Los anulados o reingresados con "
@@ -86,8 +88,10 @@ _AYUDA = [
      "los abiertos, no solo los del período."),
     ("% Entregado",
      "De lo que salió a ruta, cuánto se confirmó entregado.",
-     "Entregadas ÷ movimientos con información de despacho. Lo que no tiene "
-     "despacho cargado queda fuera del cálculo, no cuenta como fallado."),
+     "Entregadas ÷ las MISMAS gestiones de la primera tarjeta (las del período), "
+     "no los pedidos ingresados. Lo que no tiene despacho cargado queda fuera "
+     "del cálculo, no cuenta como fallado. En un período recién cerrado buena "
+     "parte sigue en ruta, así que el número parte bajo y sube solo."),
     ("% Rechazo",
      "Cuánto vuelve del camión sin entregar.",
      "Rechazadas ÷ movimientos con información de despacho."),
