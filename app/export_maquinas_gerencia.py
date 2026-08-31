@@ -82,11 +82,13 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     # ── 2. Flujo mensual ─────────────────────────────────────────────────────
     m = mov.copy()
     m["_ym"] = m["fecha"].dt.to_period("M")
-    ing_mes = (ped["_ingreso"].dt.to_period("M").value_counts().to_dict()
-               if not ped.empty else {})
-    sindte_mes = (ped[ped["_sin_dte"] & ~ped["_fantasma"]]["_ingreso"]
+    # Mismos pedidos que cuentan los indicadores: sin los fantasma.
+    vivos = ped[~ped["_fantasma"]] if not ped.empty else ped
+    ing_mes = (vivos["_ingreso"].dt.to_period("M").value_counts().to_dict()
+               if not vivos.empty else {})
+    sindte_mes = (vivos[vivos["_sin_dte"]]["_ingreso"]
                   .dt.to_period("M").value_counts().to_dict()
-                  if not ped.empty else {})
+                  if not vivos.empty else {})
     filas = []
     for per in pd.period_range(pd.Timestamp(f_ini), pd.Timestamp(f_fin), freq="M"):
         g = m[m["_ym"] == per]

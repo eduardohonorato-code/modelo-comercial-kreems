@@ -77,9 +77,10 @@ def _severidad(logro, cumple):
 def calcular_flujo(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin) -> list[dict]:
     """Las cuatro etapas del recorrido, con lo que se pierde en cada salto."""
     ini, fin = pd.Timestamp(f_ini), pd.Timestamp(f_fin)
-    ped_per = ped[ped["_ingreso"].between(ini, fin)] if not ped.empty else ped
+    vivos = ped[~ped["_fantasma"]] if not ped.empty else ped
+    ped_per = vivos[vivos["_ingreso"].between(ini, fin)] if not vivos.empty else vivos
     ingresados = len(ped_per)
-    sin_dte = int((ped_per["_sin_dte"] & ~ped_per["_fantasma"]).sum()) if ingresados else 0
+    sin_dte = int(ped_per["_sin_dte"].sum()) if ingresados else 0
     gestiones = len(mov)
     con_info = int((~mov["_sin_info"]).sum()) if gestiones else 0
     entregadas = int(mov["_entregada"].sum()) if gestiones else 0
@@ -141,14 +142,20 @@ def calcular_kpis(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     nue_ent = int(((mov["tipo_mov"] == "nueva") & mov["_entregada"]).sum()) if not vacio else 0
     nue_info = int(((mov["tipo_mov"] == "nueva") & ~mov["_sin_info"]).sum()) if not vacio else 0
 
-    ped_per = ped[ped["_ingreso"].between(ini, fin)] if not ped.empty else ped
+    # Los pedidos fantasma (anulados o reingresados con otro número: ya no vienen
+    # en la API) quedan fuera del numerador Y del denominador. Contarlos como
+    # "no concretados" castiga por un pedido que dejó de existir, y era lo que
+    # hundía el % concretado de agosto a 29% cuando la verdad era 33%.
+    ped_vivos = ped[~ped["_fantasma"]] if not ped.empty else ped
+    ped_per = (ped_vivos[ped_vivos["_ingreso"].between(ini, fin)]
+               if not ped_vivos.empty else ped_vivos)
     ingresados = len(ped_per)
     if not ped.empty:
         cola = ped[ped["_sin_dte"] & ~ped["_fantasma"]]
         edad = (pd.Timestamp(hoy) - cola["_ingreso"]).dt.days
         cola_vencida = int((edad > 30).sum())
         concretado = float((~ped_per["_sin_dte"]).mean()) if ingresados else None
-        dias_gestion = ped["_dias_a_dte"].median()
+        dias_gestion = ped_vivos["_dias_a_dte"].median()
         n_cola = len(cola)
     else:
         cola_vencida, concretado, dias_gestion, n_cola = 0, None, None, 0
