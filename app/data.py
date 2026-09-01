@@ -1088,7 +1088,7 @@ def get_comision_entradas(client: Client, anio: int, mes: int) -> pd.DataFrame:
 
 
 def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: int,
-                            cartera_clientes: int, salas_ganga: int,
+                            cartera_clientes, salas_ganga,
                             efectividad_override=None,
                             pnv_logro_override=None,
                             maq_logro_override=None,
@@ -1097,6 +1097,10 @@ def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: in
                             ajuste_monto=None,
                             ajuste_motivo=None):
     """Crea/actualiza la entrada mensual de comisión de un vendedor.
+
+    `cartera_clientes` / `salas_ganga` en None se guardan como NULL, que en la
+    vista significa "usar el valor fijo del vendedor" (sql/039). Un número
+    —incluido el 0— es una decisión explícita para ESE mes y pisa al fijo.
 
     `dias_trabajados_override` / `inab_override` (sql/033) solo se usan en meses
     parciales (ingreso, salida, licencia, reemplazo): con valor mandan sobre el
@@ -1110,8 +1114,8 @@ def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: in
         "vendedor_id": vendedor_id,
         "anio": anio,
         "mes": mes,
-        "cartera_clientes": int(cartera_clientes),
-        "salas_ganga": int(salas_ganga),
+        "cartera_clientes": None if cartera_clientes is None else int(cartera_clientes),
+        "salas_ganga": None if salas_ganga is None else int(salas_ganga),
         "efectividad_override": efectividad_override,
         "pnv_logro_override": pnv_logro_override,
         "maq_logro_override": maq_logro_override,
@@ -1120,6 +1124,35 @@ def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: in
         "ajuste_monto": ajuste_monto,
         "ajuste_motivo": ajuste_motivo,
     }, on_conflict="vendedor_id,anio,mes").execute()
+
+
+def get_comision_valores_fijos(client: Client) -> pd.DataFrame:
+    """Cartera y salas Ganga FIJAS de cada vendedor (sql/039).
+
+    Son el respaldo de `comision_entrada_mensual`: la vista las usa cuando el
+    mes no trae valor propio, para no tener que recargarlas mes a mes.
+    Fail-soft: si sql/039 aún no se corrió devuelve un DataFrame vacío y el
+    editor sigue funcionando con la carga mensual de siempre.
+    """
+    try:
+        r = (client.table("comision_valor_fijo")
+             .select("vendedor_id,cartera_clientes,salas_ganga,nota")
+             .execute())
+        return pd.DataFrame(r.data) if r.data else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def upsert_comision_valor_fijo(client: Client, vendedor_id: int,
+                               cartera_clientes=None, salas_ganga=None,
+                               nota=None):
+    """Fija (o borra, con None) la cartera y las salas Ganga de un vendedor."""
+    client.table("comision_valor_fijo").upsert({
+        "vendedor_id": int(vendedor_id),
+        "cartera_clientes": None if cartera_clientes is None else int(cartera_clientes),
+        "salas_ganga": None if salas_ganga is None else int(salas_ganga),
+        "nota": nota,
+    }, on_conflict="vendedor_id").execute()
 
 
 def habiles_e_inab(client: Client, desde: date, hasta: date) -> tuple[int, int]:

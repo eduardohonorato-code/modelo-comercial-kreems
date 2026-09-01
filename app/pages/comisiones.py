@@ -19,7 +19,7 @@ from app.data import (
     cerrar_mes_comisiones, get_comision_calculo, get_ventas_detalle_doc,
     get_tramos_pnv, get_tramos_maquinas, get_tramos_efectividad,
     get_parametros, replace_tramos_plan, upsert_parametros,
-    habiles_e_inab,
+    habiles_e_inab, get_comision_valores_fijos, upsert_comision_valor_fijo,
 )
 
 MESES = {
@@ -35,6 +35,9 @@ _NUM_COLS = [
     "dias_trabajados_base", "inab_base", "dias_trabajados_override", "inab_override",
     "ajuste_monto",
     "salas_ganga", "bono_reposicion", "total_variable", "total_a_pagar", "plan_id",
+    # sql/039 — valores crudos: mes propio vs fijo del vendedor
+    "cartera_clientes_mes", "cartera_clientes_fija",
+    "salas_ganga_mes", "salas_ganga_fijas",
 ]
 
 
@@ -53,12 +56,80 @@ def render(client, anio: int, mes: int):
     with tab_cfg:
         _render_escalas(client)
     with tab_v1:
-        from app.pages import comisiones_v1
-        comisiones_v1.render_tab(client, anio, mes)
+        _render_v1(client, anio, mes)
+
+
+def _render_v1(client, anio: int, mes: int):
+    """La propuesta v1 se calcula A PEDIDO, no en cada render.
+
+    `st.tabs` ejecuta el código de TODAS las pestañas en cada rerun, no solo el
+    de la visible, y el cálculo de la v1 baja el histórico completo de ventas
+    (180.000 filas ≈ 67 s, sin caché). O sea: cada vez que gerencia guardaba una
+    entrada del mes, la app se ponía a bajar el histórico entero de fondo y
+    dejaba la base tan exigida que la propia consulta de comisiones se caía por
+    timeout. Con el botón, la pestaña solo cuesta cuando se va a mirar.
+    """
+    key = f"v1_activa_{anio}_{mes}"
+    if not st.session_state.get(key):
+        st.info("La propuesta v1 recorre todo el histórico de ventas, así que "
+                "tarda cerca de un minuto. Se calcula solo cuando la pides para "
+                "no frenar el resto de la página.")
+        if st.button("▶️ Calcular propuesta v1", type="primary",
+                     key=f"btn_{key}"):
+            st.session_state[key] = True
+            st.rerun()
+        return
+
+    from app.pages import comisiones_v1
+    comisiones_v1.render_tab(client, anio, mes)
+
+
+@st.cache_data(ttl=120, show_spinner="Calculando comisiones…")
+def _comisiones_cache(_client, anio: int, mes: int, cache_key: str) -> pd.DataFrame:
+    """`v_comision_vendedor_mes` cacheada por usuario y período (2 min).
+
+    Es la consulta más cara de la app (se apoya en v_resumen_vendedor_mes, que
+    agrega todo el histórico de fact_ventas). Sin caché se repetía en cada
+    interacción de la página. Se invalida a mano al guardar una entrada.
+    """
+    return get_comisiones(_client, anio, mes)
+
+
+def _error_carga(exc: Exception):
+    """Muestra el error de la consulta en vez de reventar la página.
+
+    En Streamlit Cloud una excepción sin capturar sale con el mensaje censurado
+    ("The original error message is redacted"), así que no se sabe si fue un
+    timeout, un permiso o la sesión vencida. Acá se muestra el código tal cual.
+    """
+    txt = str(exc)
+    if "57014" in txt or "statement timeout" in txt:
+        detalle = ("La base se pasó del tiempo límite (57014). Suele ser la "
+                   "primera consulta del día o la base exigida por otra carga. "
+                   "Reintenta en unos segundos.")
+    elif "PGRST301" in txt or "JWT" in txt:
+        detalle = ("La sesión venció. Cierra sesión y vuelve a entrar.")
+    elif "42501" in txt:
+        detalle = ("Tu usuario no tiene permiso sobre la vista de comisiones "
+                   "(42501). Revisa que tenga rol gerencia.")
+    else:
+        detalle = "Error inesperado al leer la vista de comisiones."
+
+    st.error(f"**No se pudo cargar el cálculo del mes.** {detalle}")
+    with st.expander("Detalle técnico"):
+        st.code(txt[:1500])
+    if st.button("🔄 Reintentar", key="btn_reintentar_comisiones"):
+        _comisiones_cache.clear()
+        st.rerun()
 
 
 def _render_mes(client, anio: int, mes: int):
-    df = get_comisiones(client, anio, mes)
+    try:
+        df = _comisiones_cache(client, anio, mes,
+                               str(st.session_state.get("user_id", "")))
+    except Exception as exc:
+        _error_carga(exc)
+        return
 
     if df.empty:
         st.info("Sin datos de comisiones para el período seleccionado. "
@@ -148,6 +219,19 @@ def _render_mes(client, anio: int, mes: int):
     _cierre_y_export(client, df, anio, mes, snapshot)
 
 
+def _fijo_star(r, campo: str) -> str:
+    """⭐ cuando el número no vino del mes sino del valor fijo del vendedor.
+
+    `<campo>_mes` es NULL solo si ese mes no cargó valor propio; en ese caso la
+    vista (sql/039) rellenó con el fijo, y conviene que se vea de dónde salió.
+    """
+    mes_val = r.get(f"{campo}_mes")
+    if f"{campo}_mes" not in r.index or pd.notna(mes_val):
+        return ""
+    return (" <span style='color:#94a3b8' title='Valor fijo del vendedor "
+            "(este mes no cargó uno propio)'>⭐</span>")
+
+
 def _tabla_comisiones(df: pd.DataFrame):
     df_sorted = df.sort_values("total_a_pagar", ascending=False, na_position="last")
 
@@ -213,11 +297,11 @@ def _tabla_comisiones(df: pd.DataFrame):
           <td>{maq_txt}{maq_star}</td>
           <td>{fmt_clp(r.get('com_maquinas'))}</td>
           <td class='{cls_ef}'>{ef_disp}</td>
-          <td>{fmt_num(r.get('cartera_clientes'))}</td>
+          <td>{fmt_num(r.get('cartera_clientes'))}{_fijo_star(r, 'cartera_clientes')}</td>
           <td>{fmt_clp(r.get('com_efectividad'))}</td>
           <td><strong>{fmt_clp(r.get('total_comision'))}</strong>{aj_txt}</td>
           <td>{fmt_clp(r.get('semana_corrida'))}</td>
-          <td>{fmt_clp(r.get('bono_reposicion'))}</td>
+          <td>{fmt_clp(r.get('bono_reposicion'))}{_fijo_star(r, 'salas_ganga')}</td>
           <td><strong>{fmt_clp(r.get('total_a_pagar'))}</strong></td>
         </tr>"""
 
@@ -374,7 +458,9 @@ def _cartera_rangos(client, plan_id: int) -> list[int]:
 
 def _rango_label(mn: int, lista: list[int]) -> str:
     """Ej: cartera_min=81 → 'Rango 9  (81 – 90)'"""
-    n   = (mn - 1) // 10 + 1          # 81→9, 91→10, …, 141→15
+    n = (mn - 1) // 10 + 1            # 81→9, 91→10, …, 141→15
+    if mn not in lista:               # valor fuera de la escala (ej. rango < 9)
+        return f"Rango {n}  ({mn} – {mn + 9})"
     idx = lista.index(mn)
     rng = f"{mn} – {lista[idx+1]-1}" if idx < len(lista) - 1 else f"{mn}+"
     return f"Rango {n}  ({rng})"
@@ -394,11 +480,19 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
     cols_parcial = ["dias_trabajados_override", "inab_override",
                     "dias_trabajados_base", "inab_base"]
     cols_ajuste = ["ajuste_monto", "ajuste_motivo"]
+    # Columnas de sql/039 (valores fijos por vendedor): mismo criterio.
+    cols_fijos = ["cartera_clientes_mes", "cartera_clientes_fija",
+                  "salas_ganga_mes", "salas_ganga_fijas"]
     hay_parcial = all(c in df.columns for c in cols_parcial)
     hay_ajuste = all(c in df.columns for c in cols_ajuste)
+    hay_fijos = all(c in df.columns for c in cols_fijos)
     vendedores = df[cols + (cols_parcial if hay_parcial else [])
-                    + (cols_ajuste if hay_ajuste else [])].copy()
+                    + (cols_ajuste if hay_ajuste else [])
+                    + (cols_fijos if hay_fijos else [])].copy()
     vendedores = vendedores.sort_values("nombre_canonico")
+
+    if hay_fijos:
+        _bloque_valores_fijos(client, vendedores)
 
     nombre_sel = st.selectbox(
         "Seleccionar vendedor",
@@ -430,15 +524,28 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
     cartera_actual = _safe_int(fila.get("cartera_clientes"))
     _EXACTO = -1
     _BAJO   = 0
-    rango_keys   = [_BAJO] + rangos + [_EXACTO]
+    _FIJO   = -2
+    # Valor fijo del vendedor (sql/039): existe si gerencia lo dejó cargado.
+    cart_fija = fila.get("cartera_clientes_fija") if hay_fijos else None
+    tiene_cart_fija = pd.notna(cart_fija) and _safe_int(cart_fija) > 0
+    # ¿El mes tiene valor propio? (NULL = "usa el fijo")
+    cart_del_mes = fila.get("cartera_clientes_mes") if hay_fijos else fila.get("cartera_clientes")
+    mes_sin_cartera = hay_fijos and pd.isna(cart_del_mes)
+
+    rango_keys   = ([_FIJO] if tiene_cart_fija else []) + [_BAJO] + rangos + [_EXACTO]
     rango_labels = {
+        _FIJO:   (f"⭐ Fijo del vendedor  ({_rango_label(_safe_int(cart_fija), rangos)})"
+                  if tiene_cart_fija else ""),
         _BAJO:   "< 81  (sin comisión de efectividad)",
         _EXACTO: "✏️  Número exacto…",
         **{mn: _rango_label(mn, rangos) for mn in rangos},
     }
 
-    # Selección inicial: rango que contiene cartera_actual
-    if cartera_actual <= 0:
+    # Selección inicial: el fijo si el mes no trae nada; si no, el rango que
+    # contiene el valor cargado para el mes.
+    if mes_sin_cartera and tiene_cart_fija:
+        _default_rango = _FIJO
+    elif cartera_actual <= 0:
         _default_rango = _BAJO
     else:
         matching = [mn for mn in rangos if mn <= cartera_actual]
@@ -449,11 +556,15 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
         options=rango_keys,
         index=rango_keys.index(_default_rango) if _default_rango in rango_keys else len(rango_keys) - 1,
         format_func=lambda k: rango_labels[k],
-        help="Define qué fila de la tabla de efectividad se usa (paga desde 81 clientes).",
+        help="Define qué fila de la tabla de efectividad se usa (paga desde 81 "
+             "clientes). Con «Fijo del vendedor» este mes no guarda número "
+             "propio: usa el que está definido más abajo, en «Valores fijos».",
         key=f"{_key}_rango",
     )
 
-    if rango_sel == _EXACTO:
+    if rango_sel == _FIJO:
+        cartera = None                 # NULL en la base → manda el fijo
+    elif rango_sel == _EXACTO:
         cartera = st.number_input(
             "Número exacto de clientes",
             value=cartera_actual if cartera_actual > 0 else 0,
@@ -463,13 +574,31 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
     else:
         cartera = rango_sel  # 0 → sin comisión; mn → límite inferior del rango
 
-    # ── Formulario: solo salas + submit ─────────────────────────────────────
-    with st.form("form_comision_entrada", clear_on_submit=False):
-        salas = st.number_input(
-            "Salas Ganga atendidas",
-            value=_safe_int(fila.get("salas_ganga")), step=1, min_value=0,
-            help="Bono reposición = $15.000 × salas.",
+    # ── Salas Ganga: fijo del vendedor o número propio del mes ──────────────
+    salas_fijas = fila.get("salas_ganga_fijas") if hay_fijos else None
+    tiene_salas_fijas = pd.notna(salas_fijas)
+    salas_del_mes = fila.get("salas_ganga_mes") if hay_fijos else fila.get("salas_ganga")
+    mes_sin_salas = hay_fijos and pd.isna(salas_del_mes)
+
+    sal1, sal2 = st.columns([1, 1])
+    usar_salas_fijas = False
+    if tiene_salas_fijas:
+        usar_salas_fijas = sal1.checkbox(
+            f"⭐ Usar las salas fijas del vendedor ({_safe_int(salas_fijas)})",
+            value=bool(mes_sin_salas),
+            key=f"{_key}_salas_fijas",
+            help="Desmárcalo solo si este mes atendió una cantidad distinta.",
         )
+    salas_val = sal2.number_input(
+        "Salas Ganga atendidas",
+        value=_safe_int(fila.get("salas_ganga")), step=1, min_value=0,
+        disabled=usar_salas_fijas,
+        help="Bono reposición = $15.000 × salas.",
+        key=f"{_key}_salas",
+    )
+    salas = None if usar_salas_fijas else salas_val
+
+    with st.form("form_comision_entrada", clear_on_submit=False):
         submitted = st.form_submit_button("💾 Guardar entrada", type="primary",
                                           use_container_width=True)
 
@@ -551,10 +680,100 @@ def _editor_entradas(client, df: pd.DataFrame, anio: int, mes: int):
                                     ajuste_motivo=aj_motivo)
             if plan_id_sel != plan_actual:
                 update_vendedor_plan(client, vendedor_id, plan_id_sel)
+            _comisiones_cache.clear()   # el cálculo cambió: refrescar la caché
             st.success(f"✅ Entrada de **{nombre_sel}** guardada.")
             st.rerun()
         except Exception as e:
             st.error(f"Error al guardar: {e}")
+
+
+def _bloque_valores_fijos(client, vendedores: pd.DataFrame):
+    """Cartera y salas Ganga FIJAS por vendedor (sql/039).
+
+    Se cargan una vez y valen para todos los meses: el cálculo del mes las usa
+    salvo que ese mes traiga un número propio. Así deja de ser necesario
+    recargar la cartera de cada vendedor todos los meses.
+    """
+    fijos = get_comision_valores_fijos(client)
+    fijos_map = ({int(r["vendedor_id"]): r for _, r in fijos.iterrows()}
+                 if not fijos.empty else {})
+
+    n_cargados = len(fijos_map)
+    with st.expander(f"⭐ Valores fijos por vendedor  ·  {n_cargados} cargados",
+                     expanded=False):
+        st.caption(
+            "El **rango de cartera** y las **salas Ganga** casi nunca cambian de "
+            "un mes a otro, así que se definen acá una sola vez. El cálculo de "
+            "cada mes los toma automáticamente; si un mes puntual necesita otro "
+            "número, se carga arriba y ese mes manda."
+        )
+
+        base = pd.DataFrame({
+            "vendedor_id": vendedores["vendedor_id"].astype(int),
+            "Vendedor": vendedores["nombre_canonico"],
+        })
+        base["Rango cartera"] = [
+            (_safe_int(fijos_map[v]["cartera_clientes"]) - 1) // 10 + 1
+            if v in fijos_map and pd.notna(fijos_map[v]["cartera_clientes"]) else None
+            for v in base["vendedor_id"]
+        ]
+        base["Salas Ganga"] = [
+            _safe_int(fijos_map[v]["salas_ganga"])
+            if v in fijos_map and pd.notna(fijos_map[v]["salas_ganga"]) else None
+            for v in base["vendedor_id"]
+        ]
+
+        editado = st.data_editor(
+            base, hide_index=True, use_container_width=True,
+            key="editor_valores_fijos",
+            disabled=["vendedor_id", "Vendedor"],
+            column_config={
+                "vendedor_id": None,
+                "Vendedor": st.column_config.TextColumn(width="medium"),
+                "Rango cartera": st.column_config.NumberColumn(
+                    min_value=1, max_value=15, step=1, format="%d",
+                    help="El mismo número de la tabla de comisiones: "
+                         "Rango 9 = 81-90 clientes … Rango 15 = 141 o más. "
+                         "La efectividad paga desde el rango 9; bajo eso el "
+                         "componente queda en $0. Vacío = sin valor fijo."),
+                "Salas Ganga": st.column_config.NumberColumn(
+                    min_value=0, max_value=50, step=1, format="%d",
+                    help="Salas que repone habitualmente. Vacío = sin valor fijo."),
+            },
+        )
+
+        if st.button("💾 Guardar valores fijos", key="btn_guardar_fijos"):
+            cambios = 0
+            try:
+                for _, fila in editado.iterrows():
+                    vid = int(fila["vendedor_id"])
+                    rango = fila["Rango cartera"]
+                    salas = fila["Salas Ganga"]
+                    cart = ((_safe_int(rango) - 1) * 10 + 1) if pd.notna(rango) else None
+                    sal  = _safe_int(salas) if pd.notna(salas) else None
+
+                    prev = fijos_map.get(vid)
+                    prev_cart = (_safe_int(prev["cartera_clientes"])
+                                 if prev is not None and pd.notna(prev["cartera_clientes"]) else None)
+                    prev_sal = (_safe_int(prev["salas_ganga"])
+                                if prev is not None and pd.notna(prev["salas_ganga"]) else None)
+                    if (cart, sal) == (prev_cart, prev_sal):
+                        continue
+                    if cart is None and sal is None and prev is None:
+                        continue
+
+                    upsert_comision_valor_fijo(client, vid, cart, sal)
+                    cambios += 1
+            except Exception as e:
+                st.error(f"Error al guardar los valores fijos: {e}")
+                return
+
+            if cambios:
+                _comisiones_cache.clear()
+                st.success(f"✅ {cambios} vendedor(es) actualizado(s).")
+                st.rerun()
+            else:
+                st.info("No había cambios que guardar.")
 
 
 def _bloque_ajuste(fila, vendedor_id: int, anio: int, mes: int):

@@ -124,6 +124,19 @@ def _ratio(real, meta):
     return float(real) / float(meta)
 
 
+@st.cache_data(ttl=1800, show_spinner="Cargando histórico de ventas…")
+def _historia_cache(_client, fecha_fin: str, cache_key: str) -> pd.DataFrame:
+    """Histórico de ventas a nivel línea desde 2024, cacheado por usuario.
+
+    Son ~180.000 filas y más de un minuto de paginación contra PostgREST. Sin
+    caché se repetía en CADA interacción de la página de Comisiones (st.tabs
+    ejecuta todas las pestañas en cada rerun), dejando la base tan exigida que
+    la consulta de comisiones se caía por timeout. Media hora de TTL: es
+    histórico cerrado, no cambia dentro de una sesión de trabajo.
+    """
+    return get_ventas_rango(_client, "2024-01-01", fecha_fin)
+
+
 # ── Cálculo del scorecard por vendedor ──────────────────────────────────────
 def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     base = get_comisiones(client, anio, mes)
@@ -173,7 +186,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     # Historia de ventas a nivel línea (nuevos/react, cobertura, amplitud, SKU, dormidos).
     ultimo = calendar.monthrange(anio, mes)[1]
     ffin = f"{anio}-{mes:02d}-{ultimo:02d}"
-    hist = get_ventas_rango(client, "2024-01-01", ffin)
+    hist = _historia_cache(client, ffin, str(st.session_state.get("user_id", "")))
     métricas, detalle_cli, estado_cli = _metricas_historia(
         hist, client, anio, mes, cart_map)
 
