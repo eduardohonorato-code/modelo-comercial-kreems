@@ -25,8 +25,108 @@
 -- en los meses donde no hay fila, o donde gerencia deje el campo en "usar el
 -- fijo" desde la app.
 --
--- Idempotente. Correr en el SQL Editor de Supabase.
+-- Idempotente y AUTOSUFICIENTE: la sección 0 se asegura de las columnas y
+-- funciones que agregaron los scripts 008 / 014 / 033 / 034, porque no todos se
+-- habían corrido en la base (la app es fail-soft y sigue andando sin ellos, así
+-- que la falta no se nota hasta que algo recrea la vista completa).
+-- Correr en el SQL Editor de Supabase.
 -- ============================================================================
+
+-- ── 0. Requisitos: columnas y funciones que la vista da por sentadas ─────────
+-- Este script recrea v_comision_vendedor_mes completa, así que necesita todo lo
+-- que le agregaron los scripts anteriores. Como no siempre se corrieron todos
+-- (la app es fail-soft y sigue andando sin ellos, así que la falta no se nota
+-- hasta acá), se aseguran aquí. Todo con `if not exists`: si ya estaban, no
+-- pasa nada.
+
+--   008 — criterio manual de tramo
+alter table public.comision_entrada_mensual
+  add column if not exists pnv_logro_override numeric(5,4),
+  add column if not exists maq_logro_override numeric(5,4);
+
+--   033 — días trabajados / INAB del vendedor en meses parciales
+alter table public.comision_entrada_mensual
+  add column if not exists dias_trabajados_override smallint,
+  add column if not exists inab_override            smallint;
+
+alter table public.comision_entrada_mensual
+  drop constraint if exists comision_entrada_dias_chk;
+alter table public.comision_entrada_mensual
+  add constraint comision_entrada_dias_chk check (
+    (dias_trabajados_override is null or dias_trabajados_override between 1 and 31)
+    and (inab_override is null or inab_override between 0 and 15)
+  );
+
+--   034 — ajuste manual de monto libre, con motivo obligatorio
+alter table public.comision_entrada_mensual
+  add column if not exists ajuste_monto  numeric(18,2),
+  add column if not exists ajuste_motivo text;
+
+alter table public.comision_entrada_mensual
+  drop constraint if exists comision_entrada_ajuste_chk;
+alter table public.comision_entrada_mensual
+  add constraint comision_entrada_ajuste_chk check (
+    coalesce(ajuste_monto, 0) = 0
+    or (ajuste_motivo is not null and length(btrim(ajuste_motivo)) >= 3)
+  );
+
+--   034 — el snapshot de cierre también guarda el ajuste
+alter table public.comision_calculo
+  add column if not exists ajuste_monto  numeric(18,2),
+  add column if not exists ajuste_motivo text;
+
+--   014 — redondeo del PNV hacia abajo (piso del tramo)
+create or replace function public.comision_ajustar_logro_piso(
+  p_logro numeric, p_paso numeric, p_piso numeric, p_techo numeric)
+returns numeric language sql immutable as $$
+  select case
+    when p_logro is null then null
+    when floor(p_logro / p_paso) * p_paso < p_piso  then null
+    when floor(p_logro / p_paso) * p_paso > p_techo then p_techo
+    else round(floor(p_logro / p_paso) * p_paso, 4)
+  end;
+$$;
+
+grant execute on function
+  public.comision_ajustar_logro_piso(numeric,numeric,numeric,numeric)
+  to authenticated;
+
+-- Aviso si falta algo de 006 (las escalas y sus funciones): sin eso la vista se
+-- crea pero el cálculo sale en $0, y conviene enterarse ahora y no al pagar.
+do $$
+declare faltan text := ''; n bigint;
+begin
+  if to_regprocedure('public.comision_param(text)') is null then
+    faltan := faltan || ' comision_param()';
+  end if;
+  if to_regclass('public.comision_tramo_pnv') is null then
+    faltan := faltan || ' comision_tramo_pnv';
+  else
+    execute 'select count(*) from public.comision_tramo_pnv' into n;
+    if n = 0 then faltan := faltan || ' comision_tramo_pnv(vacía)'; end if;
+  end if;
+  if to_regclass('public.comision_tramo_efectividad') is null then
+    faltan := faltan || ' comision_tramo_efectividad';
+  else
+    execute 'select count(*) from public.comision_tramo_efectividad' into n;
+    if n = 0 then faltan := faltan || ' comision_tramo_efectividad(vacía)'; end if;
+  end if;
+  if faltan <> '' then
+    raise warning 'Falta correr sql/006_comisiones.sql —%', faltan;
+  end if;
+
+  -- La vista redondea máquinas con piso 25% (sql/009). Si los tramos 25/30/35
+  -- no están sembrados, un logro bajo el 40% se queda sin fila y paga $0 sin
+  -- avisar: es un error de plata silencioso, mejor enterarse ahora.
+  if to_regclass('public.comision_tramo_maquinas') is not null then
+    execute 'select count(*) from public.comision_tramo_maquinas where logro_pct < 0.40'
+      into n;
+    if n = 0 then
+      raise warning 'Falta correr sql/009_maquinas_piso_25pct.sql: sin los tramos '
+                    '25/30/35%% de máquinas, esos logros pagan cero.';
+    end if;
+  end if;
+end $$;
 
 -- ── 1. Tabla de valores fijos ───────────────────────────────────────────────
 create table if not exists public.comision_valor_fijo (
