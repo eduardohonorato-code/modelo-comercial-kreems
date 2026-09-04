@@ -10,9 +10,21 @@ NO se pueden mezclar, porque miden cosas distintas:
     (36 líneas FL sumaron $38 en todo agosto), así que valorizarlas no dice
     nada: se cuentan por máquina movida.
 
+DEFINICIÓN OFICIAL (decidida con gerencia, sep-2026): el % de entrega se mide
+sobre **lo que realmente salió a ruta en el período**, no sobre la facturación
+del mes. Un documento facturado el 31 que sale a ruta el 2 del mes siguiente se
+cuenta en ese mes siguiente. La otra lectura —sobre lo facturado— queda en la
+hoja del cuadre, para poder explicar la diferencia sin cambiar el indicador.
+
 Sobre las notas de crédito: un rechazo se termina acreditando, así que el monto
-rechazado y las NC del mes deberían parecerse. El informe muestra los dos para
-que ese cuadre se pueda verificar mes a mes, en vez de asumirlo.
+rechazado y las NC del mes deberían parecerse; el informe muestra los dos para
+verificar ese cuadre. NO se restan del denominador: sacarían justamente lo que
+no se entregó e inflarían el porcentaje.
+
+FUENTES. El estado de entrega, el transportista y el comentario del repartidor
+vienen del **Excel de despachos de Autoventa**, que se sube a mano en la página
+Carga (su API no expone el estado). El monto facturado de cada documento viene
+de **Obuma por API**, automático. Sin el Excel del mes, este informe no existe.
 """
 import io
 from datetime import date
@@ -228,7 +240,7 @@ def libro_entregas(ventas: pd.DataFrame, despachos: pd.DataFrame,
         ("Informe generado el", f"{hoy:%d/%m/%Y}"),
         ("", ""),
         ("HELADOS Y PRODUCTOS · en pesos", ""),
-        ("Facturado que salió a ruta", desp),
+        ("Facturado que salió a ruta EN el período", desp),
         ("Entregado", ent),
         ("Rechazado", rech),
         ("Pendiente en ruta", pend),
@@ -253,10 +265,16 @@ def libro_entregas(ventas: pd.DataFrame, despachos: pd.DataFrame,
     ]
     res = pd.DataFrame(ind, columns=["Indicador", "Valor"])
     ws = _escribir(wb, "Resumen", res,
-                   nota=("Cuánto de lo que salió a ruta llegó. Los productos se "
-                         "miden en pesos y las máquinas en unidades: el flete de "
-                         "una máquina se factura a $1 nominal, así que "
-                         "valorizarla no diría nada."))
+                   nota=("DEFINICIÓN OFICIAL: el % de entrega se mide sobre lo "
+                         "que REALMENTE salió a ruta en el período, no sobre la "
+                         "facturación del mes. Lo facturado a fin de mes que sale "
+                         "a ruta al mes siguiente se cuenta en ese mes siguiente "
+                         "(ver la hoja 'Cuadre con la facturación'). Productos en "
+                         "pesos, máquinas en unidades: el flete de máquina se "
+                         "factura a $1 nominal. · FUENTES: el estado de entrega, "
+                         "el transportista y el comentario vienen del Excel de "
+                         "despachos de Autoventa, que se sube a mano; el monto "
+                         "facturado de cada documento viene de Obuma por API."))
     for fila in range(2, ws.max_row + 1):
         etq = str(ws.cell(row=fila, column=1).value or "")
         celda = ws.cell(row=fila, column=2)
