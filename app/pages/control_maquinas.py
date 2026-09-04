@@ -19,6 +19,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app.auth import es_gerencia
+from app.styles import fmt_clp
 from app.data import (get_objetivos_maquinas, upsert_objetivos_maquinas,
                       get_dim_cliente_full)
 from app.kpis_maquinas import (cargar_todo, calcular_kpis, calcular_flujo,
@@ -334,6 +335,86 @@ def _seccion_sin_dte(client, mov, ped, f_ini=None, f_fin=None):
 
 
 
+def _seccion_entregas(client, f_ini, f_fin, mov, desp):
+    """
+    Efectividad del despacho: cuánto de lo que salió a ruta llegó.
+
+    Va en pesos para productos y en unidades para máquinas, y NO se mezclan: el
+    flete de una máquina se factura a $1 nominal, así que valorizarla daría un
+    número sin sentido.
+    """
+    st.divider()
+    _sec("Entregas del período · productos y máquinas")
+
+    if desp is None or desp.empty:
+        st.markdown('<div class="estado-vacio">Sin despachos cargados en el '
+                    'período.</div>', unsafe_allow_html=True)
+        return
+
+    from app.data import get_ventas_rango
+    from app.export_entregas import preparar_entregas, _tabla_por
+
+    try:
+        ventas = get_ventas_rango(client, f_ini, f_fin)
+    except Exception:
+        st.warning("No se pudieron leer las ventas del período.")
+        return
+
+    d = preparar_entregas(ventas, desp, mov)
+    en_rango = d[d["fecha_ruta"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))]
+    if en_rango.empty:
+        st.markdown('<div class="estado-vacio">Sin despachos en el período.</div>',
+                    unsafe_allow_html=True)
+        return
+
+    prods, maqs = en_rango[~en_rango["Es máquina"]], en_rango[en_rango["Es máquina"]]
+    ent = float(prods.loc[prods["_est"] == "Entregada", "Monto facturado"].sum())
+    rech = float(prods.loc[prods["_est"] == "Rechazada", "Monto facturado"].sum())
+    pend = float(prods.loc[prods["_est"] == "Pendiente", "Monto facturado"].sum())
+    desp_total = ent + rech + pend
+    m_ent = int((maqs["_est"] == "Entregada").sum())
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("% Entrega · productos",
+              f"{ent / desp_total * 100:.1f}%" if desp_total else "—",
+              help="Plata entregada sobre plata que salió a ruta.")
+    c2.metric("Rechazado", fmt_clp(rech),
+              help="Monto facturado de los despachos que volvieron.")
+    c3.metric("% Entrega · máquinas",
+              f"{m_ent / len(maqs) * 100:.1f}%" if len(maqs) else "—",
+              help="En unidades: el flete de máquina se factura a $1.")
+    c4.metric("Máquinas despachadas", f"{len(maqs)}")
+
+    t = _tabla_por(prods, "Transportista", "monto", "Transportista")
+    if not t.empty:
+        vista = t.copy()
+        for c in [x for x in vista.columns if x not in ("Transportista", "% de entrega")]:
+            vista[c] = vista[c].apply(lambda x: fmt_clp(x) if pd.notna(x) and x != "" else "")
+        vista["% de entrega"] = vista["% de entrega"].apply(
+            lambda x: f"{x*100:.1f}%" if pd.notna(x) and x != "" else "")
+        st.dataframe(vista, use_container_width=True, hide_index=True)
+    st.caption("Los productos se miden en pesos y las máquinas en unidades. El "
+               "informe completo abre además el detalle de cada rechazo con el "
+               "comentario del repartidor.")
+
+    if st.button("🚚 Generar informe de entregas", key="btn_informe_entregas"):
+        with st.spinner("Armando el informe…"):
+            from app.export_entregas import libro_entregas
+            try:
+                cli_dim = get_dim_cliente_full(client)
+            except Exception:
+                cli_dim = None
+            data = libro_entregas(ventas, desp, f_ini, f_fin, mov, cli_dim)
+        st.session_state["_cm_entregas"] = ((str(f_ini), str(f_fin)), data)
+    g = st.session_state.get("_cm_entregas")
+    if g and g[0] == (str(f_ini), str(f_fin)):
+        st.download_button(
+            "⬇️ Descargar informe de entregas", g[1],
+            f"entregas_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True, key="dl_entregas")
+
+
 def render(client, anio: int, mes: int):
     if not es_gerencia():
         st.warning("Solo el rol **gerencia/admin** puede ver el control de máquinas.")
@@ -354,7 +435,7 @@ def render(client, anio: int, mes: int):
 
     metas = get_objetivos_maquinas(client, anio, mes)
     with st.spinner("Cargando movimientos, pedidos y despachos…"):
-        mov, ped, _ = cargar_todo(client, f_ini, f_fin)
+        mov, ped, desp = cargar_todo(client, f_ini, f_fin)
 
     if mov is None or mov.empty:
         st.markdown('<div class="estado-vacio">Sin movimientos de máquinas en '
@@ -468,6 +549,8 @@ def render(client, anio: int, mes: int):
         st.plotly_chart(fig4, use_container_width=True)
         st.caption("Sale del comentario del repartidor: el campo de motivo del "
                    "ERP llega vacío.")
+
+    _seccion_entregas(client, f_ini, f_fin, mov, desp)
 
     # ── Informe ──────────────────────────────────────────────────────────────
     st.divider()
