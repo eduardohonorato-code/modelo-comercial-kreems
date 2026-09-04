@@ -102,6 +102,88 @@ def _tabla_por(d: pd.DataFrame, col: str, valor: str,
     return tot
 
 
+def vista_por_factura(ventas: pd.DataFrame, despachos: pd.DataFrame,
+                      f_ini, f_fin) -> pd.DataFrame:
+    """
+    De lo FACTURADO en el período, en qué terminó cada peso.
+
+    Es la otra mitad de la historia. La vista por ruta mide al transportista
+    (solo lo que llevó ese mes); esta mide el mes comercial completo, e incluye
+    lo que se facturó a fin de mes y salió a ruta al mes siguiente. Los dos
+    números son correctos y responden preguntas distintas.
+
+    `despachos` tiene que venir de una ventana MÁS ANCHA que el período, o lo
+    despachado al mes siguiente se vería como "sin despacho".
+    """
+    v = ventas.copy()
+    v["_doc"] = _norm_doc(v["n_dcto"])
+    v["_nc"] = v["tipo_dcto"].astype(str).str.upper().str.contains("CREDITO", na=False)
+    v["_fl"] = v["producto_codigo"].astype(str).str.upper().str.startswith("FL-")
+    v["neto"] = pd.to_numeric(v["neto"], errors="coerce").fillna(0)
+
+    d = despachos.copy()
+    d["_doc"] = _norm_doc(d["documento"])
+    d["_est"] = d["estado"].astype(str).str.strip().str.capitalize()
+    d["_prio"] = d["_est"].map({"Entregada": 0, "Rechazada": 1, "Pendiente": 2}).fillna(9)
+    d["_mes_ruta"] = pd.to_datetime(d["fecha_ruta"], errors="coerce").dt.to_period("M")
+    dd = d.sort_values("_prio").drop_duplicates("_doc").set_index("_doc")
+
+    g = (v[~v["_nc"] & ~v["_fl"]].groupby("_doc")["neto"].sum().to_frame("Monto"))
+    g["Estado"] = g.index.map(dd["_est"]).fillna("Sin despacho registrado")
+    mes_ruta = g.index.map(dd["_mes_ruta"])
+    en_periodo = pd.Series(
+        [False if pd.isna(m) else
+         (m.start_time.date() <= f_fin and m.end_time.date() >= f_ini)
+         for m in mes_ruta], index=g.index)
+    g["Salió a ruta"] = [
+        "Sin despacho" if pd.isna(m) else ("En el período" if p else str(m))
+        for m, p in zip(mes_ruta, en_periodo)]
+    return g
+
+
+def _puente(ventas, despachos, f_ini, f_fin) -> pd.DataFrame:
+    """El paso a paso entre la facturación del mes y lo que salió a ruta."""
+    g = vista_por_factura(ventas, despachos, f_ini, f_fin)
+    if g.empty:
+        return pd.DataFrame()
+    v = ventas.copy()
+    v["_nc"] = v["tipo_dcto"].astype(str).str.upper().str.contains("CREDITO", na=False)
+    v["neto"] = pd.to_numeric(v["neto"], errors="coerce").fillna(0)
+    v["_fl"] = v["producto_codigo"].astype(str).str.upper().str.startswith("FL-")
+    bruta = float(v[~v["_nc"]]["neto"].sum())
+    fletes = float(v[~v["_nc"] & v["_fl"]]["neto"].sum())
+    otro_mes = float(g.loc[~g["Salió a ruta"].isin(["En el período", "Sin despacho"]),
+                           "Monto"].sum())
+    sin_desp = float(g.loc[g["Salió a ruta"] == "Sin despacho", "Monto"].sum())
+    en_ruta = float(g.loc[g["Salió a ruta"] == "En el período", "Monto"].sum())
+    nc = abs(float(v[v["_nc"]]["neto"].sum()))
+    ent_fact = float(g.loc[g["Estado"] == "Entregada", "Monto"].sum())
+    prod = bruta - fletes
+    filas = [
+        ("Facturación bruta del período", bruta,
+         "Todo lo facturado, notas de crédito aparte"),
+        ("(−) Fletes de máquina", -fletes,
+         "Se facturan a $1: distorsionarían el monto sin aportar"),
+        ("(−) Facturado que salió a ruta en OTRO mes", -otro_mes,
+         "Se facturó a fin de mes y el camión salió al mes siguiente"),
+        ("(−) Facturado sin despacho registrado", -sin_desp,
+         "Retiro en local, o el despacho no llegó al sistema"),
+        ("(=) Lo que salió a ruta EN el período", en_ruta,
+         "Este es el denominador del % por transportista"),
+        ("", None, ""),
+        ("Notas de crédito del período", -nc,
+         "OJO: pueden acreditar facturas de meses anteriores"),
+        ("Facturación neta (bruta − NC)", bruta - nc,
+         "No es comparable con lo despachado: mezcla meses"),
+        ("", None, ""),
+        ("Entregado de lo facturado en el período", ent_fact,
+         "Incluye lo que salió a ruta el mes siguiente"),
+        ("% Entregado sobre la facturación bruta", _pct(ent_fact, prod),
+         "La lectura comercial del mes"),
+    ]
+    return pd.DataFrame(filas, columns=["Concepto", "Monto", "Qué significa"])
+
+
 def libro_entregas(ventas: pd.DataFrame, despachos: pd.DataFrame,
                    f_ini, f_fin, maquinas: pd.DataFrame | None = None,
                    clientes: pd.DataFrame | None = None,
@@ -227,6 +309,33 @@ def libro_entregas(ventas: pd.DataFrame, despachos: pd.DataFrame,
                   | {"% de entrega": _FMT_PCT},
                   nota="El mismo corte por tipo de movimiento.",
                   total_ultima=not t_tipo.empty)
+
+    # ── 3b. Cuadre con la facturación ────────────────────────────────────────
+    # Sin esto la pregunta "por qué no me calza con la facturación del mes"
+    # queda sin respuesta, y es la primera que aparece al mirar el informe.
+    pu = _puente(ventas, despachos, f_ini, f_fin)
+    if not pu.empty:
+        ws2 = _escribir(wb, "Cuadre con la facturación", pu,
+                        nota=("De la facturación del mes a lo que salió a ruta, "
+                              "paso a paso. Las dos miradas son válidas y "
+                              "responden cosas distintas: el % por transportista "
+                              "se mide sobre lo que salió a ruta ESE mes; el % "
+                              "comercial, sobre lo facturado en el mes."))
+        for fila in range(4, ws2.max_row + 1):
+            etq = str(ws2.cell(row=fila, column=1).value or "")
+            ws2.cell(row=fila, column=2).number_format = (
+                _FMT_PCT if etq.startswith("%") else _FMT_CLP)
+
+        vf = vista_por_factura(ventas, despachos, f_ini, f_fin)
+        det = (vf.groupby(["Salió a ruta", "Estado"])["Monto"]
+               .agg(["sum", "count"]).reset_index()
+               .rename(columns={"sum": "Monto", "count": "N° documentos"})
+               .sort_values("Monto", ascending=False))
+        _escribir(wb, "Facturado · en qué terminó", det,
+                  {"Monto": _FMT_CLP, "N° documentos": _FMT_NUM},
+                  nota=("Cada peso facturado en el período, según cuándo salió a "
+                        "ruta y cómo terminó. Lo que dice «2026-09» se facturó "
+                        "este mes y se despachó el siguiente."))
 
     # ── 4. Detalle de los rechazos ───────────────────────────────────────────
     rechz = d[d["_est"] == "Rechazada"].copy()

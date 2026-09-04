@@ -404,7 +404,16 @@ def _seccion_entregas(client, f_ini, f_fin, mov, desp):
                 cli_dim = get_dim_cliente_full(client)
             except Exception:
                 cli_dim = None
-            data = libro_entregas(ventas, desp, f_ini, f_fin, mov, cli_dim)
+            # Ventana ancha a propósito: lo facturado a fin de mes sale a
+            # ruta al mes siguiente, y sin eso se vería como "sin despacho".
+            try:
+                from app.data import get_despachos_rango
+                desp_ancho = get_despachos_rango(
+                    client, f_ini - datetime.timedelta(days=60),
+                    f_fin + datetime.timedelta(days=60))
+            except Exception:
+                desp_ancho = desp
+            data = libro_entregas(ventas, desp_ancho, f_ini, f_fin, mov, cli_dim)
         st.session_state["_cm_entregas"] = ((str(f_ini), str(f_fin)), data)
     g = st.session_state.get("_cm_entregas")
     if g and g[0] == (str(f_ini), str(f_fin)):
