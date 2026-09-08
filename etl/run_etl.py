@@ -30,9 +30,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from etl.db import get_client, cargar_alias
+from etl.db import get_client, cargar_alias, cargar_reasignaciones
 from etl.config import DATA_DIR, FILE_MATCH, MENSUAL_DIR, FUENTES, SOCIEDAD_ID
-from etl.cleaners import construir_mapeo_vendedor, agregar_alias
+from etl.cleaners import (construir_mapeo_vendedor, agregar_alias,
+                          aplicar_reasignacion)
 from etl.upsert import upsert_tabla
 from etl.maquinas import (derivar_maquinas_obuma, aplicar_estado_despachos,
                           aplicar_override_vendedor, marcar_despachos_maquina)
@@ -365,6 +366,15 @@ def run(periodo: tuple | None = None):
     # dim_producto (solo Obuma tiene datos completos de producto)
     upsert_tabla(client, "dim_producto", obuma["dim_producto"], on_conflict="codigo")
 
+    # Reasignación por fecha (reemplazos de vendedor): el ETL manual también la
+    # aplica, si no una recarga de Excel devolvería la facturación al vendedor
+    # saliente. Es date-aware, así que no toca el histórico anterior al corte.
+    reasignaciones = cargar_reasignaciones(client)
+    obuma["fact_ventas"] = aplicar_reasignacion(obuma["fact_ventas"], reasignaciones)
+    autov["fact_pedidos"] = aplicar_reasignacion(autov["fact_pedidos"], reasignaciones)
+    autov["fact_despachos"] = aplicar_reasignacion(
+        autov["fact_despachos"], reasignaciones, col_fecha="fecha_ruta")
+
     # Hechos
     upsert_tabla(
         client, "fact_ventas", obuma["fact_ventas"],
@@ -386,6 +396,7 @@ def run(periodo: tuple | None = None):
     # Override manual de vendedor (tabla maquina_vendedor_override; vacía = sin efecto)
     fact_maquinas = aplicar_override_vendedor(
         fact_maquinas, _leer_overrides_maquina(client))
+    fact_maquinas = aplicar_reasignacion(fact_maquinas, reasignaciones)
 
     # Marcar es_maquina en los despachos según las máquinas (Obuma) antes de subir.
     fact_despachos = marcar_despachos_maquina(autov["fact_despachos"], fact_maquinas)

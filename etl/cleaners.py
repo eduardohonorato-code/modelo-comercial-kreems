@@ -78,7 +78,8 @@ def agregar_alias(mapeo: dict[str, int], alias_rows: list[dict]) -> dict[str, in
     return mapeo
 
 
-def aplicar_reasignacion(df: pd.DataFrame, reglas: list[dict]) -> pd.DataFrame:
+def aplicar_reasignacion(df: pd.DataFrame, reglas: list[dict],
+                         col_fecha: str = "fecha") -> pd.DataFrame:
     """
     Reasigna vendedor_id POR FECHA sobre un fact DataFrame: las filas de `origen_id`
     con `fecha >= desde` pasan a `destino_id`. Para reemplazos de vendedor que
@@ -87,20 +88,42 @@ def aplicar_reasignacion(df: pd.DataFrame, reglas: list[dict]) -> pd.DataFrame:
     (a diferencia del alias por nombre), así el histórico no se toca.
 
     `reglas` = [{'origen_id': 9, 'destino_id': 14, 'desde': '2026-07-01'}, ...].
-    El df debe tener columnas 'vendedor_id' y 'fecha'.
+    El df debe tener columnas 'vendedor_id' y `col_fecha` (fact_despachos usa
+    'fecha_ruta').
+
+    Un mismo origen puede tener VARIAS reglas (cadena de reemplazos: Diego →
+    Carlos desde jul, Diego → Joaquín desde sep). Para cada fila manda la regla
+    de `desde` MÁS RECIENTE que sea <= su fecha, y cada fila se reasigna UNA sola
+    vez sobre el vendedor_id original: así el resultado no depende del orden en
+    que la base devuelva las reglas ni encadena una reasignación sobre otra.
     """
     if df is None or getattr(df, "empty", True) or not reglas:
         return df
-    if "vendedor_id" not in df.columns or "fecha" not in df.columns:
+    if "vendedor_id" not in df.columns or col_fecha not in df.columns:
         return df
-    f = pd.to_datetime(df["fecha"], errors="coerce")
+
+    # Reglas válidas, ordenadas por fecha ASCENDENTE: al aplicarlas en ese orden
+    # sobre el vendedor_id ORIGINAL, la última que matchea (la más reciente que
+    # ya empezó) es la que queda.
+    reglas_ok = []
     for r in reglas:
         try:
-            mask = (df["vendedor_id"] == r["origen_id"]) & (f >= pd.Timestamp(r["desde"]))
-            if int(mask.sum()):
-                df.loc[mask, "vendedor_id"] = r["destino_id"]
+            reglas_ok.append((pd.Timestamp(r["desde"]), int(r["origen_id"]),
+                              int(r["destino_id"])))
         except Exception:
             continue
+    if not reglas_ok:
+        return df
+    reglas_ok.sort(key=lambda x: x[0])
+
+    f = pd.to_datetime(df[col_fecha], errors="coerce")
+    origen = df["vendedor_id"].copy()          # snapshot: no se encadena
+    destino = df["vendedor_id"].copy()
+    for desde, oid, did in reglas_ok:
+        mask = (origen == oid) & (f >= desde)
+        if int(mask.sum()):
+            destino.loc[mask] = did
+    df["vendedor_id"] = destino
     return df
 
 

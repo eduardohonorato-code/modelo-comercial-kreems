@@ -17,7 +17,7 @@ import sys
 import pandas as pd
 
 from etl.cleaners import normalizar_rut
-from etl.db import get_client
+from etl.db import get_client, cargar_reasignaciones
 
 
 def _leer_clientes(path: str) -> pd.DataFrame:
@@ -75,13 +75,38 @@ def main():
     client = get_client()
 
     # Mapa cod_vendedor_autoventa → vendedor_id
-    dv = pd.DataFrame(client.table("dim_vendedor")
-                      .select("id,nombre_canonico,cod_vendedor_autoventa")
-                      .execute().data)
-    dv = dv.dropna(subset=["cod_vendedor_autoventa"])
+    dv_all = pd.DataFrame(client.table("dim_vendedor")
+                          .select("id,nombre_canonico,cod_vendedor_autoventa")
+                          .execute().data)
+    dv = dv_all.dropna(subset=["cod_vendedor_autoventa"])
     mapa = {str(c): int(i) for c, i in
             zip(dv["cod_vendedor_autoventa"].astype(str), dv["id"])}
     cart["vendedor_id"] = cart["cod_vendedor"].map(mapa)
+
+    # Reemplazos de vendedor: la cartera es un estado ACTUAL (no histórico), así
+    # que se aplica la reasignación VIGENTE hoy. Sin esto, el código de Autoventa
+    # sigue en el vendedor saliente (que lo conserva a propósito, para que la
+    # reasignación por fecha del ETL funcione) y cada recarga devolvería la ruta
+    # al que ya no trabaja. Por origen manda la regla más reciente ya iniciada.
+    hoy = pd.Timestamp.today().normalize()
+    vigente: dict[int, int] = {}
+    for r in sorted(cargar_reasignaciones(client),
+                    key=lambda x: str(x.get("desde") or "")):
+        try:
+            if pd.Timestamp(r["desde"]) <= hoy:
+                vigente[int(r["origen_id"])] = int(r["destino_id"])
+        except Exception:
+            continue
+    if vigente:
+        antes = cart["vendedor_id"].copy()
+        cart["vendedor_id"] = antes.map(lambda v: vigente.get(v, v))
+        movidos = int((antes != cart["vendedor_id"]).sum())
+        if movidos:
+            nom = {int(i): n for i, n in zip(dv_all["id"], dv_all["nombre_canonico"])}
+            detalle = ", ".join(f"{nom.get(o, o)} → {nom.get(d, d)}"
+                                for o, d in vigente.items()
+                                if (antes == o).any())
+            print(f"[cartera] reasignación vigente aplicada a {movidos} clientes: {detalle}")
 
     # Reporte de mapeo (regla de calidad: nada se descarta en silencio)
     resumen = (cart.assign(mapeado=cart["vendedor_id"].notna())
