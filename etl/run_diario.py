@@ -86,6 +86,15 @@ def main() -> int:
                 logger.exception("FALLO %s %d-%02d (la carga continúa con el resto)",
                                  nombre, *periodo)
 
+    # La carga solo relee el mes en curso: los pedidos sin DTE de meses
+    # anteriores que se facturaron o anularon después quedarían congelados.
+    try:
+        from etl.reconciliar_pedidos_sin_dte import reconciliar
+        reconciliar()
+    except Exception:
+        errores += 1
+        logger.exception("FALLO reconciliación de pedidos sin DTE")
+
     logger.info("CARGA DIARIA terminada | errores: %d", errores)
     logger.info("#" * 60)
     return 1 if errores else 0

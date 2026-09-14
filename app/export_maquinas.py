@@ -136,7 +136,12 @@ def _prep_pedidos(pedidos_fl: pd.DataFrame | None) -> pd.DataFrame:
     # viene en la API. En la práctica significa anulado o vuelto a ingresar con
     # otro número, y si se deja pasar infla la cola de pendientes con trabajo
     # que en realidad no existe.
-    p["_fantasma"] = (p["estado_pedido"].isna() if "estado_pedido" in p.columns
+    # También los que la reconciliación diaria marcó como inexistentes en la
+    # API (etl/reconciliar_pedidos_sin_dte.py): el estado de un mes que ya no
+    # se recarga queda congelado, y sin esa marca seguirían en la cola.
+    p["_fantasma"] = ((p["estado_pedido"].isna()
+                       | (p["estado_pedido"].astype(str) == "no_existe_en_api"))
+                      if "estado_pedido" in p.columns
                       else pd.Series(False, index=p.index))
     return p
 
