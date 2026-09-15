@@ -1,16 +1,23 @@
 """
-Control de Máquinas — los indicadores del comodato contra su meta.
+Control de Máquinas — la semana de gestiones, contada de una sola manera.
 
-Es la contraparte del Panel Gerencia, pero para las máquinas: en vez de medir la
-facturación de cada vendedor, mide el recorrido de una máquina y en qué etapa se
-está cayendo.
+Gerencia viene a responder cuatro preguntas, siempre sobre la misma semana:
 
-    pedido ingresado  →  DTE emitido  →  sale a ruta  →  entregada
-     (vendedor)          (logística)     (logística)     (terreno)
+    1. ¿Cuántas gestiones hubo?          (contra la meta)
+    2. ¿Cuántas se entregaron?           (% de entrega)
+    3. ¿Cuántas volvieron y por qué?     (motivos de rechazo)
+    4. ¿Cuáles siguen en ruta?
 
-Las metas se editan acá mismo (rol gerencia) y quedan guardadas por mes, igual
-que los objetivos de venta: así el histórico conserva contra qué se medía en
-cada momento.
+La regla que evita el enredo: TODO se cuenta sobre las gestiones de la semana,
+es decir, fletes de máquina con documento (DTE) emitido en esas fechas. Un
+pedido ingresado antes cuenta en la semana en que se emitió su documento, y el
+% de entrega, los rechazos y los que siguen en ruta son esas mismas gestiones,
+no otro grupo. Por eso se sacaron de la vista los indicadores que miraban otra
+cosa (% concretado, mediana de días, cola vencida, parque neto): cada uno tenía
+su propio denominador y obligaba a explicar cuál era cuál.
+
+Lo demás —la cola de pedidos sin documento, las entregas en pesos, los Excel y
+las metas— queda abajo, plegado.
 """
 import datetime
 
@@ -22,91 +29,34 @@ from app.auth import es_gerencia
 from app.styles import fmt_clp
 from app.data import (get_objetivos_maquinas, upsert_objetivos_maquinas,
                       get_dim_cliente_full)
-from app.kpis_maquinas import (cargar_todo, calcular_kpis, calcular_flujo,
-                               generar_alertas, semanal)
+from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
+                                 SIN_INFO)
+from app.kpis_maquinas import cargar_todo
 
-_C = {"azul": "#C01E6E", "chart": "#E62984", "verde": "#1A7F4B",
-      "amrl": "#D4881E", "rojo": "#C0392B", "slate": "#64748B"}
+_C = {"verde": "#1A7F4B", "amrl": "#D4881E", "rojo": "#C0392B",
+      "gris": "#9CA3AF", "rosa": "#E62984", "slate": "#64748B"}
 
-# La meta se mide por semana, así que las semanas van primero. Las opciones de
-# semana son relativas a HOY (lunes a domingo); las de mes, al período del
-# sidebar, que es como se mira el cierre.
+# Semanas de lunes a domingo, relativas a hoy. Gerencia mide por semana.
 _RANGOS = {
-    "Semana en curso": ("semana", 0),
     "Semana pasada": ("semana", 1),
-    "Últimas 4 semanas": ("semana", 4),
-    "Mes en curso": ("mes", 1),
-    "Últimos 3 meses": ("mes", 3),
-    "Últimos 6 meses": ("mes", 6),
-    "Últimos 12 meses": ("mes", 12),
+    "Semana en curso": ("semana", 0),
+    "Hace 2 semanas": ("semana", 2),
+    "Hace 3 semanas": ("semana", 3),
+    "Mes en curso": ("mes", 0),
 }
 
-# Metas editables: (clave, etiqueta, tipo, ayuda)
+# Cuántas semanas muestra el gráfico de tendencia.
+_SEMANAS_TENDENCIA = 8
+
+_MOV = {"nueva": "Instalación", "cambio": "Cambio", "retiro": "Retiro"}
+
+# Solo las metas que esta página usa. El resto de las columnas de
+# objetivos_maquinas se conserva en la base y lo sigue usando el Excel.
 _CAMPOS_META = [
-    ("meta_gestiones_semana", "Gestiones con DTE por semana", "int",
-     "Meta del equipo completo, no por vendedor. Instalación, cambio y retiro suman igual."),
-    ("meta_pedidos_semana", "Pedidos ingresados por semana", "int",
-     "Lo único que el vendedor controla entero. Déjalo en 0 si no quieres fijarle meta."),
-    ("meta_pct_concretado", "% Concretado (pedido a DTE)", "pct",
-     "De lo que se ingresa, cuánto termina con documento emitido."),
-    ("meta_dias_gestion", "Días de ingreso a DTE (mediana)", "int",
-     "Cuánto puede esperar un pedido antes de que se emita el documento."),
-    ("meta_cola_vencida", "Cola vencida (más de 30 días)", "int",
-     "Cuántos pedidos sin DTE de más de un mes se toleran."),
-    ("meta_pct_entregado", "% Entregado", "pct",
-     "De lo despachado, cuánto se confirma entregado en terreno."),
-    ("meta_pct_rechazo", "% Rechazo", "pct",
-     "Tope de despachos que vuelven rechazados."),
-    ("meta_conversion_inst", "Conversión de instalación", "pct",
-     "De las instalaciones gestionadas, cuántas se confirman en terreno."),
-    ("meta_parque_neto", "Parque neto por mes", "int",
-     "Instalaciones menos retiros. Cero significa 'que no siga cayendo'."),
-]
-
-
-# Qué contesta cada indicador y de dónde sale el número, para la revisión
-# tarjeta por tarjeta.
-_AYUDA = [
-    ("Pedidos ingresados por semana",
-     "Cuánto pidió el vendedor. Es lo único que controla entero.",
-     "Pedidos de flete de Autoventa, contados por su fecha de INGRESO."),
-    ("Gestiones con DTE por semana",
-     "El volumen que llega a documento emitido: la meta de las 22.",
-     "Líneas FL facturadas en Obuma, contadas en la semana del DOCUMENTO. "
-     "Instalación, cambio y retiro suman igual. Ojo: no son los pedidos "
-     "ingresados esa semana — la mayoría son pedidos de semanas anteriores que "
-     "recién ahora se facturaron."),
-    ("% Concretado (pedido a DTE)",
-     "De lo que se ingresa, cuánto termina con documento.",
-     "Pedidos con DTE ÷ pedidos ingresados. Los anulados o reingresados con "
-     "otro número no cuentan."),
-    ("Días de ingreso a DTE",
-     "Cuánto espera un pedido hasta que se emite el documento.",
-     "Mediana de días entre la fecha del pedido y la del DTE."),
-    ("Cola vencida",
-     "El atraso acumulado: pedidos que ya llevan más de un mes.",
-     "Pedidos sin DTE con más de 30 días desde que se ingresaron. Salen todos "
-     "los abiertos, no solo los del período."),
-    ("% Entregado",
-     "De lo que salió a ruta, cuánto se confirmó entregado.",
-     "Entregadas ÷ las MISMAS gestiones de la primera tarjeta (las del período), "
-     "no los pedidos ingresados. Lo que no tiene despacho cargado queda fuera "
-     "del cálculo, no cuenta como fallado. En un período recién cerrado buena "
-     "parte sigue en ruta, así que el número parte bajo y sube solo."),
-    ("% Rechazo",
-     "Cuánto vuelve del camión sin entregar.",
-     "Rechazadas ÷ movimientos con información de despacho."),
-    ("Conversión de instalación",
-     "De las máquinas nuevas gestionadas, cuántas quedaron instaladas.",
-     "Instalaciones (FL-4) entregadas ÷ instalaciones con información."),
-    ("Parque neto",
-     "Si el parque en la calle crece o cae.",
-     "Instalaciones (FL-4) menos retiros (FL-2). Es el crecimiento, NO el "
-     "parque total: las máquinas puestas antes de 2026 no están registradas."),
-    ("Cobertura del cruce",
-     "Cuánto del período se puede juzgar. Si esto cae, lo de terreno miente.",
-     "Movimientos con despacho cruzado ÷ total. Acuña no pasa por Autoventa, "
-     "así que sus movimientos nunca tienen despacho."),
+    ("meta_gestiones_semana", "Gestiones por semana", "int",
+     "Meta del equipo completo. Instalación, cambio y retiro suman igual."),
+    ("meta_pct_entregado", "% de entrega", "pct",
+     "De las gestiones de la semana, cuántas se confirman entregadas."),
 ]
 
 
@@ -115,313 +65,63 @@ def _sec(title: str):
                 unsafe_allow_html=True)
 
 
-def _rango(anio: int, mes: int):
-    """(inicio, fin) del período elegido. Semanas de lunes a domingo."""
+def _rango():
+    """(inicio, fin) de la semana o mes elegido."""
     tipo, n = _RANGOS.get(st.session_state.get("cm_rango", "Semana pasada"),
                           ("semana", 1))
-    if tipo == "semana":
-        hoy = datetime.date.today()
-        lunes = hoy - datetime.timedelta(days=hoy.weekday())
-        if n == 0:                       # semana en curso: hasta hoy
-            return lunes, hoy
-        if n == 1:                       # la semana cerrada anterior
-            fin = lunes - datetime.timedelta(days=1)
-            return fin - datetime.timedelta(days=6), fin
-        fin = lunes - datetime.timedelta(days=1)   # n semanas cerradas
-        return fin - datetime.timedelta(days=7 * n - 1), fin
-    fin_mes = (datetime.date(anio + (mes // 12), (mes % 12) + 1, 1)
-               - datetime.timedelta(days=1))
-    ini_num = (anio * 12 + mes - 1) - (n - 1)
-    return datetime.date(ini_num // 12, ini_num % 12 + 1, 1), fin_mes
+    hoy = datetime.date.today()
+    if tipo == "mes":
+        return hoy.replace(day=1), hoy
+    lunes = hoy - datetime.timedelta(days=hoy.weekday())
+    ini = lunes - datetime.timedelta(days=7 * n)
+    fin = hoy if n == 0 else ini + datetime.timedelta(days=6)
+    return ini, fin
 
 
-# Los cuatro que van arriba, grandes: uno por etapa del recorrido. El resto vive
-# en la tabla — diez tarjetas iguales no dejan ver cuál importa.
-_DESTACADOS = ["gestiones_semana", "pct_concretado", "pct_entregado", "parque_neto"]
-
-_COLOR_SEV = {"ok": "verde", "alerta": "amarillo", "critico": "rojo",
-              "sin_meta": "gris"}
-_TXT_SEV = {"ok": "en meta", "alerta": "cerca", "critico": "lejos",
-            "sin_meta": "sin meta"}
-
-
-def _barra(logro, sev: str, alto: str = ".45rem") -> str:
-    """
-    Barra de cumplimiento: el 100% es la meta, no el máximo de la escala.
-
-    Se corta a 130% para que un indicador muy sobrecumplido no aplaste
-    visualmente a los demás y la comparación entre filas siga sirviendo.
-    """
-    if logro is None:
-        return ""
-    pct = max(min(logro, 1.3), 0) / 1.3 * 100
-    color = "var(--%s)" % _COLOR_SEV.get(sev, "gris")
+def _tarjeta(titulo: str, valor: str, color: str, linea1: str,
+             linea2: str = "", barra: float | None = None) -> str:
+    """Tarjeta grande con un número, su contexto y (opcional) una barra."""
+    barra_html = ""
+    if barra is not None:
+        ancho = max(min(barra, 1.0), 0) * 100
+        barra_html = (
+            '<div style="background:var(--gris-light);border-radius:99px;'
+            'height:.5rem;overflow:hidden;margin:.45rem 0 .25rem">'
+            f'<div style="width:{ancho:.0f}%;height:100%;background:{color};'
+            'border-radius:99px"></div></div>')
     return (
-        '<div style="background:var(--gris-light);border-radius:99px;'
-        'height:%s;overflow:hidden;margin:.35rem 0 .2rem">'
-        '<div style="width:%.0f%%;height:100%%;background:%s;'
-        'border-radius:99px"></div></div>' % (alto, pct, color)
-    )
-
-
-def _tarjeta_destacada(k: dict) -> str:
-    """Tarjeta grande: el número, contra qué se compara y cuán lejos está."""
-    color = _COLOR_SEV.get(k["severidad"], "")
-    cls = ("kpi-value " + color if color in ("verde", "rojo", "amarillo")
-           else "kpi-value")
-    meta = ("meta %s · <b>%s</b> de la meta" % (k["meta_txt"], k["logro_txt"])
-            if k["meta"] is not None else "sin meta fijada")
-    return (
-        '<div class="kpi-card" style="text-align:left">'
-        '<div class="kpi-label">%s</div>'
-        '<div class="%s">%s</div>'
-        '%s'
-        '<div class="kpi-sub">%s</div>'
-        '<div class="kpi-sub" style="opacity:.7">%s</div>'
-        '</div>' % (k["nombre"], cls, k["valor_txt"],
-                    _barra(k["logro"], k["severidad"], ".5rem"),
-                    meta, k["detalle"])
-    )
-
-
-def _tabla_cumplimiento(kpis: list) -> str:
-    """Todos los indicadores en una tabla que se lee de un vistazo."""
-    filas = []
-    for k in kpis:
-        sev = k["severidad"]
-        color = _COLOR_SEV.get(sev, "gris")
-        chip = ('<span style="background:var(--%s);color:#fff;border-radius:99px;'
-                'padding:.12rem .5rem;font-size:.66rem;font-weight:700;'
-                'white-space:nowrap">%s</span>' % (color, _TXT_SEV[sev]))
-        filas.append(
-            '<tr style="border-bottom:1px solid var(--gris-light)">'
-            '<td style="padding:.55rem .7rem"><b>%s</b>'
-            '<div style="color:var(--gris);font-size:.72rem">%s · %s</div></td>'
-            '<td style="padding:.55rem .7rem;text-align:right;'
-            'font-variant-numeric:tabular-nums;font-weight:700;'
-            'font-size:1rem">%s</td>'
-            '<td style="padding:.55rem .7rem;text-align:right;'
-            'font-variant-numeric:tabular-nums;color:var(--gris)">%s</td>'
-            '<td style="padding:.55rem .7rem;min-width:130px">%s'
-            '<div style="font-size:.7rem;color:var(--gris)">%s de la meta</div>'
-            '</td>'
-            '<td style="padding:.55rem .7rem;text-align:center">%s</td>'
-            '</tr>' % (k["nombre"], k["grupo"], k["responsable"],
-                       k["valor_txt"], k["meta_txt"],
-                       _barra(k["logro"], sev), k["logro_txt"], chip)
-        )
-    return (
-        '<div style="overflow-x:auto;background:var(--bg-card);'
-        'border-radius:12px;box-shadow:var(--sombra)">'
-        '<table style="width:100%;border-collapse:collapse;font-size:.85rem">'
-        '<thead><tr style="background:var(--rosa-deep);color:#fff">'
-        '<th style="text-align:left;padding:.55rem .7rem">Indicador</th>'
-        '<th style="text-align:right;padding:.55rem .7rem">Resultado</th>'
-        '<th style="text-align:right;padding:.55rem .7rem">Meta</th>'
-        '<th style="text-align:left;padding:.55rem .7rem">Cumplimiento</th>'
-        '<th style="text-align:center;padding:.55rem .7rem">Estado</th>'
-        '</tr></thead><tbody>' + "".join(filas) + '</tbody></table></div>'
-    )
-
-
-def _mapa_vendedor(mov) -> dict:
-    """id → nombre, reutilizando lo que ya trae el detalle de movimientos."""
-    if mov is None or mov.empty or "Vendedor" not in mov.columns:
-        return {}
-    return dict(mov.drop_duplicates("vendedor_id")
-                .set_index("vendedor_id")["Vendedor"])
+        '<div class="kpi-card" style="text-align:left;padding:1.1rem 1.2rem">'
+        f'<div class="kpi-label">{titulo}</div>'
+        f'<div class="kpi-value" style="color:{color};font-size:2.3rem">{valor}</div>'
+        f'{barra_html}'
+        f'<div class="kpi-sub" style="font-size:.8rem">{linea1}</div>'
+        + (f'<div class="kpi-sub" style="font-size:.74rem;opacity:.75">{linea2}</div>'
+           if linea2 else "")
+        + '</div>')
 
 
 @st.cache_data(show_spinner=False, ttl=600)
-def _dim_cliente_nombres(_client) -> dict:
-    """RUT → razón social. Cosmético: si falla, la tabla sale con el RUT."""
+def _nombres_cliente(_client) -> dict:
     try:
-        from app.data import get_dim_cliente_full
         d = get_dim_cliente_full(_client)
-        return dict(zip(d["rut"], d["razon_social"])) if not d.empty else {}
+        return dict(zip(d["rut"], d["razon_social"].astype(str).str.strip()))
     except Exception:
         return {}
 
 
-def _nombre_cliente(client, ruts):
-    return ruts.map(_dim_cliente_nombres(client)).fillna("(sin nombre)")
-
-
-def _panel_alertas(alertas: list) -> str:
-    """Las alertas ya vienen ordenadas por urgencia; se muestran las cinco primeras."""
-    if not alertas:
-        return ('<div class="estado-vacio">Todos los indicadores con meta están '
-                'en verde.</div>')
-    filas = []
-    for a in alertas[:5]:
-        color = _COLOR_SEV.get(a["severidad"], "gris")
-        texto = a["texto"][0].upper() + a["texto"][1:]
-        filas.append(
-            '<div style="display:flex;gap:.7rem;padding:.6rem 0;'
-            'border-bottom:1px solid var(--gris-light)">'
-            '<div style="width:4px;border-radius:99px;background:var(--%s);'
-            'flex:none"></div><div>'
-            '<div style="font-weight:600;font-size:.88rem">%s</div>'
-            '<div style="color:var(--gris);font-size:.78rem">%s · <b>%s</b></div>'
-            '</div></div>' % (color, texto, a["accion"], a["responsable"])
-        )
-    return "".join(filas)
-
-
-def _seccion_sin_dte(client, mov, ped, f_ini=None, f_fin=None):
-    """
-    La cola de pedidos ingresados que todavía no tienen documento.
-
-    Va arriba, junto a las alertas, y no al final entre los gráficos: es la
-    lista con la que efectivamente se trabaja, y enterrarla equivale a no
-    tenerla. Muestra todo lo abierto hoy, sin importar el período elegido,
-    porque un pedido trabado hace tres meses hay que verlo igual aunque se esté
-    mirando la semana pasada.
-    """
-    cola = (ped[ped["_sin_dte"] & ~ped["_fantasma"]].copy()
-            if ped is not None and not ped.empty else pd.DataFrame())
-    st.divider()
-    _sec("Pedidos sin DTE · %d esperando documento" % len(cola))
-    if cola.empty:
-        st.success("No hay pedidos esperando documento.")
-    else:
-        cola["Días"] = (pd.Timestamp(datetime.date.today())
-                        - cola["_ingreso"]).dt.days
-        c1, c2 = st.columns([38, 62])
-        with c1:
-            tramos = pd.cut(cola["Días"], [-1, 7, 30, 90, 10 ** 6],
-                            labels=["Hasta 7 días", "8 a 30", "31 a 90",
-                                    "Más de 90"])
-            res = tramos.value_counts().reindex(
-                ["Hasta 7 días", "8 a 30", "31 a 90", "Más de 90"]).fillna(0)
-            fig3 = go.Figure(go.Bar(
-                x=res.index.tolist(), y=res.values.tolist(),
-                marker_color=[_C["verde"], _C["amrl"], _C["rojo"], "#7B241C"],
-                text=res.values.tolist(), textposition="auto"))
-            fig3.update_layout(height=290, margin=dict(l=0, r=0, t=10, b=0),
-                               yaxis=dict(showgrid=False),
-                               plot_bgcolor="rgba(0,0,0,0)",
-                               paper_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig3, use_container_width=True)
-            del_periodo = (int(cola["_ingreso"].between(
-                pd.Timestamp(f_ini), pd.Timestamp(f_fin)).sum())
-                if f_ini and f_fin else None)
-            extra = (f" **{del_periodo} de ellos se ingresaron en el período "
-                     f"elegido**; el resto viene de antes."
-                     if del_periodo is not None else "")
-            st.caption(f"{len(cola)} pedidos ingresados esperando que se emita "
-                       "el documento. Salen todos los abiertos, sin importar el "
-                       f"período: el de hace tres meses es el que más urge.{extra}")
-        with c2:
-            vmap = _mapa_vendedor(mov)
-            detalle = pd.DataFrame({
-                "Días": cola["Días"],
-                "Fecha pedido": cola["_ingreso"].dt.date,
-                "N° pedido": cola["n_pedido"],
-                "Movimiento": cola["_mov"].map(
-                    {"nueva": "Instalación", "cambio": "Cambio",
-                     "retiro": "Retiro"}).fillna("(otro)"),
-                "Vendedor": cola["vendedor_id"].map(vmap).fillna("Sin asignar"),
-                "Cliente": _nombre_cliente(client, cola["cliente_rut"]),
-                "RUT": cola["cliente_rut"],
-            }).sort_values("Días", ascending=False)
-            st.dataframe(detalle, use_container_width=True, hide_index=True,
-                         height=290)
-            st.download_button(
-                "⬇️ Descargar la cola en CSV",
-                detalle.to_csv(index=False).encode("utf-8-sig"),
-                f"sin_dte_{datetime.date.today():%Y%m%d}.csv", "text/csv",
-                key="dl_cola")
-
-
-
-def _seccion_entregas(client, f_ini, f_fin, mov, desp):
-    """
-    Efectividad del despacho: cuánto de lo que salió a ruta llegó.
-
-    Va en pesos para productos y en unidades para máquinas, y NO se mezclan: el
-    flete de una máquina se factura a $1 nominal, así que valorizarla daría un
-    número sin sentido.
-    """
-    st.divider()
-    _sec("Entregas del período · productos y máquinas")
-
-    if desp is None or desp.empty:
-        st.markdown('<div class="estado-vacio">Sin despachos cargados en el '
-                    'período.</div>', unsafe_allow_html=True)
-        return
-
-    from app.data import get_ventas_rango
-    from app.export_entregas import preparar_entregas, _tabla_por
-
-    try:
-        ventas = get_ventas_rango(client, f_ini, f_fin)
-    except Exception:
-        st.warning("No se pudieron leer las ventas del período.")
-        return
-
-    d = preparar_entregas(ventas, desp, mov)
-    en_rango = d[d["fecha_ruta"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))]
-    if en_rango.empty:
-        st.markdown('<div class="estado-vacio">Sin despachos en el período.</div>',
-                    unsafe_allow_html=True)
-        return
-
-    prods, maqs = en_rango[~en_rango["Es máquina"]], en_rango[en_rango["Es máquina"]]
-    ent = float(prods.loc[prods["_est"] == "Entregada", "Monto facturado"].sum())
-    rech = float(prods.loc[prods["_est"] == "Rechazada", "Monto facturado"].sum())
-    pend = float(prods.loc[prods["_est"] == "Pendiente", "Monto facturado"].sum())
-    desp_total = ent + rech + pend
-    m_ent = int((maqs["_est"] == "Entregada").sum())
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("% Entrega · productos",
-              f"{ent / desp_total * 100:.1f}%" if desp_total else "—",
-              help="Plata entregada sobre plata que salió a ruta.")
-    c2.metric("Rechazado", fmt_clp(rech),
-              help="Monto facturado de los despachos que volvieron.")
-    c3.metric("% Entrega · máquinas",
-              f"{m_ent / len(maqs) * 100:.1f}%" if len(maqs) else "—",
-              help="En unidades: el flete de máquina se factura a $1.")
-    c4.metric("Máquinas despachadas", f"{len(maqs)}")
-
-    t = _tabla_por(prods, "Transportista", "monto", "Transportista")
-    if not t.empty:
-        vista = t.copy()
-        for c in [x for x in vista.columns if x not in ("Transportista", "% de entrega")]:
-            vista[c] = vista[c].apply(lambda x: fmt_clp(x) if pd.notna(x) and x != "" else "")
-        vista["% de entrega"] = vista["% de entrega"].apply(
-            lambda x: f"{x*100:.1f}%" if pd.notna(x) and x != "" else "")
-        st.dataframe(vista, use_container_width=True, hide_index=True)
-    st.caption("Los productos se miden en pesos y las máquinas en unidades. El "
-               "informe completo abre además el detalle de cada rechazo con el "
-               "comentario del repartidor.")
-
-    if st.button("🚚 Generar informe de entregas", key="btn_informe_entregas"):
-        with st.spinner("Armando el informe…"):
-            from app.export_entregas import libro_entregas
-            try:
-                cli_dim = get_dim_cliente_full(client)
-            except Exception:
-                cli_dim = None
-            # Ventana ancha a propósito: lo facturado a fin de mes sale a
-            # ruta al mes siguiente, y sin eso se vería como "sin despacho".
-            try:
-                from app.data import get_despachos_rango
-                desp_ancho = get_despachos_rango(
-                    client, f_ini - datetime.timedelta(days=60),
-                    f_fin + datetime.timedelta(days=60))
-            except Exception:
-                desp_ancho = desp
-            data = libro_entregas(ventas, desp_ancho, f_ini, f_fin, mov, cli_dim)
-        st.session_state["_cm_entregas"] = ((str(f_ini), str(f_fin)), data)
-    g = st.session_state.get("_cm_entregas")
-    if g and g[0] == (str(f_ini), str(f_fin)):
-        st.download_button(
-            "⬇️ Descargar informe de entregas", g[1],
-            f"entregas_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True, key="dl_entregas")
+def _conteo(w: pd.DataFrame) -> dict:
+    """Los números de la semana, todos sobre el mismo grupo de gestiones."""
+    est = w["Estado entrega"] if not w.empty else pd.Series(dtype=str)
+    n = len(w)
+    ent = int((est == ENTREGADA).sum())
+    rech = int((est == RECHAZADA).sum())
+    ruta = int((est == EN_RUTA).sum())
+    sin_desp = int((est == SIN_DESPACHO).sum())
+    sin_info = int((est == SIN_INFO).sum())
+    base = n - sin_info
+    return dict(n=n, ent=ent, rech=rech, ruta=ruta, sin_desp=sin_desp,
+                sin_info=sin_info, base=base,
+                pct=(ent / base) if base else None)
 
 
 def render(client, anio: int, mes: int):
@@ -431,184 +131,311 @@ def render(client, anio: int, mes: int):
 
     c1, c2 = st.columns([1, 3])
     with c1:
-        st.selectbox("Período", list(_RANGOS), key="cm_rango", index=1)
-    f_ini, f_fin = _rango(anio, mes)
-    dias_rango = (f_fin - f_ini).days + 1
+        st.selectbox("Semana", list(_RANGOS), key="cm_rango")
+    f_ini, f_fin = _rango()
     with c2:
-        extra = ""
-        if dias_rango < 7:
-            extra = (f" La semana va a medias ({dias_rango} de 7 días), así que "
-                     "el volumen todavía no se puede juzgar contra la meta.")
-        st.caption(f"📅 {f_ini:%d/%m/%Y} → {f_fin:%d/%m/%Y}. Las metas son las "
-                   f"vigentes para {mes:02d}/{anio}; se editan más abajo.{extra}")
+        st.markdown(
+            f'<div style="padding-top:1.9rem;color:var(--gris);font-size:.88rem">'
+            f'📅 <b>{f_ini:%d/%m/%Y} → {f_fin:%d/%m/%Y}</b>'
+            + (" · semana en curso, todavía se está llenando"
+               if f_fin == datetime.date.today() else "")
+            + '</div>', unsafe_allow_html=True)
 
-    metas = get_objetivos_maquinas(client, anio, mes)
-    with st.spinner("Cargando movimientos, pedidos y despachos…"):
-        mov, ped, desp = cargar_todo(client, f_ini, f_fin)
+    metas = get_objetivos_maquinas(client, f_ini.year, f_ini.month)
+    meta_g = metas.get("meta_gestiones_semana")
+    meta_e = metas.get("meta_pct_entregado")
+
+    # Se cargan las 8 semanas de una vez: la del período y las anteriores para
+    # la tendencia. Así la tarjeta y el gráfico salen del mismo dato.
+    ini_tend = f_ini - datetime.timedelta(weeks=_SEMANAS_TENDENCIA - 1)
+    with st.spinner("Cargando gestiones y despachos…"):
+        mov, ped, desp = cargar_todo(client, ini_tend, f_fin)
 
     if mov is None or mov.empty:
-        st.markdown('<div class="estado-vacio">Sin movimientos de máquinas en '
-                    'el período.</div>', unsafe_allow_html=True)
-        _editor_metas(client, anio, mes, metas)
+        st.markdown('<div class="estado-vacio">Sin gestiones en el período.</div>',
+                    unsafe_allow_html=True)
+        _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas)
         return
 
-    kpis = calcular_kpis(mov, ped, f_ini, f_fin, metas)
-    alertas = generar_alertas(mov, ped, kpis)
-    en_meta = sum(1 for k in kpis if k["cumple"] is True)
-    con_meta = sum(1 for k in kpis if k["cumple"] is not None)
-    criticos = sum(1 for k in kpis if k["severidad"] == "critico")
+    w = mov[mov["fecha"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))].copy()
+    c = _conteo(w)
 
-    if metas.get("_origen") == "default":
-        st.info("Todavía no hay metas guardadas: se están usando las de "
-                "referencia. Fíjalas abajo para que queden registradas.")
-    elif metas.get("_origen") == "heredado":
-        st.caption("Metas heredadas de %02d/%d: este mes no tiene metas propias."
-                   % (metas["mes"], metas["anio"]))
+    st.info(
+        f"**Cómo leer esta página.** Todo se cuenta sobre las **gestiones de la "
+        f"semana**: fletes de máquina con documento emitido entre el "
+        f"{f_ini:%d/%m} y el {f_fin:%d/%m}. Una gestión puede venir de un pedido "
+        f"ingresado semanas antes — lo que cuenta es la fecha del documento. "
+        f"Las entregas, los rechazos y los que van en ruta son **esas mismas "
+        f"{c['n']} gestiones**, no otro grupo.")
 
-    # ── Titulares: uno por etapa del recorrido ───────────────────────────────
-    dest = [k for c in _DESTACADOS for k in kpis if k["clave"] == c]
-    st.markdown('<div class="kpi-grid-4">'
-                + "".join(_tarjeta_destacada(k) for k in dest)
-                + '</div>', unsafe_allow_html=True)
+    # ── 1-4. Las cuatro respuestas ───────────────────────────────────────────
+    if meta_g:
+        linea_g = f"meta {meta_g} · {c['n'] / meta_g * 100:.0f}% de la meta"
+        color_g = _C["verde"] if c["n"] >= meta_g else (
+            _C["amrl"] if c["n"] >= meta_g * 0.8 else _C["rojo"])
+        barra_g = c["n"] / meta_g
+    else:
+        linea_g, color_g, barra_g = "sin meta fijada", _C["slate"], None
 
-    # ── Qué requiere acción ──────────────────────────────────────────────────
+    if c["pct"] is not None:
+        valor_e = f"{c['pct'] * 100:.0f}%"
+        if meta_e:
+            color_e = _C["verde"] if c["pct"] >= meta_e else (
+                _C["amrl"] if c["pct"] >= meta_e * 0.8 else _C["rojo"])
+            linea_e = f"{c['ent']} de {c['base']} · meta {meta_e * 100:.0f}%"
+        else:
+            color_e, linea_e = _C["slate"], f"{c['ent']} de {c['base']}"
+    else:
+        valor_e, color_e, linea_e = "—", _C["slate"], "sin despachos cargados"
+    nota_e = ("la semana recién cerró: sube a medida que se confirmen las que "
+              "van en ruta" if c["ruta"] else "")
+
+    rech = w[w["Estado entrega"] == RECHAZADA]
+    motivo_top = (rech["Motivo del rechazo"].value_counts().index[0]
+                  if not rech.empty else "")
+
+    st.markdown(
+        '<div class="kpi-grid-4">'
+        + _tarjeta("Gestiones de la semana", str(c["n"]), color_g, linea_g,
+                   "documentos de flete emitidos", barra_g)
+        + _tarjeta("% de entrega", valor_e, color_e, linea_e, nota_e, c["pct"])
+        + _tarjeta("Siguen en ruta", str(c["ruta"] + c["sin_desp"]),
+                   _C["amrl"] if (c["ruta"] + c["sin_desp"]) else _C["verde"],
+                   f"{c['ruta']} en camino" + (f" · {c['sin_desp']} sin despacho"
+                                               if c["sin_desp"] else ""),
+                   "todavía sin confirmar entrega")
+        + _tarjeta("Rechazadas", str(c["rech"]),
+                   _C["rojo"] if c["rech"] else _C["verde"],
+                   (f"motivo principal: {motivo_top}" if motivo_top
+                    else "ninguna volvió"),
+                   "ver el detalle abajo" if c["rech"] else "")
+        + '</div>', unsafe_allow_html=True)
+
+    # ── La semana en una barra ───────────────────────────────────────────────
+    if c["n"]:
+        partes = [("Entregadas", c["ent"], _C["verde"]),
+                  ("En ruta", c["ruta"], _C["amrl"]),
+                  ("Sin despacho", c["sin_desp"] + c["sin_info"], _C["gris"]),
+                  ("Rechazadas", c["rech"], _C["rojo"])]
+        fig = go.Figure()
+        for nombre, val, color in partes:
+            if not val:
+                continue
+            fig.add_trace(go.Bar(
+                y=[""], x=[val], name=nombre, orientation="h",
+                marker_color=color, text=f"{nombre} {val}",
+                textposition="inside", insidetextanchor="middle",
+                hovertemplate=f"{nombre}: {val}<extra></extra>"))
+        fig.update_layout(barmode="stack", height=110, showlegend=False,
+                          margin=dict(l=0, r=0, t=8, b=0),
+                          xaxis=dict(visible=False), yaxis=dict(visible=False),
+                          plot_bgcolor="rgba(0,0,0,0)",
+                          paper_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── Rechazos y en ruta, lado a lado ──────────────────────────────────────
+    nombres = _nombres_cliente(client)
+    col1, col2 = st.columns(2)
+    with col1:
+        _sec(f"Por qué se rechazaron · {c['rech']}")
+        if rech.empty:
+            st.success("Ninguna gestión de la semana volvió rechazada.")
+        else:
+            motivos = rech["Motivo del rechazo"].value_counts()
+            st.markdown(" · ".join(f"**{m}** ({n})" for m, n in motivos.items()))
+            st.dataframe(pd.DataFrame({
+                "Cliente": rech["cliente_rut"].map(nombres).fillna(rech["cliente_rut"]),
+                "Movimiento": rech["tipo_mov"].map(_MOV),
+                "Motivo": rech["Motivo del rechazo"],
+                "Lo que dijo el repartidor": rech["Comentario de entrega"],
+                "Transportista": rech["Transportista"],
+            }), use_container_width=True, hide_index=True)
+    with col2:
+        ruta = w[w["Estado entrega"].isin([EN_RUTA, SIN_DESPACHO])].copy()
+        _sec(f"Siguen en ruta · {len(ruta)}")
+        if ruta.empty:
+            st.success("Todas las gestiones de la semana tienen resultado.")
+        else:
+            hoy = pd.Timestamp(datetime.date.today())
+            ruta["_desde"] = ruta["Fecha ruta"].fillna(ruta["fecha"])
+            st.dataframe(pd.DataFrame({
+                "Cliente": ruta["cliente_rut"].map(nombres).fillna(ruta["cliente_rut"]),
+                "Movimiento": ruta["tipo_mov"].map(_MOV),
+                "Estado": ruta["Estado entrega"].map(
+                    {EN_RUTA: "En camino", SIN_DESPACHO: "Sin despacho aún"}),
+                "Días": (hoy - ruta["_desde"]).dt.days,
+                "Transportista": ruta["Transportista"].fillna("—"),
+                "Vendedor": ruta["Vendedor"],
+            }).sort_values("Días", ascending=False),
+                use_container_width=True, hide_index=True)
+            st.caption("«Sin despacho aún» es un documento emitido que todavía no "
+                       "aparece en el Excel de despachos: o no ha salido, o falta "
+                       "cargar el archivo.")
+
+    # ── Tendencia ────────────────────────────────────────────────────────────
     st.divider()
-    _sec("Qué requiere acción" + (f" · {criticos} indicadores lejos de la meta"
-                                  if criticos else ""))
-    st.markdown(_panel_alertas(alertas), unsafe_allow_html=True)
+    _sec(f"Últimas {_SEMANAS_TENDENCIA} semanas")
+    _grafico_tendencia(mov, f_fin, meta_g)
 
-    # ── La cola de sin DTE, pegada a las alertas ─────────────────────────────
-    _seccion_sin_dte(client, mov, ped, f_ini, f_fin)
+    _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w)
 
-    # ── Todos los indicadores ────────────────────────────────────────────────
-    st.divider()
-    _sec(f"Todos los indicadores · {en_meta} de {con_meta} en meta")
-    st.markdown(_tabla_cumplimiento(kpis), unsafe_allow_html=True)
-    st.caption("El cumplimiento es la fracción de la meta alcanzada: 100% es "
-               "estar en meta. En los indicadores donde menos es mejor "
-               "—rechazo, días de gestión, cola— la razón va invertida, así que "
-               "100% siempre significa lo mismo.")
-    with st.expander("ℹ️ Cómo se calcula cada indicador", expanded=False):
-        st.dataframe(pd.DataFrame(_AYUDA, columns=["Indicador", "Qué mide",
-                                                   "De dónde sale"]),
-                     use_container_width=True, hide_index=True)
 
-    # ── El recorrido ─────────────────────────────────────────────────────────
-    st.divider()
-    _sec("El recorrido de una máquina")
-    flujo = calcular_flujo(mov, ped, f_ini, f_fin)
-    fig = go.Figure(go.Bar(
-        x=[f["valor"] for f in flujo],
-        y=[f["etapa"] for f in flujo],
-        orientation="h",
-        marker_color=[_C["chart"], _C["azul"], _C["slate"], _C["verde"]],
-        text=[f'{f["valor"]}' for f in flujo], textposition="auto",
-        hovertext=[f'{f["responsable"]} · {f["detalle"]}' for f in flujo],
-        hoverinfo="text",
-    ))
-    fig.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=10),
-                      yaxis=dict(autorange="reversed"),
-                      xaxis=dict(showgrid=False),
+def _grafico_tendencia(mov: pd.DataFrame, f_fin, meta_g):
+    """Barras apiladas por estado, semana a semana, con la meta y el % encima."""
+    m = mov.copy()
+    m["_sem"] = m["fecha"].dt.to_period("W-SUN")
+    fin = pd.Timestamp(f_fin).to_period("W-SUN")
+    semanas = pd.period_range(end=fin, periods=_SEMANAS_TENDENCIA, freq="W-SUN")
+    etq = [f"{p.start_time:%d/%m}" for p in semanas]
+
+    def serie(estados):
+        g = m[m["Estado entrega"].isin(estados)].groupby("_sem").size()
+        return [int(g.get(p, 0)) for p in semanas]
+
+    fig = go.Figure()
+    for nombre, estados, color in [
+            ("Entregadas", [ENTREGADA], _C["verde"]),
+            ("En ruta", [EN_RUTA], _C["amrl"]),
+            ("Sin despacho", [SIN_DESPACHO, SIN_INFO], _C["gris"]),
+            ("Rechazadas", [RECHAZADA], _C["rojo"])]:
+        fig.add_trace(go.Bar(x=etq, y=serie(estados), name=nombre,
+                             marker_color=color))
+    tot = [int((m["_sem"] == p).sum()) for p in semanas]
+    ent = serie([ENTREGADA])
+    base = [t - s for t, s in zip(tot, serie([SIN_INFO]))]
+    fig.add_trace(go.Scatter(
+        x=etq, y=tot, mode="text", showlegend=False,
+        text=[f"{e / b * 100:.0f}%" if b else "" for e, b in zip(ent, base)],
+        textposition="top center", textfont=dict(size=11, color=_C["slate"]),
+        hoverinfo="skip"))
+    if meta_g:
+        fig.add_hline(y=meta_g, line_dash="dash", line_color=_C["rosa"],
+                      annotation_text=f"meta {meta_g}",
+                      annotation_position="top left")
+    fig.update_layout(barmode="stack", height=340,
+                      margin=dict(l=0, r=0, t=20, b=0),
+                      legend=dict(orientation="h", y=-0.18),
+                      xaxis=dict(title="semana que empieza el"),
+                      yaxis=dict(showgrid=False, title="gestiones"),
                       plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("La caída entre dos barras es dónde se está perdiendo: pedidos "
-               "que no llegan a documento, documentos que no salen a ruta, "
-               "despachos que no se entregan.")
+    st.caption("Cada barra es una semana de gestiones, partida según cómo "
+               "terminó. El número de arriba es su % de entrega. Las últimas "
+               "semanas siempre tienen más amarillo: todavía van en ruta.")
 
-    # ── Semana a semana ──────────────────────────────────────────────────────
-    _sec("Gestiones por semana contra la meta")
-    sem = semanal(mov, ped, f_ini, f_fin, metas.get("meta_gestiones_semana"))
-    if not sem.empty:
-        fig2 = go.Figure()
-        fig2.add_trace(go.Bar(x=sem["Semana"], y=sem["Gestiones con DTE"],
-                              name="Gestiones con DTE", marker_color=_C["chart"]))
-        fig2.add_trace(go.Bar(x=sem["Semana"], y=sem["Pedidos ingresados"],
-                              name="Pedidos ingresados", marker_color=_C["slate"],
-                              opacity=.55))
-        meta_v = metas.get("meta_gestiones_semana")
-        if meta_v:
-            fig2.add_hline(y=meta_v, line_dash="dash", line_color=_C["verde"],
-                           annotation_text=f"meta {meta_v}",
-                           annotation_position="top left")
-        fig2.update_layout(barmode="group", height=330,
-                           margin=dict(l=0, r=0, t=10, b=0),
-                           legend=dict(orientation="h", y=-0.25),
-                           yaxis=dict(showgrid=False),
-                           plot_bgcolor="rgba(0,0,0,0)",
-                           paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig2, use_container_width=True)
 
-    # ── Lo que está trabado ──────────────────────────────────────────────────
+def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
+    """Todo lo que no es la pregunta de la semana, fuera de la vista."""
     st.divider()
-    _sec("Por qué vuelven rechazados")
-    rech = mov[mov["_rechazada"]]
-    if rech.empty:
-        st.success("Sin rechazos en el período.")
-    else:
-        mot = rech["Motivo del rechazo"].value_counts().head(8)
-        fig4 = go.Figure(go.Bar(
-            x=mot.values.tolist(), y=mot.index.tolist(), orientation="h",
-            marker_color=_C["rojo"], text=mot.values.tolist(),
-            textposition="auto"))
-        fig4.update_layout(height=290, margin=dict(l=0, r=0, t=10, b=0),
-                           yaxis=dict(autorange="reversed"),
-                           xaxis=dict(showgrid=False),
-                           plot_bgcolor="rgba(0,0,0,0)",
-                           paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig4, use_container_width=True)
-        st.caption("Sale del comentario del repartidor: el campo de motivo del "
-                   "ERP llega vacío.")
 
-    _seccion_entregas(client, f_ini, f_fin, mov, desp)
+    # Pedidos que el vendedor ya ingresó y aún no tienen documento: todavía no
+    # son gestiones, por eso van aparte y sin mezclarse con los números de arriba.
+    cola = (ped[ped["_sin_dte"] & ~ped["_fantasma"]].copy()
+            if ped is not None and not ped.empty else pd.DataFrame())
+    with st.expander(f"📥 Pedidos esperando documento · {len(cola)}"):
+        st.caption("Pedidos de flete que el vendedor ya ingresó y que todavía no "
+                   "tienen DTE. Aún no son gestiones: cuando se emita el "
+                   "documento, pasan a contar arriba en esa semana. Salen todos "
+                   "los abiertos, sin importar la semana elegida.")
+        if cola.empty:
+            st.success("No hay pedidos esperando documento.")
+        else:
+            vmap = (dict(mov.drop_duplicates("vendedor_id")
+                         .set_index("vendedor_id")["Vendedor"])
+                    if mov is not None and not mov.empty else {})
+            nombres = _nombres_cliente(client)
+            det = pd.DataFrame({
+                "Días esperando": (pd.Timestamp(datetime.date.today())
+                                   - cola["_ingreso"]).dt.days,
+                "Fecha pedido": cola["_ingreso"].dt.date,
+                "N° pedido": cola["n_pedido"],
+                "Movimiento": cola["_mov"].map(_MOV).fillna("(otro)"),
+                "Vendedor": cola["vendedor_id"].map(vmap).fillna("—"),
+                "Cliente": cola["cliente_rut"].map(nombres).fillna(cola["cliente_rut"]),
+            }).sort_values("Días esperando", ascending=False)
+            st.dataframe(det, use_container_width=True, hide_index=True)
+            st.download_button("⬇️ Descargar en CSV",
+                               det.to_csv(index=False).encode("utf-8-sig"),
+                               f"sin_dte_{datetime.date.today():%Y%m%d}.csv",
+                               "text/csv", key="dl_cola")
 
-    # ── Informe ──────────────────────────────────────────────────────────────
-    st.divider()
-    _sec("Informe para gerencia")
-    st.caption("Ocho hojas: el tablero con las metas, el flujo mes a mes y "
-               "semana a semana, lo que sigue sin gestionar, el estado de los "
-               "despachos y los rechazos. El informe completo de 19 hojas sigue "
-               "en Análisis → Máquinas.")
-    if st.button("📘 Generar informe de gerencia", type="primary",
-                 key="btn_informe_gerencia"):
-        with st.spinner("Armando el informe…"):
-            from app.export_maquinas_gerencia import libro_gerencia
-            try:
-                cli_dim = get_dim_cliente_full(client)
-            except Exception:
-                cli_dim = None
-            data = libro_gerencia(mov, ped, f_ini, f_fin, metas,
-                                  st.session_state.get("cm_soc", "Ambas"),
-                                  cli_dim)
-        st.session_state["_cm_libro"] = ((str(f_ini), str(f_fin)), data)
-    guardado = st.session_state.get("_cm_libro")
-    if guardado and guardado[0] == (str(f_ini), str(f_fin)):
-        st.download_button(
-            "⬇️ Descargar informe de gerencia", guardado[1],
-            f"maquinas_gerencia_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True, key="dl_cm")
+    with st.expander("🚚 Entregas en pesos por transportista (helados y máquinas)"):
+        _entregas_pesos(client, f_ini, f_fin, mov, desp)
 
-    _editor_metas(client, anio, mes, metas)
+    with st.expander("📘 Informes Excel"):
+        st.caption("El informe de gerencia trae el detalle completo de la "
+                   "semana. El completo de 19 hojas sigue en Análisis → Máquinas.")
+        if st.button("Generar informe de gerencia", key="btn_informe_gerencia"):
+            with st.spinner("Armando el informe…"):
+                from app.export_maquinas_gerencia import libro_gerencia
+                try:
+                    cli_dim = get_dim_cliente_full(client)
+                except Exception:
+                    cli_dim = None
+                mw = (w if w is not None else
+                      mov[mov["fecha"].between(pd.Timestamp(f_ini),
+                                               pd.Timestamp(f_fin))])
+                data = libro_gerencia(mw, ped, f_ini, f_fin, metas, "Ambas", cli_dim)
+            st.session_state["_cm_libro"] = ((str(f_ini), str(f_fin)), data)
+        g = st.session_state.get("_cm_libro")
+        if g and g[0] == (str(f_ini), str(f_fin)):
+            st.download_button(
+                "⬇️ Descargar informe de gerencia", g[1],
+                f"maquinas_gerencia_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, key="dl_cm")
+
+    with st.expander(f"🎯 Metas de {f_ini.month:02d}/{f_ini.year}"):
+        _form_metas(client, f_ini.year, f_ini.month, metas)
 
 
-def _editor_metas(client, anio: int, mes: int, metas: dict):
-    """El editor va plegado: se toca una vez al mes y compite con los datos."""
-    st.divider()
-    exp = st.expander(f"🎯 Metas de {mes:02d}/{anio} — editar", expanded=False)
-    with exp:
-        st.caption("Se guardan por mes, igual que los objetivos de venta: "
-                   "cambiar la meta de este mes no reescribe contra qué se "
-                   "midieron los meses anteriores.")
-        _form_metas(client, anio, mes, metas)
+def _entregas_pesos(client, f_ini, f_fin, mov, desp):
+    """Efectividad del despacho en pesos (productos) y unidades (máquinas)."""
+    if desp is None or desp.empty:
+        st.caption("Sin despachos cargados en el período.")
+        return
+    from app.data import get_ventas_rango
+    from app.export_entregas import preparar_entregas, _tabla_por
+    try:
+        ventas = get_ventas_rango(client, f_ini, f_fin)
+    except Exception:
+        st.warning("No se pudieron leer las ventas del período.")
+        return
+    d = preparar_entregas(ventas, desp, mov)
+    d = d[d["fecha_ruta"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))]
+    if d.empty:
+        st.caption("Sin despachos en el período.")
+        return
+    prods = d[~d["Es máquina"]]
+    ent = float(prods.loc[prods["_est"] == "Entregada", "Monto facturado"].sum())
+    tot = float(prods["Monto facturado"].sum())
+    rech = float(prods.loc[prods["_est"] == "Rechazada", "Monto facturado"].sum())
+    k1, k2 = st.columns(2)
+    k1.metric("% de entrega · helados", f"{ent / tot * 100:.1f}%" if tot else "—",
+              help="Plata entregada sobre la plata que salió a ruta en el período.")
+    k2.metric("Rechazado · helados", fmt_clp(rech))
+    t = _tabla_por(prods, "Transportista", "monto", "Transportista")
+    if not t.empty:
+        v = t.copy()
+        for col in [x for x in v.columns if x not in ("Transportista", "% de entrega")]:
+            v[col] = v[col].apply(lambda x: fmt_clp(x) if pd.notna(x) and x != "" else "")
+        v["% de entrega"] = v["% de entrega"].apply(
+            lambda x: f"{x * 100:.1f}%" if pd.notna(x) and x != "" else "")
+        st.dataframe(v, use_container_width=True, hide_index=True)
+    st.caption("Se mide sobre lo que salió a ruta en el período (fecha de ruta), "
+               "no sobre lo facturado. Las máquinas no van en pesos: su flete "
+               "se factura a $1.")
 
 
 def _form_metas(client, anio: int, mes: int, metas: dict):
+    st.caption("Se guardan por mes: cambiar la meta de este mes no reescribe "
+               "contra qué se midieron los anteriores.")
     with st.form("form_metas_maquinas"):
-        cols = st.columns(3)
+        cols = st.columns(len(_CAMPOS_META))
         nuevos = {}
-        for i, (clave, etiqueta, tipo, ayuda) in enumerate(_CAMPOS_META):
+        for col, (clave, etiqueta, tipo, ayuda) in zip(cols, _CAMPOS_META):
             actual = metas.get(clave)
-            with cols[i % 3]:
+            with col:
                 if tipo == "pct":
                     nuevos[clave] = st.number_input(
                         etiqueta, min_value=0.0, max_value=100.0,
@@ -616,19 +443,14 @@ def _form_metas(client, anio: int, mes: int, metas: dict):
                         help=ayuda, key=f"meta_{clave}") / 100
                 else:
                     nuevos[clave] = st.number_input(
-                        etiqueta, value=int(actual or 0), step=1,
+                        etiqueta, min_value=0, value=int(actual or 0), step=1,
                         help=ayuda, key=f"meta_{clave}")
-        guardar = st.form_submit_button("💾 Guardar metas", type="primary",
-                                        use_container_width=True)
+        guardar = st.form_submit_button("💾 Guardar metas", type="primary")
     if guardar:
-        # 0 en una meta opcional significa "sin meta", no "meta cero": para los
-        # porcentajes y los conteos que sí admiten cero (cola vencida, parque
-        # neto) el cero es un valor legítimo y se guarda.
-        opcionales = {"meta_pedidos_semana"}
-        valores = {k: (None if (k in opcionales and not v) else v)
-                   for k, v in nuevos.items()}
+        # Solo se mandan estas dos columnas: las demás metas del mes quedan
+        # como estaban en la base (el Excel de gerencia todavía las usa).
         try:
-            upsert_objetivos_maquinas(client, anio, mes, valores)
+            upsert_objetivos_maquinas(client, anio, mes, nuevos)
             st.success(f"Metas de {mes:02d}/{anio} guardadas.")
             st.rerun()
         except Exception as exc:
