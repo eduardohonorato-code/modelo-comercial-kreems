@@ -31,7 +31,7 @@ from app.data import (get_objetivos_maquinas, upsert_objetivos_maquinas,
                       get_dim_cliente_full)
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO)
-from app.kpis_maquinas import cargar_todo
+from app.kpis_maquinas import cargar_todo, conteo_semana
 
 _C = {"verde": "#1A7F4B", "amrl": "#D4881E", "rojo": "#C0392B",
       "gris": "#9CA3AF", "rosa": "#E62984", "slate": "#64748B"}
@@ -109,21 +109,6 @@ def _nombres_cliente(_client) -> dict:
         return {}
 
 
-def _conteo(w: pd.DataFrame) -> dict:
-    """Los números de la semana, todos sobre el mismo grupo de gestiones."""
-    est = w["Estado entrega"] if not w.empty else pd.Series(dtype=str)
-    n = len(w)
-    ent = int((est == ENTREGADA).sum())
-    rech = int((est == RECHAZADA).sum())
-    ruta = int((est == EN_RUTA).sum())
-    sin_desp = int((est == SIN_DESPACHO).sum())
-    sin_info = int((est == SIN_INFO).sum())
-    base = n - sin_info
-    return dict(n=n, ent=ent, rech=rech, ruta=ruta, sin_desp=sin_desp,
-                sin_info=sin_info, base=base,
-                pct=(ent / base) if base else None)
-
-
 def render(client, anio: int, mes: int):
     if not es_gerencia():
         st.warning("Solo el rol **gerencia/admin** puede ver el control de máquinas.")
@@ -158,7 +143,7 @@ def render(client, anio: int, mes: int):
         return
 
     w = mov[mov["fecha"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))].copy()
-    c = _conteo(w)
+    c = conteo_semana(w)
 
     st.info(
         f"**Cómo leer esta página.** Todo se cuenta sobre las **gestiones de la "
@@ -363,8 +348,9 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
         _entregas_pesos(client, f_ini, f_fin, mov, desp)
 
     with st.expander("📘 Informes Excel"):
-        st.caption("El informe de gerencia trae el detalle completo de la "
-                   "semana. El completo de 19 hojas sigue en Análisis → Máquinas.")
+        st.caption("Mismos números que esta página, con el detalle de cada "
+                   "gestión, rechazo y pendiente. El informe completo de 19 hojas "
+                   "sigue en Análisis → Máquinas.")
         if st.button("Generar informe de gerencia", key="btn_informe_gerencia"):
             with st.spinner("Armando el informe…"):
                 from app.export_maquinas_gerencia import libro_gerencia
@@ -372,10 +358,9 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
                     cli_dim = get_dim_cliente_full(client)
                 except Exception:
                     cli_dim = None
-                mw = (w if w is not None else
-                      mov[mov["fecha"].between(pd.Timestamp(f_ini),
-                                               pd.Timestamp(f_fin))])
-                data = libro_gerencia(mw, ped, f_ini, f_fin, metas, "Ambas", cli_dim)
+                # Se pasan las 8 semanas: el Excel filtra el período y usa las
+                # anteriores para su hoja de tendencia, igual que la página.
+                data = libro_gerencia(mov, ped, f_ini, f_fin, metas, "Ambas", cli_dim)
             st.session_state["_cm_libro"] = ((str(f_ini), str(f_fin)), data)
         g = st.session_state.get("_cm_libro")
         if g and g[0] == (str(f_ini), str(f_fin)):

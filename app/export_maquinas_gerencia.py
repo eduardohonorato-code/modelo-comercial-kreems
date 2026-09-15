@@ -1,18 +1,21 @@
 """
-Informe de máquinas para gerencia: cinco hojas y el flujo a la vista.
+Informe de máquinas para gerencia: la misma lógica que la página.
 
-El informe completo (19 hojas) sigue existiendo para quien tiene que ir al
-detalle. Este es el otro extremo: lo que se abre en una reunión y se entiende
-sin explicación previa, contando siempre el mismo recorrido —
+Todo se cuenta sobre UN grupo: las gestiones del período, es decir, fletes de
+máquina con documento (DTE) emitido en esas fechas. Un pedido ingresado antes
+cuenta en la semana en que se emitió su documento; las entregas, los rechazos y
+los que siguen en ruta son esas mismas gestiones. La versión anterior tenía diez
+indicadores con denominadores distintos (% concretado sobre pedidos ingresados,
+cola vencida sobre todo lo abierto, parque neto…) y gerencia se enredaba igual
+que en la pantalla, así que se alinea con ella.
 
-    pedido ingresado  →  sin gestionar  →  DTE emitido  →  despacho  →  entrega
-
-Las hojas son:
-  1. Tablero            · cada indicador contra su meta, con semáforo
-  2. Flujo mensual      · el recorrido completo, mes a mes
-  3. Sin gestionar      · pedidos ingresados que siguen sin DTE, por antigüedad
-  4. Despachos y estado · qué pasó con cada máquina que salió a ruta
-  5. Rechazos           · por qué volvieron, y de quién es cada motivo
+Hojas:
+  1. Resumen              · las cuatro respuestas de la semana, contra la meta
+  2. Semana a semana      · las últimas 8 semanas partidas por resultado
+  3. Rechazos             · cuántos por motivo y el detalle de cada uno
+  4. Siguen en ruta       · lo que todavía no tiene resultado
+  5. Gestiones · detalle  · todas las gestiones del período con su estado
+  6. Pedidos sin documento· aparte y rotulado: todavía NO son gestiones
 """
 import io
 from datetime import date
@@ -21,211 +24,207 @@ import pandas as pd
 
 from app.export_analisis import _escribir, _con_total, _FMT_NUM, _FMT_PCT
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
-                                 SIN_INFO, MOV_LBL, _detalle, _desc, _mes,
-                                 _FMT_FECHA, _FMT_DEC, _pct)
-from app.kpis_maquinas import calcular_kpis, calcular_flujo, semanal
+                                 SIN_INFO, _desc)
+from app.kpis_maquinas import conteo_semana
 
-_SEMAFORO = {True: "✔ en meta", False: "✘ fuera de meta", None: "— sin meta"}
+_FMT_FECHA = "dd/mm/yyyy"
+_MOV = {"nueva": "Instalación", "cambio": "Cambio", "retiro": "Retiro"}
+SEMANAS_TENDENCIA = 8
 
 
 def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                    metas: dict, soc_lbl: str = "Ambas",
                    clientes: pd.DataFrame | None = None,
                    hoy: date | None = None) -> bytes:
-    """Devuelve el .xlsx corto para gerencia."""
+    """
+    `mov` puede traer semanas anteriores al período: se usan para la hoja de
+    tendencia. Las demás hojas se filtran al período.
+    """
     from openpyxl import Workbook
 
     wb = Workbook()
     wb.remove(wb.active)
     hoy = hoy or date.today()
+    ini, fin = pd.Timestamp(f_ini), pd.Timestamp(f_fin)
 
     if mov is None or mov.empty:
-        _escribir(wb, "Tablero", pd.DataFrame(),
-                  nota="Sin movimientos de máquinas en el período elegido.")
+        _escribir(wb, "Resumen", pd.DataFrame(),
+                  nota="Sin gestiones de máquinas en el período elegido.")
         buf = io.BytesIO()
         wb.save(buf)
         return buf.getvalue()
 
-    kpis = calcular_kpis(mov, ped, f_ini, f_fin, metas, hoy)
-    flujo = calcular_flujo(mov, ped, f_ini, f_fin)
+    w = mov[mov["fecha"].between(ini, fin)].copy()
+    c = conteo_semana(w)
+    meta_g = metas.get("meta_gestiones_semana")
+    meta_e = metas.get("meta_pct_entregado")
+    semanas_periodo = max(((fin - ini).days + 1) / 7, 1)
+    meta_periodo = meta_g * semanas_periodo if meta_g else None
 
-    # ── 1. Tablero ───────────────────────────────────────────────────────────
-    tab = pd.DataFrame([{
-        "Etapa": k["grupo"],
-        "Indicador": k["nombre"],
-        "Resultado": k["valor_txt"],
-        "Meta": k["meta_txt"],
-        "Estado": _SEMAFORO[k["cumple"]],
-        "Responsable": k["responsable"],
-        "Detalle": k["detalle"],
-    } for k in kpis])
-    ws = _escribir(wb, "Tablero", tab,
-                   nota=(f"Período {f_ini:%d/%m/%Y} a {f_fin:%d/%m/%Y} · "
-                         f"Sociedad: {soc_lbl} · Generado el {hoy:%d/%m/%Y}. "
-                         "Las metas se editan en la app, sección Control de "
-                         "Máquinas."))
-    _pintar_estado(ws, tab, "Estado")
+    def cli(ruts):
+        return _desc(ruts, clientes, "razon_social")
 
-    # Debajo del tablero, el recorrido en cuatro líneas: es lo que explica los
-    # números de arriba y evita tener que saltar a otra hoja para entenderlos.
-    fl = pd.DataFrame([{
-        "Etapa del recorrido": f["etapa"],
-        "Cuántas": f["valor"],
-        "Responsable": f["responsable"],
-        "Qué mirar": f["detalle"],
-    } for f in flujo])
-    _escribir(wb, "Flujo del período", fl, {"Cuántas": _FMT_NUM},
-              nota=("El mismo movimiento contado en cada etapa: entra como "
-                    "pedido, se emite el documento, sale a ruta y se entrega. "
-                    "La caída entre dos filas es dónde se está perdiendo."))
+    # ── 1. Resumen ───────────────────────────────────────────────────────────
+    rech = w[w["Estado entrega"] == RECHAZADA]
+    motivo_top = (rech["Motivo del rechazo"].value_counts().index[0]
+                  if not rech.empty else "—")
+    filas = [
+        ("Período", f"{f_ini:%d/%m/%Y} a {f_fin:%d/%m/%Y}", ""),
+        ("Generado el", f"{hoy:%d/%m/%Y}", ""),
+        ("", "", ""),
+        ("1 · GESTIONES", c["n"],
+         "Fletes de máquina con documento emitido en el período"),
+        ("   Meta", round(meta_periodo) if meta_periodo else "—",
+         "Meta semanal × semanas del período" if meta_g else "Sin meta fijada"),
+        ("   % de la meta", (c["n"] / meta_periodo) if meta_periodo else "—", ""),
+        ("", "", ""),
+        ("2 · % DE ENTREGA", c["pct"] if c["pct"] is not None else "—",
+         f"{c['ent']} entregadas de {c['base']} gestiones con despacho"),
+        ("   Meta", meta_e if meta_e else "—", ""),
+        ("", "", ""),
+        ("3 · SIGUEN EN RUTA", c["ruta"] + c["sin_desp"],
+         f"{c['ruta']} en camino · {c['sin_desp']} sin despacho aún"),
+        ("", "", ""),
+        ("4 · RECHAZADAS", c["rech"], f"Motivo principal: {motivo_top}"),
+        ("", "", ""),
+        ("CUADRE", f"{c['ent']} + {c['ruta']} + {c['sin_desp'] + c['sin_info']} "
+                   f"+ {c['rech']} = {c['n']}",
+         "Entregadas + en ruta + sin despacho + rechazadas = gestiones"),
+    ]
+    res = pd.DataFrame(filas, columns=["Pregunta", "Resultado", "Detalle"])
+    ws = _escribir(wb, "Resumen", res,
+                   nota=("CÓMO LEER: todo se cuenta sobre las gestiones del "
+                         "período (documentos de flete emitidos en esas fechas). "
+                         "Una gestión puede venir de un pedido ingresado antes: "
+                         "lo que manda es la fecha del documento. Entregas, "
+                         "rechazos y en ruta son esas mismas gestiones."))
+    for i in range(len(res)):
+        etq = str(res.iloc[i, 0])
+        celda = ws.cell(row=4 + i, column=2)
+        if ("% " in etq or etq.startswith("2 ·") or
+                (etq.strip() == "Meta" and i > 7)) and isinstance(celda.value, float):
+            celda.number_format = _FMT_PCT
 
-    # ── 2. Flujo mensual ─────────────────────────────────────────────────────
+    # ── 2. Semana a semana ───────────────────────────────────────────────────
     m = mov.copy()
-    m["_ym"] = m["fecha"].dt.to_period("M")
-    # Mismos pedidos que cuentan los indicadores: sin los fantasma.
-    vivos = ped[~ped["_fantasma"]] if not ped.empty else ped
-    ing_mes = (vivos["_ingreso"].dt.to_period("M").value_counts().to_dict()
-               if not vivos.empty else {})
-    sindte_mes = (vivos[vivos["_sin_dte"]]["_ingreso"]
-                  .dt.to_period("M").value_counts().to_dict()
-                  if not vivos.empty else {})
-    filas = []
-    for per in pd.period_range(pd.Timestamp(f_ini), pd.Timestamp(f_fin), freq="M"):
-        g = m[m["_ym"] == per]
-        con_info = int((~g["_sin_info"]).sum())
-        nuevas = int((g["tipo_mov"] == "nueva").sum())
-        retiros = int((g["tipo_mov"] == "retiro").sum())
-        filas.append({
-            "Mes": _mes(per.to_timestamp()),
-            "Pedidos ingresados": int(ing_mes.get(per, 0)),
-            "Sin gestionar (sin DTE)": int(sindte_mes.get(per, 0)),
-            "Gestiones con DTE": len(g),
-            "Instalaciones": nuevas,
-            "Cambios": int((g["tipo_mov"] == "cambio").sum()),
-            "Retiros": retiros,
-            "Parque neto": nuevas - retiros,
-            "Con despacho": con_info,
-            "Entregadas": int(g["_entregada"].sum()),
-            "Rechazadas": int(g["_rechazada"].sum()),
-            "Sin confirmar": int(g["_pendiente"].sum()),
-            "% Entregado": _pct(int(g["_entregada"].sum()), con_info) if con_info else None,
+    m["_sem"] = m["fecha"].dt.to_period("W-SUN")
+    semanas = pd.period_range(end=fin.to_period("W-SUN"),
+                              periods=SEMANAS_TENDENCIA, freq="W-SUN")
+    tend = []
+    for p in semanas:
+        g = conteo_semana(m[m["_sem"] == p])
+        tend.append({
+            "Semana": f"{p.start_time:%d/%m} al {p.end_time:%d/%m}",
+            "Gestiones": g["n"],
+            "Meta": meta_g,
+            "Entregadas": g["ent"],
+            "En ruta": g["ruta"],
+            "Sin despacho": g["sin_desp"] + g["sin_info"],
+            "Rechazadas": g["rech"],
+            "% de entrega": g["pct"],
         })
-    mes_df = _con_total(pd.DataFrame(filas), "Mes", ("% Entregado",))
-    if not mes_df.empty:
-        fin_i = mes_df.index[-1]
-        tot_ent = mes_df.loc[fin_i, "Entregadas"]
-        tot_ci = mes_df.loc[fin_i, "Con despacho"]
-        mes_df.loc[fin_i, "% Entregado"] = _pct(tot_ent, tot_ci) if tot_ci else None
-    fmt_mes = {c: _FMT_NUM for c in mes_df.columns if c != "Mes"}
-    fmt_mes["% Entregado"] = _FMT_PCT
-    _escribir(wb, "Flujo mensual", mes_df, fmt_mes,
-              nota=("Cada mes de punta a punta. 'Sin gestionar' son pedidos "
-                    "ingresados ESE mes que hoy siguen sin documento, así que "
-                    "los meses viejos con número alto son deuda vieja, no "
-                    "actividad reciente."),
-              total_ultima=not mes_df.empty)
+    tend = pd.DataFrame(tend)
+    tot = _con_total(tend, "Semana", ("% de entrega", "Meta"))
+    if not tot.empty:
+        f = tot.index[-1]
+        base = tend["Gestiones"].sum() - sum(
+            conteo_semana(m[m["_sem"] == p])["sin_info"] for p in semanas)
+        tot.loc[f, "% de entrega"] = (tend["Entregadas"].sum() / base) if base else None
+    _escribir(wb, "Semana a semana", tot,
+              {c_: _FMT_NUM for c_ in ("Gestiones", "Meta", "Entregadas",
+                                       "En ruta", "Sin despacho", "Rechazadas")}
+              | {"% de entrega": _FMT_PCT},
+              nota=("Las últimas semanas siempre tienen más 'En ruta' y un % de "
+                    "entrega más bajo: todavía no se confirman. Se completan solas "
+                    "con los días."),
+              total_ultima=not tot.empty)
 
-    # ── 3. Semana a semana contra la meta ────────────────────────────────────
-    sem = semanal(mov, ped, f_ini, f_fin, metas.get("meta_gestiones_semana"))
-    _escribir(wb, "Semana a semana", sem,
-              {"Días en el rango": _FMT_NUM, "Pedidos ingresados": _FMT_NUM,
-               "Gestiones con DTE": _FMT_NUM, "Meta": _FMT_NUM,
-               "% Meta": _FMT_PCT, "Entregadas": _FMT_NUM,
-               "Rechazadas": _FMT_NUM},
-              nota=("Semanas de lunes a domingo. Las que quedan cortadas por el "
-                    "borde del período salen sin meta: no se les puede exigir "
-                    "una semana entera."))
+    # ── 3. Rechazos ──────────────────────────────────────────────────────────
+    if rech.empty:
+        _escribir(wb, "Rechazos", pd.DataFrame(),
+                  nota="Ninguna gestión del período volvió rechazada.")
+    else:
+        mot = (rech.groupby("Motivo del rechazo").size().rename("Rechazos")
+               .reset_index().sort_values("Rechazos", ascending=False))
+        mot["% de los rechazos"] = mot["Rechazos"] / mot["Rechazos"].sum()
+        mot = _con_total(mot, "Motivo del rechazo")
+        _escribir(wb, "Rechazos", mot,
+                  {"Rechazos": _FMT_NUM, "% de los rechazos": _FMT_PCT},
+                  nota=("El motivo se lee del comentario del repartidor: el campo "
+                        "de motivo del ERP llega vacío. El detalle, en la hoja "
+                        "siguiente."),
+                  total_ultima=True)
+        _escribir(wb, "Rechazos · detalle", pd.DataFrame({
+            "Fecha documento": rech["fecha"].dt.date,
+            "Documento": rech["_doc"],
+            "Cliente": cli(rech["cliente_rut"]),
+            "Comuna": _desc(rech["cliente_rut"], clientes, "comuna"),
+            "Movimiento": rech["tipo_mov"].map(_MOV),
+            "Motivo": rech["Motivo del rechazo"],
+            "Lo que dijo el repartidor": rech["Comentario de entrega"],
+            "Transportista": rech["Transportista"],
+            "Vendedor": rech["Vendedor"],
+        }).sort_values("Fecha documento"), {"Fecha documento": _FMT_FECHA},
+            nota="Una fila por gestión rechazada, con lo que escribió el repartidor.")
 
-    # ── 4. Sin gestionar ─────────────────────────────────────────────────────
-    if not ped.empty:
+    # ── 4. Siguen en ruta ────────────────────────────────────────────────────
+    ruta = w[w["Estado entrega"].isin([EN_RUTA, SIN_DESPACHO])].copy()
+    if ruta.empty:
+        _escribir(wb, "Siguen en ruta", pd.DataFrame(),
+                  nota="Todas las gestiones del período tienen resultado.")
+    else:
+        desde = ruta["Fecha ruta"].fillna(ruta["fecha"])
+        _escribir(wb, "Siguen en ruta", pd.DataFrame({
+            "Días": (pd.Timestamp(hoy) - desde).dt.days,
+            "Estado": ruta["Estado entrega"].map(
+                {EN_RUTA: "En camino", SIN_DESPACHO: "Sin despacho aún"}),
+            "Fecha documento": ruta["fecha"].dt.date,
+            "Documento": ruta["_doc"],
+            "Cliente": cli(ruta["cliente_rut"]),
+            "Movimiento": ruta["tipo_mov"].map(_MOV),
+            "Transportista": ruta["Transportista"].fillna("—"),
+            "Vendedor": ruta["Vendedor"],
+        }).sort_values("Días", ascending=False),
+            {"Fecha documento": _FMT_FECHA, "Días": _FMT_NUM},
+            nota=("'Sin despacho aún' es un documento emitido que todavía no "
+                  "aparece en el Excel de despachos: no ha salido, o falta "
+                  "cargar el archivo."))
+
+    # ── 5. Gestiones · detalle ───────────────────────────────────────────────
+    _escribir(wb, "Gestiones · detalle", pd.DataFrame({
+        "Fecha documento": w["fecha"].dt.date,
+        "Documento": w["_doc"],
+        "Movimiento": w["tipo_mov"].map(_MOV),
+        "Cliente": cli(w["cliente_rut"]),
+        "Comuna": _desc(w["cliente_rut"], clientes, "comuna"),
+        "Vendedor": w["Vendedor"],
+        "Resultado": w["Estado entrega"],
+        "Fecha ruta": w["Fecha ruta"].dt.date,
+        "Transportista": w["Transportista"],
+    }).sort_values("Fecha documento"),
+        {"Fecha documento": _FMT_FECHA, "Fecha ruta": _FMT_FECHA},
+        nota="Una fila por gestión del período. Es la base de todas las demás hojas.")
+
+    # ── 6. Pedidos sin documento ─────────────────────────────────────────────
+    if ped is not None and not ped.empty:
         cola = ped[ped["_sin_dte"] & ~ped["_fantasma"]].copy()
         if not cola.empty:
-            tabla = pd.DataFrame({
-                "Fecha del pedido": cola["_ingreso"].dt.date,
+            vmap = dict(mov.drop_duplicates("vendedor_id")
+                        .set_index("vendedor_id")["Vendedor"])
+            _escribir(wb, "Pedidos sin documento", pd.DataFrame({
                 "Días esperando": (pd.Timestamp(hoy) - cola["_ingreso"]).dt.days,
+                "Fecha pedido": cola["_ingreso"].dt.date,
                 "N° pedido": cola["n_pedido"],
-                "Movimiento": cola["_mov"].map(MOV_LBL).fillna("(otro)"),
-                "Vendedor que lo ingresó": cola["vendedor_id"].map(
-                    _mapa_vendedor(mov)).fillna("Sin asignar"),
-                "RUT": cola["cliente_rut"],
-                "Cliente": _desc(cola["cliente_rut"], clientes, "razon_social"),
-                "Comuna": _desc(cola["cliente_rut"], clientes, "comuna"),
-            }).sort_values("Días esperando", ascending=False)
-            _escribir(wb, "Sin gestionar", tabla,
-                      {"Fecha del pedido": _FMT_FECHA, "Días esperando": _FMT_NUM},
-                      nota=("Pedidos que el vendedor ya ingresó y que siguen sin "
-                            "DTE. El vendedor hizo su parte: esto es cola de "
-                            "emisión. Salen todos los abiertos, sin importar el "
-                            "período, porque el de hace tres meses es el que "
-                            "más urge."))
-
-    # ── 5. Despachos y estado ────────────────────────────────────────────────
-    est_orden = [ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO, SIN_INFO]
-    ct = pd.crosstab(mov["Movimiento"], mov["Estado entrega"])
-    ct = ct.reindex(columns=[e for e in est_orden if e in ct.columns], fill_value=0)
-    ct["Total"] = ct.sum(axis=1)
-    ct = _con_total(ct.reset_index(), "Movimiento")
-    _escribir(wb, "Despachos y estado", ct,
-              {c: _FMT_NUM for c in ct.columns if c != "Movimiento"},
-              nota=("Qué pasó con cada tipo de movimiento. 'Sin despacho' es que "
-                    "ese mes SÍ tiene despachos cargados y este documento no "
-                    "aparece: hay que ir a buscarlo. 'Sin información' es que no "
-                    "hay despachos de ese mes y sociedad — Acuña nunca los "
-                    "tiene, no pasa por Autoventa."),
-              total_ultima=not ct.empty)
-
-    # ── 6. Rechazos ──────────────────────────────────────────────────────────
-    rech = mov[mov["_rechazada"]]
-    if not rech.empty:
-        mot = (rech.groupby("Motivo del rechazo")
-               .agg(**{"Rechazos": ("_doc", "count"),
-                       "Instalaciones": ("tipo_mov",
-                                         lambda s: int((s == "nueva").sum())),
-                       "Retiros": ("tipo_mov",
-                                   lambda s: int((s == "retiro").sum())),
-                       "Clientes": ("cliente_rut", "nunique")})
-               .reset_index().sort_values("Rechazos", ascending=False))
-        mot["% del total"] = mot["Rechazos"] / mot["Rechazos"].sum()
-        mot = _con_total(mot, "Motivo del rechazo", ("Clientes",))
-        _escribir(wb, "Rechazos", mot,
-                  {"Rechazos": _FMT_NUM, "Instalaciones": _FMT_NUM,
-                   "Retiros": _FMT_NUM, "Clientes": _FMT_NUM,
-                   "% del total": _FMT_PCT},
-                  nota=("Por qué volvieron. El motivo se lee del comentario que "
-                        "escribe el repartidor: el campo 'Motivo rechazo' del "
-                        "ERP llega vacío. Ojo con la lectura: que el cliente no "
-                        "entregue la máquina o se arrepienta de recibirla es "
-                        "coordinación comercial, no un problema de ruta."),
-                  total_ultima=not mot.empty)
-
-        _escribir(wb, "Rechazos · detalle", _detalle(rech.sort_values("fecha")),
-                  nota="Una fila por rechazo, con el comentario textual.")
+                "Movimiento": cola["_mov"].map(_MOV).fillna("(otro)"),
+                "Vendedor": cola["vendedor_id"].map(vmap).fillna("—"),
+                "Cliente": cli(cola["cliente_rut"]),
+            }).sort_values("Días esperando", ascending=False),
+                {"Fecha pedido": _FMT_FECHA, "Días esperando": _FMT_NUM},
+                nota=("APARTE: pedidos que el vendedor ya ingresó y todavía no "
+                      "tienen documento. Aún NO son gestiones y no cuentan en "
+                      "ninguna otra hoja; cuando se emita el documento pasan a "
+                      "contar en esa semana. Salen todos los abiertos hoy."))
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
-
-
-def _mapa_vendedor(mov: pd.DataFrame) -> dict:
-    """id → nombre, reutilizando lo que ya trae el detalle de movimientos."""
-    if mov.empty or "Vendedor" not in mov.columns:
-        return {}
-    return dict(mov.drop_duplicates("vendedor_id")
-                .set_index("vendedor_id")["Vendedor"])
-
-
-def _pintar_estado(ws, df: pd.DataFrame, col: str):
-    """Semáforo en la columna de estado del tablero."""
-    from openpyxl.styles import Font, PatternFill
-
-    if df.empty or col not in df.columns:
-        return
-    j = list(df.columns).index(col) + 1
-    colores = {"✔": ("E7F3EC", "1A7F4B"), "✘": ("FAEAE8", "B2332A"),
-               "—": ("F1F1F4", "64748B")}
-    for i in range(len(df)):
-        celda = ws.cell(row=4 + i, column=j)
-        fondo, letra = colores.get(str(celda.value or "")[:1], (None, None))
-        if fondo:
-            celda.fill = PatternFill("solid", fgColor=fondo)
-            celda.font = Font(bold=True, color=letra)

@@ -388,3 +388,26 @@ def cargar_todo(client, f_ini, f_fin, soc_ids=None, dias_antes: int = 180,
     mov = (preparar_movimientos(maq, desp, fl, vend, cli, socs)
            if maq is not None and not maq.empty else pd.DataFrame())
     return mov, _prep_pedidos(ped), desp
+
+
+def conteo_semana(w: pd.DataFrame) -> dict:
+    """
+    Los números de un grupo de gestiones, todos sobre ese mismo grupo.
+
+    Lo usan la página Control de Máquinas y el Excel de gerencia, para que
+    nunca muestren cifras distintas de la misma semana. `pct` se calcula sobre
+    las gestiones con información de despacho (Acuña nunca la tiene).
+    """
+    from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA,
+                                     SIN_DESPACHO, SIN_INFO)
+    est = (w["Estado entrega"] if w is not None and not w.empty
+           else pd.Series(dtype=str))
+    n = len(est)
+    ent = int((est == ENTREGADA).sum())
+    rech = int((est == RECHAZADA).sum())
+    ruta = int((est == EN_RUTA).sum())
+    sin_desp = int((est == SIN_DESPACHO).sum())
+    sin_info = int((est == SIN_INFO).sum())
+    base = n - sin_info
+    return dict(n=n, ent=ent, rech=rech, ruta=ruta, sin_desp=sin_desp,
+                sin_info=sin_info, base=base, pct=(ent / base) if base else None)
