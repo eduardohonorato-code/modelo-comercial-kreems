@@ -15,7 +15,7 @@ Hojas:
   3. Gestiones por tipo   · instalaciones, cambios y retiros, y cómo terminó c/u
   4. Rechazos             · cuántos por motivo y el detalle de cada uno
   5. Rechazos · seguimiento · si se volvieron a ingresar y cómo terminaron
-  6. Siguen en ruta       · lo que todavía no tiene resultado
+  6. Sin confirmar        · lo que todavía no tiene resultado
   7. Gestiones · detalle  · todas las gestiones del período con su estado
   8. Pedidos sin documento· aparte y rotulado: todavía NO son gestiones
 """
@@ -29,7 +29,8 @@ from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO, _desc)
 from app.kpis_maquinas import (DIAS_PARA_REINTENTAR, conteo_semana,
                                etiqueta_mov, mezcla_movimientos,
-                               resumen_rechazos, seguimiento_rechazos)
+                               resumen_rechazos, seguimiento_rechazos,
+                               texto_sin_confirmar)
 
 _FMT_FECHA = "dd/mm/yyyy"
 _MOV = {"nueva": "Instalación", "cambio": "Cambio", "retiro": "Retiro"}
@@ -103,14 +104,12 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
          f"{c['ent']} entregadas de {c['base']} gestiones con despacho"),
         ("   Meta", meta_e if meta_e else "—", ""),
         ("", "", ""),
-        ("3 · SIGUEN EN RUTA", c["ruta"] + c["sin_desp"],
-         f"{c['ruta']} en camino · {c['sin_desp']} sin despacho aún"),
+        ("3 · SIN CONFIRMAR", c["sin_confirmar"], texto_sin_confirmar(c)),
         ("", "", ""),
         ("4 · RECHAZADAS", c["rech"], f"Motivo principal: {motivo_top}"),
         ("", "", ""),
-        ("CUADRE", f"{c['ent']} + {c['ruta']} + {c['sin_desp'] + c['sin_info']} "
-                   f"+ {c['rech']} = {c['n']}",
-         "Entregadas + en ruta + sin despacho + rechazadas = gestiones"),
+        ("CUADRE", f"{c['ent']} + {c['sin_confirmar']} + {c['rech']} = {c['n']}",
+         "Entregadas + sin confirmar + rechazadas = gestiones"),
         ("", "", ""),
         ("5 · RECHAZOS RETOMADOS", res_seg["n"],
          "Todos los rechazos cargados, no solo los del período: el trabajo que "
@@ -158,7 +157,8 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
             "Meta": meta_g,
             "Entregadas": g["ent"],
             "En ruta": g["ruta"],
-            "Sin despacho": g["sin_desp"] + g["sin_info"],
+            "Sin despacho": g["sin_desp"],
+            "Sin información": g["sin_info"],
             "Rechazadas": g["rech"],
             "% de entrega": g["pct"],
         })
@@ -171,7 +171,8 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
         tot.loc[f, "% de entrega"] = (tend["Entregadas"].sum() / base) if base else None
     _escribir(wb, "Semana a semana", tot,
               {c_: _FMT_NUM for c_ in ("Gestiones", "Meta", "Entregadas",
-                                       "En ruta", "Sin despacho", "Rechazadas")}
+                                       "En ruta", "Sin despacho",
+                                       "Sin información", "Rechazadas")}
               | {"% de entrega": _FMT_PCT},
               nota=("Las últimas semanas siempre tienen más 'En ruta' y un % de "
                     "entrega más bajo: todavía no se confirman. Se completan solas "
@@ -181,7 +182,8 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     # ── 3. Gestiones por tipo ────────────────────────────────────────────────
     _escribir(wb, "Gestiones por tipo", mz,
               {c_: _FMT_NUM for c_ in ("Gestiones", "Entregadas", "En ruta",
-                                       "Sin despacho", "Rechazadas")}
+                                       "Sin despacho", "Sin información",
+                                       "Rechazadas")}
               | {"% de las gestiones": _FMT_PCT, "% de entrega": _FMT_PCT},
               nota=("Las mismas gestiones del Resumen, partidas por tipo. "
                     "Instalación es FL-4 (cliente nuevo), cambio es FL-1/3/5 y "
@@ -241,16 +243,17 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                         "todos los rechazos cargados, no solo los del período."))
 
     # ── 6. Siguen en ruta ────────────────────────────────────────────────────
-    ruta = w[w["Estado entrega"].isin([EN_RUTA, SIN_DESPACHO])].copy()
+    ruta = w[w["Estado entrega"].isin([EN_RUTA, SIN_DESPACHO, SIN_INFO])].copy()
     if ruta.empty:
-        _escribir(wb, "Siguen en ruta", pd.DataFrame(),
+        _escribir(wb, "Sin confirmar", pd.DataFrame(),
                   nota="Todas las gestiones del período tienen resultado.")
     else:
         desde = ruta["Fecha ruta"].fillna(ruta["fecha"])
-        _escribir(wb, "Siguen en ruta", pd.DataFrame({
+        _escribir(wb, "Sin confirmar", pd.DataFrame({
             "Días": (pd.Timestamp(hoy) - desde).dt.days,
             "Estado": ruta["Estado entrega"].map(
-                {EN_RUTA: "En camino", SIN_DESPACHO: "Sin despacho aún"}),
+                {EN_RUTA: "En camino", SIN_DESPACHO: "Sin despacho aún",
+                 SIN_INFO: "Sin información"}),
             "Fecha documento": ruta["fecha"].dt.date,
             "Documento": ruta["_doc"],
             "Cliente": cli(ruta["cliente_rut"]),
@@ -259,9 +262,13 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
             "Vendedor": ruta["Vendedor"],
         }).sort_values("Días", ascending=False),
             {"Fecha documento": _FMT_FECHA, "Días": _FMT_NUM},
-            nota=("'Sin despacho aún' es un documento emitido que todavía no "
-                  "aparece en el Excel de despachos: no ha salido, o falta "
-                  "cargar el archivo."))
+            nota=("Los tres estados que suma «3 · SIN CONFIRMAR» del Resumen. "
+                  "'En camino' salió a ruta y no vuelve confirmada todavía. "
+                  "'Sin despacho aún' es un documento emitido que no aparece en "
+                  "el Excel de despachos del mes, aunque ese mes sí está "
+                  "cargado. 'Sin información' es Acuña o un mes sin despachos "
+                  "cargados: esas no se pueden confirmar nunca y quedan fuera "
+                  "del % de entrega."))
 
     # ── 7. Gestiones · detalle ───────────────────────────────────────────────
     _escribir(wb, "Gestiones · detalle", pd.DataFrame({

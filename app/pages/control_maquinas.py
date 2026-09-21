@@ -6,7 +6,7 @@ Gerencia viene a responder cuatro preguntas, siempre sobre la misma semana:
     1. ¿Cuántas gestiones hubo, y de qué tipo?   (contra la meta)
     2. ¿Cuántas se entregaron?                   (% de entrega)
     3. ¿Cuántas volvieron y por qué?             (motivos de rechazo)
-    4. ¿Cuáles siguen en ruta?
+    4. ¿Cuáles siguen sin confirmar? (en ruta, sin despacho, sin información)
     5. ¿Qué pasó con las que volvieron?          (se reingresaron o se perdieron)
 
 La quinta se agregó en septiembre de 2026: gerencia veía los rechazos de la
@@ -38,10 +38,12 @@ from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO)
 from app.kpis_maquinas import (DIAS_PARA_REINTENTAR, cargar_todo,
                                conteo_semana, mezcla_movimientos, mezcla_texto,
-                               resumen_rechazos, seguimiento_rechazos)
+                               resumen_rechazos, seguimiento_rechazos,
+                               texto_sin_confirmar)
 
 _C = {"verde": "#1A7F4B", "amrl": "#D4881E", "rojo": "#C0392B",
-      "gris": "#9CA3AF", "rosa": "#E62984", "slate": "#64748B"}
+      "gris": "#9CA3AF", "gris2": "#CBD5E1", "rosa": "#E62984",
+      "slate": "#64748B"}
 
 # Un identificador por tarjeta: el documento que se emite, el visto de la
 # entrega, el camión que va en ruta y la equis del que volvió. El color es el
@@ -240,11 +242,15 @@ def render(client, anio: int, mes: int):
                    _ICO["gestiones"])
         + _tarjeta("% de entrega", valor_e, color_e, linea_e, nota_e, c["pct"],
                    _ICO["entrega"])
-        + _tarjeta("Siguen en ruta", str(c["ruta"] + c["sin_desp"]),
-                   _C["amrl"] if (c["ruta"] + c["sin_desp"]) else _C["verde"],
-                   f"{c['ruta']} en camino" + (f" · {c['sin_desp']} sin despacho"
-                                               if c["sin_desp"] else ""),
-                   "todavía sin confirmar entrega", None, _ICO["ruta"])
+        # "Siguen en ruta" era un título mentiroso: contaba también las que
+        # nunca salieron ("Sin despacho"), así que una semana con 0 camiones
+        # andando mostraba 2. El título ahora cubre los tres estados y el
+        # subtítulo los nombra uno por uno, con las mismas palabras que la
+        # tabla «Qué se movió» y los mismos tramos que la barra.
+        + _tarjeta("Sin confirmar", str(c["sin_confirmar"]),
+                   _C["amrl"] if c["sin_confirmar"] else _C["verde"],
+                   texto_sin_confirmar(c),
+                   "gestiones sin resultado todavía", None, _ICO["ruta"])
         + _tarjeta("Rechazadas", str(c["rech"]),
                    _C["rojo"] if c["rech"] else _C["verde"],
                    (f"motivo principal: {motivo_top}" if motivo_top
@@ -261,7 +267,8 @@ def render(client, anio: int, mes: int):
     if c["n"]:
         partes = [("Entregadas", c["ent"], _C["verde"]),
                   ("En ruta", c["ruta"], _C["amrl"]),
-                  ("Sin despacho", c["sin_desp"] + c["sin_info"], _C["gris"]),
+                  ("Sin despacho", c["sin_desp"], _C["gris"]),
+                  ("Sin información", c["sin_info"], _C["gris2"]),
                   ("Rechazadas", c["rech"], _C["rojo"])]
         fig = go.Figure()
         for nombre, val, color in partes:
@@ -300,8 +307,12 @@ def render(client, anio: int, mes: int):
                 "Lo que dijo el repartidor", "Transportista"]],
                 use_container_width=True, hide_index=True)
     with col2:
-        ruta = w[w["Estado entrega"].isin([EN_RUTA, SIN_DESPACHO])].copy()
-        _sec(f"Siguen en ruta · {len(ruta)}")
+        # El mismo grupo que la tarjeta «Sin confirmar», incluidas las
+        # «Sin información»: si la tabla mostrara menos filas que el número de
+        # arriba, volvemos al enredo que esto vino a arreglar.
+        ruta = w[w["Estado entrega"].isin(
+            [EN_RUTA, SIN_DESPACHO, SIN_INFO])].copy()
+        _sec(f"Sin confirmar · {len(ruta)}")
         if ruta.empty:
             st.success("Todas las gestiones de la semana tienen resultado.")
         else:
@@ -311,15 +322,20 @@ def render(client, anio: int, mes: int):
                 "Cliente": ruta["cliente_rut"].map(nombres).fillna(ruta["cliente_rut"]),
                 "Movimiento": ruta["tipo_mov"].map(_MOV),
                 "Estado": ruta["Estado entrega"].map(
-                    {EN_RUTA: "En camino", SIN_DESPACHO: "Sin despacho aún"}),
+                    {EN_RUTA: "En camino", SIN_DESPACHO: "Sin despacho aún",
+                     SIN_INFO: "Sin información"}),
                 "Días": (hoy - ruta["_desde"]).dt.days,
                 "Transportista": ruta["Transportista"].fillna("—"),
                 "Vendedor": ruta["Vendedor"],
             }).sort_values("Días", ascending=False),
                 use_container_width=True, hide_index=True)
-            st.caption("«Sin despacho aún» es un documento emitido que todavía no "
-                       "aparece en el Excel de despachos: o no ha salido, o falta "
-                       "cargar el archivo.")
+            st.caption(
+                "«En camino» salió a ruta y no vuelve confirmada todavía. "
+                "«Sin despacho aún» es un documento emitido que no aparece en "
+                "el Excel de despachos del mes, aunque ese mes sí está cargado: "
+                "o no ha salido, o falta esa fila. «Sin información» es Acuña o "
+                "un mes sin despachos cargados — esas no se van a poder "
+                "confirmar nunca, y por eso quedan fuera del % de entrega.")
 
     _seguimiento(seg, res_seg, ini_tend)
 
@@ -367,13 +383,19 @@ def _tabla_mezcla(w: pd.DataFrame) -> None:
         return
     _sec("Qué se movió")
     v = mz.copy()
+    # «Sin información» solo aparece cuando hay: en un período de pura Gran
+    # Natural es siempre cero y una columna de ceros distrae.
+    if not v["Sin información"].any():
+        v = v.drop(columns=["Sin información"])
     v["% de las gestiones"] = v["% de las gestiones"].map(lambda x: f"{x * 100:.0f}%")
     v["% de entrega"] = v["% de entrega"].map(
         lambda x: "—" if x is None or pd.isna(x) else f"{x * 100:.0f}%")
     st.dataframe(v, use_container_width=True, hide_index=True)
     st.caption("Las mismas gestiones de la barra de arriba, partidas por tipo. "
                "Instalación es FL-4 (cliente nuevo), cambio es FL-1/3/5 y retiro "
-               "es FL-2. La meta semanal no distingue: los tres suman igual.")
+               "es FL-2. La meta semanal no distingue: los tres suman igual. "
+               "«En ruta», «sin despacho» y «sin información» son los tres "
+               "estados que suma la tarjeta «Sin confirmar».")
 
 
 # Columnas del seguimiento que se muestran en pantalla, en el orden en que se
@@ -463,7 +485,8 @@ def _grafico_tendencia(mov: pd.DataFrame, f_fin, meta_g):
     for nombre, estados, color in [
             ("Entregadas", [ENTREGADA], _C["verde"]),
             ("En ruta", [EN_RUTA], _C["amrl"]),
-            ("Sin despacho", [SIN_DESPACHO, SIN_INFO], _C["gris"]),
+            ("Sin despacho", [SIN_DESPACHO], _C["gris"]),
+            ("Sin información", [SIN_INFO], _C["gris2"]),
             ("Rechazadas", [RECHAZADA], _C["rojo"])]:
         fig.add_trace(go.Bar(x=etq, y=serie(estados), name=nombre,
                              marker_color=color))

@@ -409,8 +409,13 @@ def conteo_semana(w: pd.DataFrame) -> dict:
     sin_desp = int((est == SIN_DESPACHO).sum())
     sin_info = int((est == SIN_INFO).sum())
     base = n - sin_info
+    # Las tres maneras de no saber cómo terminó una gestión. Se suman aquí y no
+    # en cada tarjeta: mientras cada pantalla elegía su propia combinación, la
+    # tarjeta decía 2 y la tabla decía otra cosa.
+    sin_confirmar = ruta + sin_desp + sin_info
     return dict(n=n, ent=ent, rech=rech, ruta=ruta, sin_desp=sin_desp,
-                sin_info=sin_info, base=base, pct=(ent / base) if base else None)
+                sin_info=sin_info, sin_confirmar=sin_confirmar, base=base,
+                pct=(ent / base) if base else None)
 
 
 # ── Qué se movió: la mezcla por tipo de movimiento ───────────────────────────
@@ -437,16 +442,22 @@ def mezcla_movimientos(w: pd.DataFrame) -> pd.DataFrame:
     arrepintió, el otro uno que no devuelve la máquina.
     """
     cols = ["Movimiento", "Gestiones", "% de las gestiones", "Entregadas",
-            "En ruta", "Sin despacho", "Rechazadas", "% de entrega"]
+            "En ruta", "Sin despacho", "Sin información", "Rechazadas",
+            "% de entrega"]
     if w is None or w.empty:
         return pd.DataFrame(columns=cols)
 
     def fila(nombre, g):
         c = conteo_semana(g)
+        # Sin despacho y Sin información van SEPARADOS: el primero es un
+        # documento que debería aparecer en el Excel de despachos y no está
+        # (hay que ir a buscarlo), el segundo es Acuña o un mes sin cargar, que
+        # nunca se va a poder confirmar. Estuvieron fundidos bajo un solo
+        # rótulo y la tarjeta contaba uno y la tabla los dos.
         return {"Movimiento": nombre, "Gestiones": c["n"],
                 "% de las gestiones": c["n"] / len(w),
                 "Entregadas": c["ent"], "En ruta": c["ruta"],
-                "Sin despacho": c["sin_desp"] + c["sin_info"],
+                "Sin despacho": c["sin_desp"], "Sin información": c["sin_info"],
                 "Rechazadas": c["rech"], "% de entrega": c["pct"]}
 
     filas = [fila(_MOV_LBL[mv], w[w["tipo_mov"] == mv])
@@ -623,3 +634,10 @@ def resumen_rechazos(seg: pd.DataFrame) -> dict:
                     & (seg["Días desde el rechazo"] > DIAS_PARA_REINTENTAR)).sum())
     return dict(n=len(seg), ok=ok, en_curso=len(seg) - ok - abiertos,
                 abiertos=abiertos, vencidos=vencidos, pct=ok / len(seg))
+
+
+def texto_sin_confirmar(c: dict) -> str:
+    """«3 en ruta · 2 sin despacho», nombrando solo lo que existe."""
+    partes = [(c["ruta"], "en ruta"), (c["sin_desp"], "sin despacho"),
+              (c["sin_info"], "sin información")]
+    return " · ".join(f"{n} {lbl}" for n, lbl in partes if n) or "ninguna"
