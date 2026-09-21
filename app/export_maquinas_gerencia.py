@@ -18,6 +18,7 @@ Hojas:
   6. Sin confirmar        · lo que todavía no tiene resultado
   7. Gestiones · detalle  · todas las gestiones del período con su estado
   8. Pedidos sin documento· aparte y rotulado: todavía NO son gestiones
+  9. Facturados sin despacho · la otra cola de logística, toda la ventana
 """
 import io
 from datetime import date
@@ -312,6 +313,31 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                       f"en ninguna otra hoja; cuando se emita el documento pasan "
                       f"a contar en esa semana. Salen todos los abiertos hoy. "
                       f"De los {len(cola)}: {mezcla_cola}."))
+
+    # ── 9. Facturados sin despacho ───────────────────────────────────────────
+    # Toda la ventana de `mov`, no el período: la hermana de la cola de pedidos
+    # sin documento, un paso más adelante del recorrido. Ahí falta emitir el
+    # DTE, aquí falta subirlo a un camión; las dos son de logística y las dos
+    # envejecen, así que las dos se miran completas.
+    sin_ruta = mov[mov["Estado entrega"] == SIN_DESPACHO].copy()
+    if not sin_ruta.empty:
+        _escribir(wb, "Facturados sin despacho", pd.DataFrame({
+            "Días desde la factura": (pd.Timestamp(hoy) - sin_ruta["fecha"]).dt.days,
+            "Fecha factura": sin_ruta["fecha"].dt.date,
+            "Documento": sin_ruta["_doc"],
+            "Movimiento": sin_ruta["tipo_mov"].map(_MOV),
+            "Vendedor": sin_ruta["Vendedor"],
+            "Cliente": cli(sin_ruta["cliente_rut"]),
+            "Comuna": _desc(sin_ruta["cliente_rut"], clientes, "comuna"),
+            "Sociedad": sin_ruta["Sociedad"],
+        }).sort_values("Días desde la factura", ascending=False),
+            {"Fecha factura": _FMT_FECHA, "Días desde la factura": _FMT_NUM},
+            nota=("APARTE, y de toda la ventana cargada, no solo del período: "
+                  "documentos de flete emitidos que no aparecen en ninguna ruta "
+                  "—ni entregada, ni rechazada, ni pendiente— en un mes que SÍ "
+                  "tiene despachos cargados. O sea, no falta el archivo: falta "
+                  "programar el flete. Es la otra cola de logística, después de "
+                  "«Pedidos sin documento»."))
 
     buf = io.BytesIO()
     wb.save(buf)

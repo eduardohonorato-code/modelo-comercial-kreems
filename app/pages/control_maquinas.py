@@ -559,6 +559,8 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
                                f"sin_dte_{datetime.date.today():%Y%m%d}.csv",
                                "text/csv", key="dl_cola")
 
+    _cola_despacho(mov, f_ini, f_fin)
+
     with st.expander("🚚 Entregas en pesos por transportista (helados y máquinas)"):
         _entregas_pesos(client, f_ini, f_fin, mov, desp)
 
@@ -587,6 +589,60 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
 
     with st.expander(f"🎯 Metas de {f_ini.month:02d}/{f_ini.year}"):
         _form_metas(client, f_ini.year, f_ini.month, metas)
+
+
+def _cola_despacho(mov: pd.DataFrame, f_ini, f_fin) -> None:
+    """
+    Facturados que todavía no tienen ruta, de toda la ventana cargada.
+
+    Es la hermana de la cola de pedidos sin documento, un paso más adelante del
+    recorrido: ahí falta que logística emita el DTE, aquí falta que lo suba a un
+    camión. Las dos son de logística y las dos envejecen, por eso van juntas y
+    fuera del período: un documento facturado hace tres semanas sin ruta es peor
+    que uno del jueves pasado, y mirando solo la semana elegida desaparece de la
+    vista apenas se cambia de semana.
+
+    No incluye «Sin información» (Acuña, o un mes sin despachos cargados): de
+    esas no se puede afirmar que falte la ruta, simplemente no hay con qué
+    saberlo.
+    """
+    if mov is None or mov.empty:
+        return
+    cola = mov[mov["Estado entrega"] == SIN_DESPACHO].copy()
+    with st.expander(f"🚛 Facturados esperando despacho · {len(cola)}"):
+        st.caption(
+            "Documentos de flete emitidos que no aparecen en ninguna ruta, ni "
+            "entregada ni rechazada ni pendiente — y en un mes que SÍ tiene "
+            "despachos cargados, así que no es un archivo que falte: es un "
+            "flete que no se ha programado. Salen los de las últimas "
+            f"{_SEMANAS_TENDENCIA} semanas, no solo los de la semana elegida.")
+        if cola.empty:
+            st.success("Todo lo facturado tiene ruta.")
+            return
+        cuenta = cola["tipo_mov"].value_counts()
+        cols_m = st.columns(3)
+        for col, mv in zip(cols_m, ("nueva", "cambio", "retiro")):
+            col.metric(_MOV_PL[mv], int(cuenta.get(mv, 0)))
+        hoy = pd.Timestamp(datetime.date.today())
+        det = pd.DataFrame({
+            "Días desde la factura": (hoy - cola["fecha"]).dt.days,
+            "Fecha factura": cola["fecha"].dt.date,
+            "Documento": cola["_doc"],
+            "Movimiento": cola["tipo_mov"].map(_MOV),
+            "Vendedor": cola["Vendedor"],
+            "Cliente": cola["Cliente"],
+            "Comuna": cola["Comuna"],
+            "Sociedad": cola["Sociedad"],
+        }).sort_values("Días desde la factura", ascending=False)
+        st.dataframe(det, use_container_width=True, hide_index=True)
+        st.caption("Los de 0 o 1 día son normales: se facturaron recién y la "
+                   "ruta se programa después. Los que hay que mirar son los de "
+                   "arriba de la tabla.")
+        st.download_button(
+            "⬇️ Descargar en CSV",
+            det.to_csv(index=False).encode("utf-8-sig"),
+            f"facturados_sin_despacho_{datetime.date.today():%Y%m%d}.csv",
+            "text/csv", key="dl_sin_desp")
 
 
 def _entregas_pesos(client, f_ini, f_fin, mov, desp):
