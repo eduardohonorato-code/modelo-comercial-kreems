@@ -10,12 +10,14 @@ cola vencida sobre todo lo abierto, parque neto…) y gerencia se enredaba igual
 que en la pantalla, así que se alinea con ella.
 
 Hojas:
-  1. Resumen              · las cuatro respuestas de la semana, contra la meta
+  1. Resumen              · las respuestas de la semana, contra la meta
   2. Semana a semana      · las últimas 8 semanas partidas por resultado
-  3. Rechazos             · cuántos por motivo y el detalle de cada uno
-  4. Siguen en ruta       · lo que todavía no tiene resultado
-  5. Gestiones · detalle  · todas las gestiones del período con su estado
-  6. Pedidos sin documento· aparte y rotulado: todavía NO son gestiones
+  3. Gestiones por tipo   · instalaciones, cambios y retiros, y cómo terminó c/u
+  4. Rechazos             · cuántos por motivo y el detalle de cada uno
+  5. Rechazos · seguimiento · si se volvieron a ingresar y cómo terminaron
+  6. Siguen en ruta       · lo que todavía no tiene resultado
+  7. Gestiones · detalle  · todas las gestiones del período con su estado
+  8. Pedidos sin documento· aparte y rotulado: todavía NO son gestiones
 """
 import io
 from datetime import date
@@ -25,7 +27,9 @@ import pandas as pd
 from app.export_analisis import _escribir, _con_total, _FMT_NUM, _FMT_PCT
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO, _desc)
-from app.kpis_maquinas import conteo_semana
+from app.kpis_maquinas import (DIAS_PARA_REINTENTAR, conteo_semana,
+                               etiqueta_mov, mezcla_movimientos,
+                               resumen_rechazos, seguimiento_rechazos)
 
 _FMT_FECHA = "dd/mm/yyyy"
 _MOV = {"nueva": "Instalación", "cambio": "Cambio", "retiro": "Retiro"}
@@ -37,8 +41,10 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                    clientes: pd.DataFrame | None = None,
                    hoy: date | None = None) -> bytes:
     """
-    `mov` puede traer semanas anteriores al período: se usan para la hoja de
-    tendencia. Las demás hojas se filtran al período.
+    `mov` puede traer semanas anteriores al período —se usan para la hoja de
+    tendencia— y también posteriores: el seguimiento de rechazos necesita ver lo
+    que pasó DESPUÉS del período para saber si un rechazo se volvió a ingresar.
+    Las demás hojas se filtran al período.
     """
     from openpyxl import Workbook
 
@@ -68,6 +74,15 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     rech = w[w["Estado entrega"] == RECHAZADA]
     motivo_top = (rech["Motivo del rechazo"].value_counts().index[0]
                   if not rech.empty else "—")
+    # El seguimiento mira TODOS los rechazos de `mov`, no solo los del período:
+    # un rechazo de hace tres semanas sin retomar sigue siendo un pedido perdido,
+    # y su reintento cae después del período. Igual que en la página.
+    seg = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov, ped,
+                               hoy=hoy)
+    res_seg = resumen_rechazos(seg)
+    mz = mezcla_movimientos(w)
+    n_mov = dict(zip(mz["Movimiento"], mz["Gestiones"])) if not mz.empty else {}
+
     filas = [
         ("Período", f"{f_ini:%d/%m/%Y} a {f_fin:%d/%m/%Y}", ""),
         ("Generado el", f"{hoy:%d/%m/%Y}", ""),
@@ -77,6 +92,12 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
         ("   Meta", round(meta_periodo) if meta_periodo else "—",
          "Meta semanal × semanas del período" if meta_g else "Sin meta fijada"),
         ("   % de la meta", (c["n"] / meta_periodo) if meta_periodo else "—", ""),
+        ("   Instalaciones (FL-4)", n_mov.get("Instalación", 0),
+         "Cliente nuevo: la máquina entra al parque"),
+        ("   Cambios (FL-1/3/5)", n_mov.get("Cambio", 0),
+         "El cliente sigue con máquina"),
+        ("   Retiros (FL-2)", n_mov.get("Retiro", 0),
+         "La máquina sale del parque. La meta no distingue: los tres suman igual"),
         ("", "", ""),
         ("2 · % DE ENTREGA", c["pct"] if c["pct"] is not None else "—",
          f"{c['ent']} entregadas de {c['base']} gestiones con despacho"),
@@ -90,7 +111,27 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
         ("CUADRE", f"{c['ent']} + {c['ruta']} + {c['sin_desp'] + c['sin_info']} "
                    f"+ {c['rech']} = {c['n']}",
          "Entregadas + en ruta + sin despacho + rechazadas = gestiones"),
+        ("", "", ""),
+        ("5 · RECHAZOS RETOMADOS", res_seg["n"],
+         "Todos los rechazos cargados, no solo los del período: el trabajo que "
+         "deja un rechazo no vence el domingo"),
+        ("   Ya entregados", res_seg["ok"],
+         "Se volvieron a ingresar y el segundo intento llegó"),
+        ("   Reingresados sin cerrar", res_seg["en_curso"],
+         "Van en camino, esperan documento, o el segundo intento también se "
+         "rechazó"),
+        ("   Sin retomar", res_seg["abiertos"],
+         f"Nadie los volvió a ingresar · {res_seg['vencidos']} llevan más de "
+         f"{DIAS_PARA_REINTENTAR} días"),
+        ("   % recuperado", res_seg["pct"] if res_seg["pct"] is not None else "—",
+         "Ya entregados sobre el total de rechazos"),
     ]
+    # Qué celdas van en formato porcentaje. Se marcan por etiqueta al construir
+    # la lista: cualquier regla por número de fila se rompe al agregar una.
+    _PCT = {"   % de la meta", "2 · % DE ENTREGA", "   % recuperado"}
+    pct_filas = {i for i, f in enumerate(filas)
+                 if f[0] in _PCT or (f[0].strip() == "Meta"
+                                     and isinstance(f[1], float))}
     res = pd.DataFrame(filas, columns=["Pregunta", "Resultado", "Detalle"])
     ws = _escribir(wb, "Resumen", res,
                    nota=("CÓMO LEER: todo se cuenta sobre las gestiones del "
@@ -98,11 +139,9 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                          "Una gestión puede venir de un pedido ingresado antes: "
                          "lo que manda es la fecha del documento. Entregas, "
                          "rechazos y en ruta son esas mismas gestiones."))
-    for i in range(len(res)):
-        etq = str(res.iloc[i, 0])
+    for i in pct_filas:
         celda = ws.cell(row=4 + i, column=2)
-        if ("% " in etq or etq.startswith("2 ·") or
-                (etq.strip() == "Meta" and i > 7)) and isinstance(celda.value, float):
+        if isinstance(celda.value, float):
             celda.number_format = _FMT_PCT
 
     # ── 2. Semana a semana ───────────────────────────────────────────────────
@@ -139,7 +178,19 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                     "con los días."),
               total_ultima=not tot.empty)
 
-    # ── 3. Rechazos ──────────────────────────────────────────────────────────
+    # ── 3. Gestiones por tipo ────────────────────────────────────────────────
+    _escribir(wb, "Gestiones por tipo", mz,
+              {c_: _FMT_NUM for c_ in ("Gestiones", "Entregadas", "En ruta",
+                                       "Sin despacho", "Rechazadas")}
+              | {"% de las gestiones": _FMT_PCT, "% de entrega": _FMT_PCT},
+              nota=("Las mismas gestiones del Resumen, partidas por tipo. "
+                    "Instalación es FL-4 (cliente nuevo), cambio es FL-1/3/5 y "
+                    "retiro es FL-2. Una instalación rechazada y un retiro "
+                    "rechazado no son el mismo problema: la primera es un "
+                    "cliente que se arrepintió, el segundo uno que no devuelve "
+                    "la máquina."))
+
+    # ── 4. Rechazos ──────────────────────────────────────────────────────────
     if rech.empty:
         _escribir(wb, "Rechazos", pd.DataFrame(),
                   nota="Ninguna gestión del período volvió rechazada.")
@@ -155,6 +206,7 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                         "siguiente."),
                   total_ultima=True)
         _escribir(wb, "Rechazos · detalle", pd.DataFrame({
+            "Fecha rechazo": rech["Fecha ruta"].dt.date,
             "Fecha documento": rech["fecha"].dt.date,
             "Documento": rech["_doc"],
             "Cliente": cli(rech["cliente_rut"]),
@@ -164,10 +216,31 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
             "Lo que dijo el repartidor": rech["Comentario de entrega"],
             "Transportista": rech["Transportista"],
             "Vendedor": rech["Vendedor"],
-        }).sort_values("Fecha documento"), {"Fecha documento": _FMT_FECHA},
-            nota="Una fila por gestión rechazada, con lo que escribió el repartidor.")
+        }).sort_values("Fecha documento"),
+            {"Fecha documento": _FMT_FECHA, "Fecha rechazo": _FMT_FECHA},
+            nota=("Una fila por gestión rechazada, con lo que escribió el "
+                  "repartidor. La fecha del rechazo es la de la ruta, no la del "
+                  "documento. Qué pasó con cada una, en la hoja siguiente."))
 
-    # ── 4. Siguen en ruta ────────────────────────────────────────────────────
+    # ── 5. Rechazos · seguimiento ────────────────────────────────────────────
+    if seg.empty:
+        _escribir(wb, "Rechazos · seguimiento", pd.DataFrame(),
+                  nota="Sin rechazos en la ventana cargada.")
+    else:
+        _escribir(wb, "Rechazos · seguimiento",
+                  seg.drop(columns=["_abierto"]),
+                  {"Fecha rechazo": _FMT_FECHA, "Fecha documento": _FMT_FECHA,
+                   "Días desde el rechazo": _FMT_NUM},
+                  nota=("QUÉ PASÓ DESPUÉS DE CADA RECHAZO. Ordenada con los que "
+                        "nadie retomó arriba: esa es la lista para los "
+                        "vendedores. Como ningún sistema guarda el número de "
+                        "serie de la máquina, el reintento se reconoce por mismo "
+                        "cliente + mismo tipo de movimiento + fecha posterior al "
+                        "rechazo; la columna «Reintento» dice con qué documento "
+                        "o pedido se emparejó, para poder verificarlo. Incluye "
+                        "todos los rechazos cargados, no solo los del período."))
+
+    # ── 6. Siguen en ruta ────────────────────────────────────────────────────
     ruta = w[w["Estado entrega"].isin([EN_RUTA, SIN_DESPACHO])].copy()
     if ruta.empty:
         _escribir(wb, "Siguen en ruta", pd.DataFrame(),
@@ -190,7 +263,7 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                   "aparece en el Excel de despachos: no ha salido, o falta "
                   "cargar el archivo."))
 
-    # ── 5. Gestiones · detalle ───────────────────────────────────────────────
+    # ── 7. Gestiones · detalle ───────────────────────────────────────────────
     _escribir(wb, "Gestiones · detalle", pd.DataFrame({
         "Fecha documento": w["fecha"].dt.date,
         "Documento": w["_doc"],
@@ -205,12 +278,19 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
         {"Fecha documento": _FMT_FECHA, "Fecha ruta": _FMT_FECHA},
         nota="Una fila por gestión del período. Es la base de todas las demás hojas.")
 
-    # ── 6. Pedidos sin documento ─────────────────────────────────────────────
+    # ── 8. Pedidos sin documento ─────────────────────────────────────────────
     if ped is not None and not ped.empty:
         cola = ped[ped["_sin_dte"] & ~ped["_fantasma"]].copy()
         if not cola.empty:
             vmap = dict(mov.drop_duplicates("vendedor_id")
                         .set_index("vendedor_id")["Vendedor"])
+            # Veinte pedidos en cola no son lo mismo si son retiros que si son
+            # instalaciones: los primeros son parque que sigue en la calle, los
+            # segundos venta que todavía no empieza.
+            n_c = cola["_mov"].value_counts()
+            mezcla_cola = " · ".join(
+                etiqueta_mov(mv, int(n_c[mv]))
+                for mv in ("nueva", "cambio", "retiro") if n_c.get(mv))
             _escribir(wb, "Pedidos sin documento", pd.DataFrame({
                 "Días esperando": (pd.Timestamp(hoy) - cola["_ingreso"]).dt.days,
                 "Fecha pedido": cola["_ingreso"].dt.date,
@@ -220,10 +300,11 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                 "Cliente": cli(cola["cliente_rut"]),
             }).sort_values("Días esperando", ascending=False),
                 {"Fecha pedido": _FMT_FECHA, "Días esperando": _FMT_NUM},
-                nota=("APARTE: pedidos que el vendedor ya ingresó y todavía no "
-                      "tienen documento. Aún NO son gestiones y no cuentan en "
-                      "ninguna otra hoja; cuando se emita el documento pasan a "
-                      "contar en esa semana. Salen todos los abiertos hoy."))
+                nota=(f"APARTE: pedidos que el vendedor ya ingresó y todavía "
+                      f"no tienen documento. Aún NO son gestiones y no cuentan "
+                      f"en ninguna otra hoja; cuando se emita el documento pasan "
+                      f"a contar en esa semana. Salen todos los abiertos hoy. "
+                      f"De los {len(cola)}: {mezcla_cola}."))
 
     buf = io.BytesIO()
     wb.save(buf)

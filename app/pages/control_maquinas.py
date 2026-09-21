@@ -3,10 +3,15 @@ Control de Máquinas — la semana de gestiones, contada de una sola manera.
 
 Gerencia viene a responder cuatro preguntas, siempre sobre la misma semana:
 
-    1. ¿Cuántas gestiones hubo?          (contra la meta)
-    2. ¿Cuántas se entregaron?           (% de entrega)
-    3. ¿Cuántas volvieron y por qué?     (motivos de rechazo)
+    1. ¿Cuántas gestiones hubo, y de qué tipo?   (contra la meta)
+    2. ¿Cuántas se entregaron?                   (% de entrega)
+    3. ¿Cuántas volvieron y por qué?             (motivos de rechazo)
     4. ¿Cuáles siguen en ruta?
+    5. ¿Qué pasó con las que volvieron?          (se reingresaron o se perdieron)
+
+La quinta se agregó en septiembre de 2026: gerencia veía los rechazos de la
+semana pero nadie sabía si el vendedor los volvía a ingresar. El cruce que lo
+responde vive en `kpis_maquinas.seguimiento_rechazos`.
 
 La regla que evita el enredo: TODO se cuenta sobre las gestiones de la semana,
 es decir, fletes de máquina con documento (DTE) emitido en esas fechas. Un
@@ -31,7 +36,9 @@ from app.data import (get_objetivos_maquinas, upsert_objetivos_maquinas,
                       get_dim_cliente_full)
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO)
-from app.kpis_maquinas import cargar_todo, conteo_semana
+from app.kpis_maquinas import (DIAS_PARA_REINTENTAR, cargar_todo,
+                               conteo_semana, mezcla_movimientos, mezcla_texto,
+                               resumen_rechazos, seguimiento_rechazos)
 
 _C = {"verde": "#1A7F4B", "amrl": "#D4881E", "rojo": "#C0392B",
       "gris": "#9CA3AF", "rosa": "#E62984", "slate": "#64748B"}
@@ -49,6 +56,7 @@ _RANGOS = {
 _SEMANAS_TENDENCIA = 8
 
 _MOV = {"nueva": "Instalación", "cambio": "Cambio", "retiro": "Retiro"}
+_MOV_PL = {"nueva": "Instalaciones", "cambio": "Cambios", "retiro": "Retiros"}
 
 # Solo las metas que esta página usa. El resto de las columnas de
 # objetivos_maquinas se conserva en la base y lo sigue usando el Excel.
@@ -133,8 +141,14 @@ def render(client, anio: int, mes: int):
     # Se cargan las 8 semanas de una vez: la del período y las anteriores para
     # la tendencia. Así la tarjeta y el gráfico salen del mismo dato.
     ini_tend = f_ini - datetime.timedelta(weeks=_SEMANAS_TENDENCIA - 1)
+    # Se carga hasta HOY aunque se esté mirando una semana vieja: el reintento de
+    # un rechazo ocurre después de la semana en que se rechazó, y sin esas filas
+    # el seguimiento diría "sin reintento" de algo que ya se resolvió. Nada de lo
+    # posterior al período entra en los conteos: las tarjetas y la barra se arman
+    # con `w` y el gráfico con un rango de semanas que termina en `f_fin`.
+    fin_carga = max(f_fin, datetime.date.today())
     with st.spinner("Cargando gestiones y despachos…"):
-        mov, ped, desp = cargar_todo(client, ini_tend, f_fin)
+        mov, ped, desp = cargar_todo(client, ini_tend, fin_carga)
 
     if mov is None or mov.empty:
         st.markdown('<div class="estado-vacio">Sin gestiones en el período.</div>',
@@ -179,10 +193,22 @@ def render(client, anio: int, mes: int):
     motivo_top = (rech["Motivo del rechazo"].value_counts().index[0]
                   if not rech.empty else "")
 
+    # El seguimiento se calcula sobre TODOS los rechazos de la ventana cargada,
+    # no solo los de la semana: lo que gerencia persigue es la lista abierta, y
+    # un rechazo de hace tres semanas que nadie retomó sigue siendo un pedido
+    # perdido. Los de la semana se sacan de esta misma tabla, así la de arriba y
+    # la de abajo nunca se contradicen.
+    seg = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov, ped)
+    seg_w = (seg[seg["Documento"].isin(set(rech["_doc"]))] if not seg.empty
+             else seg)
+    res_seg = resumen_rechazos(seg)
+    abiertos_w = int(seg_w["_abierto"].sum()) if not seg_w.empty else 0
+    _advertencias(res_seg, w)
+
     st.markdown(
         '<div class="kpi-grid-4">'
         + _tarjeta("Gestiones de la semana", str(c["n"]), color_g, linea_g,
-                   "documentos de flete emitidos", barra_g)
+                   mezcla_texto(w) or "documentos de flete emitidos", barra_g)
         + _tarjeta("% de entrega", valor_e, color_e, linea_e, nota_e, c["pct"])
         + _tarjeta("Siguen en ruta", str(c["ruta"] + c["sin_desp"]),
                    _C["amrl"] if (c["ruta"] + c["sin_desp"]) else _C["verde"],
@@ -193,7 +219,11 @@ def render(client, anio: int, mes: int):
                    _C["rojo"] if c["rech"] else _C["verde"],
                    (f"motivo principal: {motivo_top}" if motivo_top
                     else "ninguna volvió"),
-                   "ver el detalle abajo" if c["rech"] else "")
+                   # Un rechazo solo termina cuando vuelve a ingresarse: el
+                   # número que importa no es cuántas volvieron sino cuántas
+                   # de esas siguen sin que nadie las retome.
+                   (f"{abiertos_w} sin retomar todavía" if abiertos_w
+                    else "todas retomadas" if c["rech"] else ""))
         + '</div>', unsafe_allow_html=True)
 
     # ── La semana en una barra ───────────────────────────────────────────────
@@ -218,6 +248,8 @@ def render(client, anio: int, mes: int):
                           paper_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig, use_container_width=True)
 
+    _tabla_mezcla(w)
+
     # ── Rechazos y en ruta, lado a lado ──────────────────────────────────────
     nombres = _nombres_cliente(client)
     col1, col2 = st.columns(2)
@@ -228,13 +260,14 @@ def render(client, anio: int, mes: int):
         else:
             motivos = rech["Motivo del rechazo"].value_counts()
             st.markdown(" · ".join(f"**{m}** ({n})" for m, n in motivos.items()))
-            st.dataframe(pd.DataFrame({
-                "Cliente": rech["cliente_rut"].map(nombres).fillna(rech["cliente_rut"]),
-                "Movimiento": rech["tipo_mov"].map(_MOV),
-                "Motivo": rech["Motivo del rechazo"],
-                "Lo que dijo el repartidor": rech["Comentario de entrega"],
-                "Transportista": rech["Transportista"],
-            }), use_container_width=True, hide_index=True)
+            # Vendedor, comuna y fecha van en la tabla porque el rechazo se
+            # persigue llamando a alguien: sin el nombre y el lugar, la fila no
+            # se puede accionar. La última columna dice si ya se retomó.
+            st.dataframe(seg_w[[
+                "Fecha rechazo", "Cliente", "Comuna", "Vendedor", "Movimiento",
+                "Motivo", "Estado post-rechazo", "Reintento",
+                "Lo que dijo el repartidor", "Transportista"]],
+                use_container_width=True, hide_index=True)
     with col2:
         ruta = w[w["Estado entrega"].isin([EN_RUTA, SIN_DESPACHO])].copy()
         _sec(f"Siguen en ruta · {len(ruta)}")
@@ -257,12 +290,130 @@ def render(client, anio: int, mes: int):
                        "aparece en el Excel de despachos: o no ha salido, o falta "
                        "cargar el archivo.")
 
+    _seguimiento(seg, res_seg, ini_tend)
+
     # ── Tendencia ────────────────────────────────────────────────────────────
     st.divider()
     _sec(f"Últimas {_SEMANAS_TENDENCIA} semanas")
     _grafico_tendencia(mov, f_fin, meta_g)
 
     _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w)
+
+
+def _advertencias(res: dict, w: pd.DataFrame) -> None:
+    """
+    Lo que hay que empujar esta semana, y solo eso.
+
+    Dos cosas ameritan interrumpir la lectura de la página: un rechazo que nadie
+    volvió a ingresar —el pedido se perdió y no se enteró nadie— y una semana
+    que cumple la meta retirando máquinas, que es cumplirla al revés. Todo lo
+    demás tiene su propia tabla; un panel de alertas con diez líneas ya se probó
+    y no lo leía nadie.
+    """
+    avisos = []
+    if res["vencidos"]:
+        avisos.append(
+            f"**{res['vencidos']} rechazos llevan más de {DIAS_PARA_REINTENTAR} "
+            f"días sin volver a ingresarse.** Cada uno es una máquina que salió "
+            f"a ruta, volvió al camión y nadie la retomó. El detalle, con "
+            f"vendedor y comuna, está en «Qué pasó con los rechazos».")
+    if len(w):
+        retiros = int((w["tipo_mov"] == "retiro").sum())
+        nuevas = int((w["tipo_mov"] == "nueva").sum())
+        if retiros > len(w) / 2 and retiros > nuevas:
+            avisos.append(
+                f"**{retiros} de las {len(w)} gestiones de la semana son "
+                f"retiros** y solo {nuevas} son instalaciones: la meta se está "
+                f"cumpliendo desinstalando parque.")
+    if avisos:
+        st.warning("\n\n".join("⚠️ " + a for a in avisos))
+
+
+def _tabla_mezcla(w: pd.DataFrame) -> None:
+    """De las gestiones de la semana, cuántas de cada tipo y cómo terminó cada tipo."""
+    mz = mezcla_movimientos(w)
+    if mz.empty:
+        return
+    _sec("Qué se movió")
+    v = mz.copy()
+    v["% de las gestiones"] = v["% de las gestiones"].map(lambda x: f"{x * 100:.0f}%")
+    v["% de entrega"] = v["% de entrega"].map(
+        lambda x: "—" if x is None or pd.isna(x) else f"{x * 100:.0f}%")
+    st.dataframe(v, use_container_width=True, hide_index=True)
+    st.caption("Las mismas gestiones de la barra de arriba, partidas por tipo. "
+               "Instalación es FL-4 (cliente nuevo), cambio es FL-1/3/5 y retiro "
+               "es FL-2. La meta semanal no distingue: los tres suman igual.")
+
+
+# Columnas del seguimiento que se muestran en pantalla, en el orden en que se
+# leen: primero cuánto lleva, después quién y dónde, y al final el texto largo.
+# El CSV se baja completo.
+_COLS_SEG_VISTA = ["Días desde el rechazo", "Fecha rechazo",
+                   "Estado post-rechazo", "Vendedor", "Cliente", "Comuna",
+                   "Movimiento", "Motivo", "Reintento",
+                   "Lo que dijo el repartidor", "Documento"]
+
+
+def _seguimiento(seg: pd.DataFrame, res: dict, desde) -> None:
+    """
+    Qué pasó con los rechazos: si volvieron a ingresarse y cómo terminaron.
+
+    Mira una ventana más ancha que el resto de la página —todos los rechazos
+    cargados, no solo los de la semana elegida— a propósito: el trabajo que deja
+    un rechazo no vence el domingo, y la pregunta de gerencia es "¿cuáles siguen
+    sueltos?", no "¿cuáles se rechazaron esa semana?".
+    """
+    st.divider()
+    _sec(f"Qué pasó con los rechazos · desde el {desde:%d/%m}")
+    if seg is None or seg.empty:
+        st.success("Ningún rechazo en la ventana cargada.")
+        return
+
+    k = st.columns(4)
+    k[0].metric("Rechazos", res["n"],
+                help="Todos los de la ventana, no solo los de la semana elegida.")
+    k[1].metric("Ya entregados", res["ok"],
+                f"{res['pct'] * 100:.0f}% recuperado" if res["pct"] else None,
+                help="Se volvieron a ingresar y el segundo intento llegó.")
+    k[2].metric("Reingresados sin cerrar", res["en_curso"],
+                help="Volvieron a ingresarse y todavía no hay resultado: van en "
+                     "camino, esperan documento, o el segundo intento también "
+                     "se rechazó (ese segundo documento tiene su propia fila).")
+    k[3].metric("Sin retomar", res["abiertos"],
+                f"{res['vencidos']} sobre {DIAS_PARA_REINTENTAR} días"
+                if res["vencidos"] else None, delta_color="inverse",
+                help="Nadie los volvió a ingresar. Esta es la lista que hay que "
+                     "mandarle a los vendedores.")
+
+    st.caption(
+        "**Cómo se cruza.** Ningún sistema guarda el número de serie de la "
+        "máquina, así que un reintento se reconoce por **mismo cliente + mismo "
+        "tipo de movimiento + fecha posterior al rechazo**: primero se busca "
+        "otro documento de flete que cumpla eso (y su estado de entrega es el "
+        "estado post-rechazo), y si no hay, un pedido ingresado después y "
+        "todavía sin DTE. La columna «Reintento» muestra con qué documento o "
+        "pedido se emparejó, para poder verificarlo.")
+
+    # Los que nadie retomó van en la tabla principal y el resto en un desplegable
+    # —no en un checkbox— a propósito: un checkbox reejecuta la página entera y
+    # vuelve a bajar las ocho semanas de la base para mostrar filas que ya están
+    # calculadas. El expander es puro layout y no cuesta una consulta.
+    abiertos = seg[seg["_abierto"]]
+    if abiertos.empty:
+        st.success("Todos los rechazos de la ventana ya se retomaron.")
+    else:
+        st.dataframe(abiertos[_COLS_SEG_VISTA], use_container_width=True,
+                     hide_index=True)
+    resto = seg[~seg["_abierto"]]
+    if not resto.empty:
+        with st.expander(f"Ver los que ya se retomaron · {len(resto)}"):
+            st.dataframe(resto[_COLS_SEG_VISTA], use_container_width=True,
+                         hide_index=True)
+    st.download_button(
+        "⬇️ Descargar el seguimiento en CSV",
+        seg.drop(columns=["_abierto"]).to_csv(index=False).encode("utf-8-sig"),
+        f"rechazos_seguimiento_{datetime.date.today():%Y%m%d}.csv",
+        "text/csv", key="dl_seg")
 
 
 def _grafico_tendencia(mov: pd.DataFrame, f_fin, meta_g):
@@ -325,6 +476,16 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
         if cola.empty:
             st.success("No hay pedidos esperando documento.")
         else:
+            # Veinte pedidos en cola no son lo mismo si son retiros que si son
+            # instalaciones: los primeros son parque que sigue en la calle, los
+            # segundos venta que todavía no empieza.
+            cuenta = cola["_mov"].value_counts()
+            cols_m = st.columns(4)
+            for col, mv in zip(cols_m, ("nueva", "cambio", "retiro")):
+                col.metric(_MOV_PL[mv], int(cuenta.get(mv, 0)))
+            cols_m[3].metric("Sin clasificar", int(cola["_mov"].isna().sum()),
+                             help="Líneas de flete con un código FL que no es "
+                                  "FL-1/2/3/4/5.")
             vmap = (dict(mov.drop_duplicates("vendedor_id")
                          .set_index("vendedor_id")["Vendedor"])
                     if mov is not None and not mov.empty else {})
