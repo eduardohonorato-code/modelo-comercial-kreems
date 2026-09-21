@@ -43,6 +43,16 @@ from app.kpis_maquinas import (DIAS_PARA_REINTENTAR, cargar_todo,
 _C = {"verde": "#1A7F4B", "amrl": "#D4881E", "rojo": "#C0392B",
       "gris": "#9CA3AF", "rosa": "#E62984", "slate": "#64748B"}
 
+# Un identificador por tarjeta: el documento que se emite, el visto de la
+# entrega, el camión que va en ruta y la equis del que volvió. El color es el
+# del concepto y no cambia con el resultado (ver `_tarjeta`).
+_ICO = {
+    "gestiones": ("🧾", _C["slate"]),
+    "entrega": ("✔", _C["verde"]),
+    "ruta": ("🚚", _C["amrl"]),
+    "rechazo": ("✖", _C["rojo"]),
+}
+
 # Semanas de lunes a domingo, relativas a hoy. Gerencia mide por semana.
 _RANGOS = {
     "Semana pasada": ("semana", 1),
@@ -87,8 +97,16 @@ def _rango():
 
 
 def _tarjeta(titulo: str, valor: str, color: str, linea1: str,
-             linea2: str = "", barra: float | None = None) -> str:
-    """Tarjeta grande con un número, su contexto y (opcional) una barra."""
+             linea2: str = "", barra: float | None = None,
+             icono: tuple[str, str] | None = None) -> str:
+    """
+    Tarjeta grande con un número, su contexto y (opcional) una barra.
+
+    `icono` es `(glifo, color)` y va chico, arriba a la derecha, en un chip del
+    mismo color al 10%. Su color es FIJO por tarjeta, no el del semáforo: el
+    ícono dice de qué se está hablando y el número grande dice cómo va. Un tick
+    que se pone rojo cuando el % de entrega baja confunde las dos cosas.
+    """
     barra_html = ""
     if barra is not None:
         ancho = max(min(barra, 1.0), 0) * 100
@@ -97,9 +115,18 @@ def _tarjeta(titulo: str, valor: str, color: str, linea1: str,
             'height:.5rem;overflow:hidden;margin:.45rem 0 .25rem">'
             f'<div style="width:{ancho:.0f}%;height:100%;background:{color};'
             'border-radius:99px"></div></div>')
+    chip = ""
+    if icono:
+        glifo, ci = icono
+        chip = (f'<span style="font-size:.85rem;line-height:1;color:{ci};'
+                f'background:{ci}1A;border-radius:7px;padding:.25rem .35rem;'
+                'flex:none">' + glifo + '</span>')
     return (
         '<div class="kpi-card" style="text-align:left;padding:1.1rem 1.2rem">'
-        f'<div class="kpi-label">{titulo}</div>'
+        '<div style="display:flex;align-items:center;justify-content:space-'
+        'between;gap:.4rem;margin-bottom:.22rem">'
+        f'<div class="kpi-label" style="margin-bottom:0">{titulo}</div>'
+        f'{chip}</div>'
         f'<div class="kpi-value" style="color:{color};font-size:2.3rem">{valor}</div>'
         f'{barra_html}'
         f'<div class="kpi-sub" style="font-size:.8rem">{linea1}</div>'
@@ -208,13 +235,15 @@ def render(client, anio: int, mes: int):
     st.markdown(
         '<div class="kpi-grid-4">'
         + _tarjeta("Gestiones de la semana", str(c["n"]), color_g, linea_g,
-                   mezcla_texto(w) or "documentos de flete emitidos", barra_g)
-        + _tarjeta("% de entrega", valor_e, color_e, linea_e, nota_e, c["pct"])
+                   mezcla_texto(w) or "documentos de flete emitidos", barra_g,
+                   _ICO["gestiones"])
+        + _tarjeta("% de entrega", valor_e, color_e, linea_e, nota_e, c["pct"],
+                   _ICO["entrega"])
         + _tarjeta("Siguen en ruta", str(c["ruta"] + c["sin_desp"]),
                    _C["amrl"] if (c["ruta"] + c["sin_desp"]) else _C["verde"],
                    f"{c['ruta']} en camino" + (f" · {c['sin_desp']} sin despacho"
                                                if c["sin_desp"] else ""),
-                   "todavía sin confirmar entrega")
+                   "todavía sin confirmar entrega", None, _ICO["ruta"])
         + _tarjeta("Rechazadas", str(c["rech"]),
                    _C["rojo"] if c["rech"] else _C["verde"],
                    (f"motivo principal: {motivo_top}" if motivo_top
@@ -223,7 +252,8 @@ def render(client, anio: int, mes: int):
                    # número que importa no es cuántas volvieron sino cuántas
                    # de esas siguen sin que nadie las retome.
                    (f"{abiertos_w} sin retomar todavía" if abiertos_w
-                    else "todas retomadas" if c["rech"] else ""))
+                    else "todas retomadas" if c["rech"] else ""),
+                   None, _ICO["rechazo"])
         + '</div>', unsafe_allow_html=True)
 
     # ── La semana en una barra ───────────────────────────────────────────────
