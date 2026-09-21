@@ -47,7 +47,8 @@ _C = {"verde": "#1A7F4B", "amrl": "#D4881E", "rojo": "#C0392B",
 # entrega, el camión que va en ruta y la equis del que volvió. El color es el
 # del concepto y no cambia con el resultado (ver `_tarjeta`).
 _ICO = {
-    "gestiones": ("🧾", _C["slate"]),
+    # 📄 y no 🧾: la boleta ya es el ícono de la sección Clientes en el menú.
+    "gestiones": ("📄", _C["slate"]),
     "entrega": ("✔", _C["verde"]),
     "ruta": ("🚚", _C["amrl"]),
     "rechazo": ("✖", _C["rojo"]),
