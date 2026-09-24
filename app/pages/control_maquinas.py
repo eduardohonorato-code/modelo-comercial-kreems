@@ -60,10 +60,27 @@ _ICO = {
 _RANGOS = {
     "Semana pasada": ("semana", 1),
     "Semana en curso": ("semana", 0),
+    "Próxima semana": ("semana", -1),
     "Hace 2 semanas": ("semana", 2),
     "Hace 3 semanas": ("semana", 3),
     "Mes en curso": ("mes", 0),
+    "Rango personalizado": ("pers", 0),
 }
+
+# Primer despacho de Autoventa que hay en la base. Antes de esta fecha no hay
+# con qué confirmar si una máquina se entregó o volvió, así que tampoco existen
+# rechazos: es el límite real hacia atrás de todo lo que mira esta página.
+# Acuña no pasa por Autoventa y nunca tiene despacho, en ninguna fecha.
+_PRIMER_DESPACHO = datetime.date(2026, 2, 20)
+# Desde dónde se cargan los movimientos: un mes antes del primer despacho,
+# porque una factura puede preceder a su ruta en varias semanas.
+_INI_HISTORIA = _PRIMER_DESPACHO - datetime.timedelta(days=31)
+
+# Logística factura con la fecha de ENTREGA, no la de emisión: un jueves ya hay
+# documentos fechados el sábado y programados en ruta el viernes (24-09-2026:
+# 12 gestiones, entre ellas Full Market). Se carga esta holgura hacia adelante
+# para que esos documentos existan en la página.
+_DIAS_ADELANTE = 14
 
 # Cuántas semanas muestra el gráfico de tendencia.
 _SEMANAS_TENDENCIA = 8
@@ -87,16 +104,34 @@ def _sec(title: str):
 
 
 def _rango():
-    """(inicio, fin) de la semana o mes elegido."""
+    """
+    (inicio, fin) del período elegido.
+
+    La semana y el mes en curso llegan hasta su ÚLTIMO día, no hasta hoy. Antes
+    se cortaban en hoy, y como logística factura con la fecha de entrega, el
+    jueves 24-09-2026 quedaban fuera 12 gestiones fechadas el viernes y el
+    sábado que ya estaban en ruta —las de Full Market entre ellas—. Un documento
+    con fecha futura no es una predicción: ya se emitió, solo que con esa fecha.
+    """
     tipo, n = _RANGOS.get(st.session_state.get("cm_rango", "Semana pasada"),
                           ("semana", 1))
     hoy = datetime.date.today()
+    un_dia = datetime.timedelta(days=1)
+    if tipo == "pers":
+        sel = st.session_state.get("cm_rango_pers")
+        if isinstance(sel, (list, tuple)) and len(sel) == 2:
+            return sel[0], sel[1]
+        # El calendario devuelve una sola fecha entre el primer y el segundo
+        # clic: mientras tanto se mira desde esa fecha hasta hoy.
+        ini = (sel[0] if isinstance(sel, (list, tuple)) and sel
+               else hoy - datetime.timedelta(days=27))
+        return ini, max(ini, hoy)
     if tipo == "mes":
-        return hoy.replace(day=1), hoy
+        primero_sgte = (hoy.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+        return hoy.replace(day=1), primero_sgte - un_dia
     lunes = hoy - datetime.timedelta(days=hoy.weekday())
     ini = lunes - datetime.timedelta(days=7 * n)
-    fin = hoy if n == 0 else ini + datetime.timedelta(days=6)
-    return ini, fin
+    return ini, ini + datetime.timedelta(days=6)
 
 
 def _tarjeta(titulo: str, valor: str, color: str, linea1: str,
@@ -138,6 +173,20 @@ def _tarjeta(titulo: str, valor: str, color: str, linea1: str,
         + '</div>')
 
 
+@st.cache_data(show_spinner=False, ttl=300)
+def _cargar(_client, ini, fin):
+    """
+    `cargar_todo` con caché de 5 minutos.
+
+    Sin caché, cada clic en un filtro volvía a bajar movimientos, despachos y
+    pedidos de la base: con el filtro de fechas de los rechazos yendo hasta
+    febrero son ~5 segundos por clic. La página es solo de gerencia y gerencia
+    ve todo, así que la caché compartida no filtra nada que no debiera. El botón
+    «Recargar» la limpia cuando se acaba de correr el ETL.
+    """
+    return cargar_todo(_client, ini, fin)
+
+
 @st.cache_data(show_spinner=False, ttl=600)
 def _nombres_cliente(_client) -> dict:
     try:
@@ -152,33 +201,64 @@ def render(client, anio: int, mes: int):
         st.warning("Solo el rol **gerencia/admin** puede ver el control de máquinas.")
         return
 
-    c1, c2 = st.columns([1, 3])
+    hoy = datetime.date.today()
+    c1, c2, c3 = st.columns([1.2, 3, 0.8])
     with c1:
-        st.selectbox("Semana", list(_RANGOS), key="cm_rango")
+        st.selectbox("Período", list(_RANGOS), key="cm_rango")
+    pers = st.session_state.get("cm_rango") == "Rango personalizado"
+    if pers:
+        with c2:
+            st.date_input(
+                "Desde / hasta", value=(hoy - datetime.timedelta(days=27), hoy),
+                min_value=_PRIMER_DESPACHO,
+                max_value=hoy + datetime.timedelta(days=_DIAS_ADELANTE),
+                format="DD/MM/YYYY", key="cm_rango_pers",
+                help=f"Desde el {_PRIMER_DESPACHO:%d/%m/%Y}, el primer despacho "
+                     "cargado: antes no hay con qué confirmar entregas. Hacia "
+                     "adelante, hasta donde ya hay documentos fechados.")
     f_ini, f_fin = _rango()
-    with c2:
-        st.markdown(
-            f'<div style="padding-top:1.9rem;color:var(--gris);font-size:.88rem">'
-            f'📅 <b>{f_ini:%d/%m/%Y} → {f_fin:%d/%m/%Y}</b>'
-            + (" · semana en curso, todavía se está llenando"
-               if f_fin == datetime.date.today() else "")
-            + '</div>', unsafe_allow_html=True)
+    if f_ini > hoy:
+        estado_per = " · período futuro: solo documentos ya emitidos con esas fechas"
+    elif f_fin >= hoy:
+        estado_per = " · período en curso, todavía se está llenando"
+    else:
+        estado_per = ""
+    linea_per = (f'<div style="padding-top:{".2rem" if pers else "1.9rem"};'
+                 'color:var(--gris);font-size:.88rem">'
+                 f'📅 <b>{f_ini:%d/%m/%Y} → {f_fin:%d/%m/%Y}</b>{estado_per}</div>')
+    if pers:
+        st.markdown(linea_per, unsafe_allow_html=True)
+    else:
+        with c2:
+            st.markdown(linea_per, unsafe_allow_html=True)
+    with c3:
+        st.markdown('<div style="height:1.75rem"></div>', unsafe_allow_html=True)
+        if st.button("🔄 Recargar", key="cm_recargar",
+                     help="Vuelve a leer la base. Los datos se guardan 5 minutos "
+                          "para que los filtros respondan rápido."):
+            _cargar.clear()
 
     metas = get_objetivos_maquinas(client, f_ini.year, f_ini.month)
     meta_g = metas.get("meta_gestiones_semana")
     meta_e = metas.get("meta_pct_entregado")
 
-    # Se cargan las 8 semanas de una vez: la del período y las anteriores para
-    # la tendencia. Así la tarjeta y el gráfico salen del mismo dato.
+    # UNA sola carga, desde la historia completa hasta unos días después de hoy,
+    # y cada sección filtra su propia ventana de forma explícita:
+    #   · tarjetas, barra y «Qué se movió» → `w`, las gestiones del período
+    #   · tendencia → las 8 semanas que terminan en `f_fin`
+    #   · rechazos → su propio filtro de fechas (por defecto, últimas 8 semanas)
+    #   · facturados sin despacho → toda la historia hasta hoy
+    # Antes la carga partía 8 semanas antes del período elegido, y la cola de
+    # despacho, que no filtraba, cambiaba de tamaño según el selector: 0 con la
+    # semana en curso, 1 con el mes, cuando en la base había 9. Traer desde
+    # febrero casi no cuesta más: lo pesado son los despachos, y esos ya se
+    # pedían con 180 días de margen hacia atrás.
+    # Hacia adelante, `_DIAS_ADELANTE`: logística factura con la fecha de
+    # entrega, así que un reintento reingresado hoy puede venir fechado el sábado.
     ini_tend = f_ini - datetime.timedelta(weeks=_SEMANAS_TENDENCIA - 1)
-    # Se carga hasta HOY aunque se esté mirando una semana vieja: el reintento de
-    # un rechazo ocurre después de la semana en que se rechazó, y sin esas filas
-    # el seguimiento diría "sin reintento" de algo que ya se resolvió. Nada de lo
-    # posterior al período entra en los conteos: las tarjetas y la barra se arman
-    # con `w` y el gráfico con un rango de semanas que termina en `f_fin`.
-    fin_carga = max(f_fin, datetime.date.today())
+    fin_carga = max(f_fin, hoy) + datetime.timedelta(days=_DIAS_ADELANTE)
     with st.spinner("Cargando gestiones y despachos…"):
-        mov, ped, desp = cargar_todo(client, ini_tend, fin_carga)
+        mov, ped, desp = _cargar(client, min(ini_tend, _INI_HISTORIA), fin_carga)
 
     if mov is None or mov.empty:
         st.markdown('<div class="estado-vacio">Sin gestiones en el período.</div>',
@@ -188,6 +268,7 @@ def render(client, anio: int, mes: int):
 
     w = mov[mov["fecha"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))].copy()
     c = conteo_semana(w)
+    n_futuro = int((w["fecha"] > pd.Timestamp(hoy)).sum())
 
     st.info(
         f"**Cómo leer esta página.** Todo se cuenta sobre las **gestiones de la "
@@ -195,14 +276,25 @@ def render(client, anio: int, mes: int):
         f"{f_ini:%d/%m} y el {f_fin:%d/%m}. Una gestión puede venir de un pedido "
         f"ingresado semanas antes — lo que cuenta es la fecha del documento. "
         f"Las entregas, los rechazos y los que van en ruta son **esas mismas "
-        f"{c['n']} gestiones**, no otro grupo.")
+        f"{c['n']} gestiones**, no otro grupo."
+        + (f"\n\nIncluye **{n_futuro} con documento fechado después de hoy**: "
+           f"logística factura con la fecha de entrega, así que ya están "
+           f"emitidas y, casi siempre, programadas en ruta."
+           if n_futuro else ""))
 
     # ── 1-4. Las cuatro respuestas ───────────────────────────────────────────
-    if meta_g:
-        linea_g = f"meta {meta_g} · {c['n'] / meta_g * 100:.0f}% de la meta"
-        color_g = _C["verde"] if c["n"] >= meta_g else (
-            _C["amrl"] if c["n"] >= meta_g * 0.8 else _C["rojo"])
-        barra_g = c["n"] / meta_g
+    # La meta es SEMANAL. En un período de más de una semana (mes, rango
+    # personalizado) se compara contra meta × semanas, igual que el Excel:
+    # comparar el total del mes con 22 daba "340% de la meta".
+    semanas_per = max(((f_fin - f_ini).days + 1) / 7, 1)
+    meta_per = meta_g * semanas_per if meta_g else None
+    if meta_per:
+        linea_g = (f"meta {meta_per:.0f}"
+                   + (f" ({meta_g}/semana)" if semanas_per > 1 else "")
+                   + f" · {c['n'] / meta_per * 100:.0f}% de la meta")
+        color_g = _C["verde"] if c["n"] >= meta_per else (
+            _C["amrl"] if c["n"] >= meta_per * 0.8 else _C["rojo"])
+        barra_g = c["n"] / meta_per
     else:
         linea_g, color_g, barra_g = "sin meta fijada", _C["slate"], None
 
@@ -216,28 +308,36 @@ def render(client, anio: int, mes: int):
             color_e, linea_e = _C["slate"], f"{c['ent']} de {c['base']}"
     else:
         valor_e, color_e, linea_e = "—", _C["slate"], "sin despachos cargados"
-    nota_e = ("la semana recién cerró: sube a medida que se confirmen las que "
-              "van en ruta" if c["ruta"] else "")
+    nota_e = ("sube a medida que se confirmen las que van en ruta"
+              if c["ruta"] else "")
 
     rech = w[w["Estado entrega"] == RECHAZADA]
     motivo_top = (rech["Motivo del rechazo"].value_counts().index[0]
                   if not rech.empty else "")
 
-    # El seguimiento se calcula sobre TODOS los rechazos de la ventana cargada,
-    # no solo los de la semana: lo que gerencia persigue es la lista abierta, y
-    # un rechazo de hace tres semanas que nadie retomó sigue siendo un pedido
-    # perdido. Los de la semana se sacan de esta misma tabla, así la de arriba y
-    # la de abajo nunca se contradicen.
-    seg = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov, ped)
-    seg_w = (seg[seg["Documento"].isin(set(rech["_doc"]))] if not seg.empty
-             else seg)
+    # El seguimiento se calcula UNA vez sobre todos los rechazos de la historia,
+    # y de esa misma tabla salen las tres vistas, para que nunca se contradigan:
+    #   · los de la semana (tabla de rechazos de arriba y su tarjeta)
+    #   · las últimas 8 semanas (la advertencia y el filtro por defecto)
+    #   · lo que se elija en el filtro de fechas de la sección
+    seg_todo = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA],
+                                    mov, ped)
+    # Por documento Y fecha: el número de documento se reutiliza entre meses, y
+    # con la historia completa cargada un 5424 de marzo calzaría con uno de hoy.
+    llave_w = set(zip(rech["_doc"], rech["fecha"].dt.date))
+    seg_w = (seg_todo[[k in llave_w for k in zip(seg_todo["Documento"],
+                                                 seg_todo["Fecha documento"])]]
+             if not seg_todo.empty else seg_todo)
+    desde_def = hoy - datetime.timedelta(weeks=_SEMANAS_TENDENCIA)
+    seg = _entre(seg_todo, desde_def, hoy)
     res_seg = resumen_rechazos(seg)
     abiertos_w = int(seg_w["_abierto"].sum()) if not seg_w.empty else 0
     _advertencias(res_seg, w)
 
     st.markdown(
         '<div class="kpi-grid-4">'
-        + _tarjeta("Gestiones de la semana", str(c["n"]), color_g, linea_g,
+        + _tarjeta("Gestiones de la semana" if semanas_per <= 1
+                   else "Gestiones del período", str(c["n"]), color_g, linea_g,
                    mezcla_texto(w) or "documentos de flete emitidos", barra_g,
                    _ICO["gestiones"])
         + _tarjeta("% de entrega", valor_e, color_e, linea_e, nota_e, c["pct"],
@@ -337,7 +437,7 @@ def render(client, anio: int, mes: int):
                 "un mes sin despachos cargados — esas no se van a poder "
                 "confirmar nunca, y por eso quedan fuera del % de entrega.")
 
-    _seguimiento(seg, res_seg, ini_tend)
+    _seguimiento(seg_todo, desde_def)
 
     # ── Tendencia ────────────────────────────────────────────────────────────
     st.divider()
@@ -360,8 +460,9 @@ def _advertencias(res: dict, w: pd.DataFrame) -> None:
     avisos = []
     if res["vencidos"]:
         avisos.append(
-            f"**{res['vencidos']} rechazos llevan más de {DIAS_PARA_REINTENTAR} "
-            f"días sin volver a ingresarse.** Cada uno es una máquina que salió "
+            f"**{res['vencidos']} rechazos de las últimas {_SEMANAS_TENDENCIA} "
+            f"semanas llevan más de {DIAS_PARA_REINTENTAR} días sin volver a "
+            f"ingresarse.** Cada uno es una máquina que salió "
             f"a ruta, volvió al camión y nadie la retomó. El detalle, con "
             f"vendedor y comuna, está en «Qué pasó con los rechazos».")
     if len(w):
@@ -407,24 +508,60 @@ _COLS_SEG_VISTA = ["Días desde el rechazo", "Fecha rechazo",
                    "Lo que dijo el repartidor", "Documento"]
 
 
-def _seguimiento(seg: pd.DataFrame, res: dict, desde) -> None:
+def _entre(seg: pd.DataFrame, desde, hasta) -> pd.DataFrame:
+    """Los rechazos cuya fecha de rechazo (la de la ruta) cae entre dos fechas."""
+    if seg is None or seg.empty:
+        return seg
+    f = pd.to_datetime(seg["Fecha rechazo"])
+    return seg[f.between(pd.Timestamp(desde), pd.Timestamp(hasta))]
+
+
+def _seguimiento(seg_todo: pd.DataFrame, desde_def) -> None:
     """
     Qué pasó con los rechazos: si volvieron a ingresarse y cómo terminaron.
 
-    Mira una ventana más ancha que el resto de la página —todos los rechazos
-    cargados, no solo los de la semana elegida— a propósito: el trabajo que deja
-    un rechazo no vence el domingo, y la pregunta de gerencia es "¿cuáles siguen
-    sueltos?", no "¿cuáles se rechazaron esa semana?".
+    Mira una ventana más ancha que el resto de la página a propósito: el trabajo
+    que deja un rechazo no vence el domingo, y la pregunta de gerencia es
+    "¿cuáles siguen sueltos?", no "¿cuáles se rechazaron esa semana?".
+
+    Por defecto, las últimas 8 semanas (lo mismo que cuenta la advertencia de
+    arriba). El filtro deja ir hasta el primer despacho cargado. `seg_todo` ya
+    trae todos los rechazos de la historia con su reintento resuelto, así que
+    mover las fechas solo filtra: no vuelve a la base.
     """
     st.divider()
-    _sec(f"Qué pasó con los rechazos · desde el {desde:%d/%m}")
+    _sec("Qué pasó con los rechazos")
+    hoy = datetime.date.today()
+    c1, c2 = st.columns([1.3, 3])
+    with c1:
+        sel = st.date_input(
+            "Rechazados entre", value=(desde_def, hoy),
+            min_value=_PRIMER_DESPACHO, max_value=hoy,
+            format="DD/MM/YYYY", key="cm_seg_fechas",
+            help=f"Se filtra por la fecha del rechazo (la de la ruta). El límite "
+                 f"es el {_PRIMER_DESPACHO:%d/%m/%Y}: el primer despacho cargado "
+                 f"de Autoventa. Antes no hay con qué saber si una máquina se "
+                 f"entregó o volvió, y Acuña no tiene despachos en ninguna fecha.")
+    desde, hasta = (sel if isinstance(sel, (list, tuple)) and len(sel) == 2
+                    else (desde_def, hoy))
+    with c2:
+        st.markdown(
+            '<div style="padding-top:1.9rem;color:var(--gris);font-size:.85rem">'
+            f'Por defecto, las últimas {_SEMANAS_TENDENCIA} semanas. Se puede ir '
+            f'hasta el <b>{_PRIMER_DESPACHO:%d/%m/%Y}</b>, el primer despacho '
+            'cargado: antes de eso no existen rechazos registrados.'
+            '</div>', unsafe_allow_html=True)
+
+    seg = _entre(seg_todo, desde, hasta)
+    res = resumen_rechazos(seg)
     if seg is None or seg.empty:
-        st.success("Ningún rechazo en la ventana cargada.")
+        st.success("Ningún rechazo en esas fechas.")
         return
 
     k = st.columns(4)
     k[0].metric("Rechazos", res["n"],
-                help="Todos los de la ventana, no solo los de la semana elegida.")
+                help=f"Rechazados entre el {desde:%d/%m/%Y} y el {hasta:%d/%m/%Y}, "
+                     "no solo los de la semana elegida.")
     k[1].metric("Ya entregados", res["ok"],
                 f"{res['pct'] * 100:.0f}% recuperado" if res["pct"] else None,
                 help="Se volvieron a ingresar y el segundo intento llegó.")
@@ -453,7 +590,7 @@ def _seguimiento(seg: pd.DataFrame, res: dict, desde) -> None:
     # calculadas. El expander es puro layout y no cuesta una consulta.
     abiertos = seg[seg["_abierto"]]
     if abiertos.empty:
-        st.success("Todos los rechazos de la ventana ya se retomaron.")
+        st.success("Todos los rechazos de esas fechas ya se retomaron.")
     else:
         st.dataframe(abiertos[_COLS_SEG_VISTA], use_container_width=True,
                      hide_index=True)
@@ -577,7 +714,10 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
                     cli_dim = None
                 # Se pasan las 8 semanas: el Excel filtra el período y usa las
                 # anteriores para su hoja de tendencia, igual que la página.
-                data = libro_gerencia(mov, ped, f_ini, f_fin, metas, "Ambas", cli_dim)
+                data = libro_gerencia(
+                    mov, ped, f_ini, f_fin, metas, "Ambas", cli_dim,
+                    seg_desde=datetime.date.today()
+                    - datetime.timedelta(weeks=_SEMANAS_TENDENCIA))
             st.session_state["_cm_libro"] = ((str(f_ini), str(f_fin)), data)
         g = st.session_state.get("_cm_libro")
         if g and g[0] == (str(f_ini), str(f_fin)):
@@ -593,7 +733,7 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
 
 def _cola_despacho(mov: pd.DataFrame, f_ini, f_fin) -> None:
     """
-    Facturados que todavía no tienen ruta, de toda la ventana cargada.
+    Facturados que todavía no tienen ruta, de TODA la historia hasta hoy.
 
     Es la hermana de la cola de pedidos sin documento, un paso más adelante del
     recorrido: ahí falta que logística emita el DTE, aquí falta que lo suba a un
@@ -608,14 +748,19 @@ def _cola_despacho(mov: pd.DataFrame, f_ini, f_fin) -> None:
     """
     if mov is None or mov.empty:
         return
-    cola = mov[mov["Estado entrega"] == SIN_DESPACHO].copy()
+    # Un documento fechado mañana sin ruta todavía no está atrasado: logística
+    # factura con la fecha de entrega y la ruta se arma después.
+    hoy_ts = pd.Timestamp(datetime.date.today())
+    cola = mov[(mov["Estado entrega"] == SIN_DESPACHO)
+               & (mov["fecha"] <= hoy_ts)].copy()
     with st.expander(f"🚛 Facturados esperando despacho · {len(cola)}"):
         st.caption(
             "Documentos de flete emitidos que no aparecen en ninguna ruta, ni "
             "entregada ni rechazada ni pendiente — y en un mes que SÍ tiene "
             "despachos cargados, así que no es un archivo que falte: es un "
-            "flete que no se ha programado. Salen los de las últimas "
-            f"{_SEMANAS_TENDENCIA} semanas, no solo los de la semana elegida.")
+            "flete que no se ha programado. Salen todos, desde el primer "
+            f"despacho cargado ({_PRIMER_DESPACHO:%d/%m/%Y}), sin importar el "
+            "período elegido arriba.")
         if cola.empty:
             st.success("Todo lo facturado tiene ruta.")
             return
@@ -656,6 +801,11 @@ def _entregas_pesos(client, f_ini, f_fin, mov, desp):
         ventas = get_ventas_rango(client, f_ini, f_fin)
     except Exception:
         st.warning("No se pudieron leer las ventas del período.")
+        return
+    # Un período sin ventas (la próxima semana, casi siempre) llega como un
+    # DataFrame sin columnas y `preparar_entregas` se caía buscando n_dcto.
+    if ventas is None or ventas.empty:
+        st.caption("Sin ventas facturadas en el período.")
         return
     d = preparar_entregas(ventas, desp, mov)
     d = d[d["fecha_ruta"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))]

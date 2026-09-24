@@ -41,12 +41,16 @@ SEMANAS_TENDENCIA = 8
 def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                    metas: dict, soc_lbl: str = "Ambas",
                    clientes: pd.DataFrame | None = None,
-                   hoy: date | None = None) -> bytes:
+                   hoy: date | None = None, seg_desde: date | None = None) -> bytes:
     """
     `mov` puede traer semanas anteriores al período —se usan para la hoja de
     tendencia— y también posteriores: el seguimiento de rechazos necesita ver lo
     que pasó DESPUÉS del período para saber si un rechazo se volvió a ingresar.
     Las demás hojas se filtran al período.
+
+    `seg_desde` acota el seguimiento de rechazos por fecha de rechazo (la página
+    pasa las últimas 8 semanas, lo mismo que su advertencia). Sin él, entran
+    todos los rechazos de `mov`.
     """
     from openpyxl import Workbook
 
@@ -81,6 +85,8 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     # y su reintento cae después del período. Igual que en la página.
     seg = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov, ped,
                                hoy=hoy)
+    if seg_desde is not None and not seg.empty:
+        seg = seg[pd.to_datetime(seg["Fecha rechazo"]) >= pd.Timestamp(seg_desde)]
     res_seg = resumen_rechazos(seg)
     mz = mezcla_movimientos(w)
     n_mov = dict(zip(mz["Movimiento"], mz["Gestiones"])) if not mz.empty else {}
@@ -113,8 +119,10 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
          "Entregadas + sin confirmar + rechazadas = gestiones"),
         ("", "", ""),
         ("5 · RECHAZOS RETOMADOS", res_seg["n"],
-         "Todos los rechazos cargados, no solo los del período: el trabajo que "
-         "deja un rechazo no vence el domingo"),
+         (f"Rechazados desde el {seg_desde:%d/%m/%Y}" if seg_desde
+          else "Todos los rechazos cargados")
+         + ", no solo los del período: el trabajo que deja un rechazo no vence "
+           "el domingo"),
         ("   Ya entregados", res_seg["ok"],
          "Se volvieron a ingresar y el segundo intento llegó"),
         ("   Reingresados sin cerrar", res_seg["en_curso"],
@@ -241,7 +249,8 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                         "cliente + mismo tipo de movimiento + fecha posterior al "
                         "rechazo; la columna «Reintento» dice con qué documento "
                         "o pedido se emparejó, para poder verificarlo. Incluye "
-                        "todos los rechazos cargados, no solo los del período."))
+                        "los rechazos de las últimas semanas, no solo los del "
+                        "período."))
 
     # ── 6. Siguen en ruta ────────────────────────────────────────────────────
     ruta = w[w["Estado entrega"].isin([EN_RUTA, SIN_DESPACHO, SIN_INFO])].copy()
@@ -319,7 +328,10 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     # sin documento, un paso más adelante del recorrido. Ahí falta emitir el
     # DTE, aquí falta subirlo a un camión; las dos son de logística y las dos
     # envejecen, así que las dos se miran completas.
-    sin_ruta = mov[mov["Estado entrega"] == SIN_DESPACHO].copy()
+    # Lo fechado después de hoy todavía no está atrasado: se factura con la
+    # fecha de entrega y la ruta se arma después.
+    sin_ruta = mov[(mov["Estado entrega"] == SIN_DESPACHO)
+                   & (mov["fecha"] <= pd.Timestamp(hoy))].copy()
     if not sin_ruta.empty:
         _escribir(wb, "Facturados sin despacho", pd.DataFrame({
             "Días desde la factura": (pd.Timestamp(hoy) - sin_ruta["fecha"]).dt.days,
@@ -332,7 +344,7 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
             "Sociedad": sin_ruta["Sociedad"],
         }).sort_values("Días desde la factura", ascending=False),
             {"Fecha factura": _FMT_FECHA, "Días desde la factura": _FMT_NUM},
-            nota=("APARTE, y de toda la ventana cargada, no solo del período: "
+            nota=("APARTE, y de toda la historia hasta hoy, no solo del período: "
                   "documentos de flete emitidos que no aparecen en ninguna ruta "
                   "—ni entregada, ni rechazada, ni pendiente— en un mes que SÍ "
                   "tiene despachos cargados. O sea, no falta el archivo: falta "
