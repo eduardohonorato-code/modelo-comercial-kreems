@@ -6,7 +6,7 @@ en 5 KPIs ponderados. Cada KPI paga proporcional al cumplimiento de su meta
 (logro 90% → paga el 90% del indicador) y la tasa total topa en 5%.
 
   KPI                              Peso    % s/venta   Fuente del dato
-  1. Cuota de venta                30%     1,50%       Fact-NC / meta_venta
+  1. Cuota de venta                30%     1,50%       Fact-NC / objetivo de venta (panel gerencia)
   2. Clientes nuevos válidos       20%     1,00%       historia fact_ventas; META AUTOMÁTICA
                                                        (2% de cartera + 10% de sus dormidos)
   3. Efectividad de cartera        20%     1,00%       clientes activos / cartera asignada
@@ -210,7 +210,10 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
 
     filas = []
     for _, r in base.iterrows():
-        m_venta = _coalesce(r, "meta_venta", "obj_venta")
+        # La meta de venta es SIEMPRE el objetivo del panel de gerencia
+        # (objetivos_mensuales). El override meta_venta de comision_v1_meta ya no
+        # se lee: dos fuentes para la misma meta era redundante.
+        m_venta = _coalesce(r, "obj_venta", "__none__")
         # Cobertura: meta v1 → CARTERA OFICIAL (reporte Autoventa) → cartera del
         # modelo de tramos → proxy histórico (clientes de los últimos 3 meses).
         m_cober = None
@@ -258,7 +261,6 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
             "dormidos": dorm, "clientes_activos": r.get("clientes_activos") or 0,
             "agendamientos": agend, "visitas": vis,
             # Overrides crudos (para que el editor distinga manual vs automático)
-            "ov_meta_venta": r.get("meta_venta"),
             "ov_meta_nuevos_react": r.get("meta_nuevos_react"),
             "ov_meta_cobertura": r.get("meta_cobertura"),
             "ov_meta_lineas": r.get("meta_lineas"),
@@ -534,14 +536,13 @@ def render_tab(client, anio: int, mes: int):
             st.markdown(
                 '<div class="nota-embudo" style="border-left-color:#f59e0b">⚠️ '
                 + " ".join(partes)
-                + " Carga la cartera de cada vendedor en el editor de metas de abajo "
-                  "(campo <em>Meta cobertura</em>) o en el modelo de comisiones actual.</div>",
+                + " Se puede fijar a mano en <em>Configuración → Metas manuales por "
+                  "vendedor</em> (campo Cartera).</div>",
                 unsafe_allow_html=True,
             )
 
-    st.markdown('<div class="seccion-titulo">Detalle por vendedor: cartera, activos y dormidos</div>',
-                unsafe_allow_html=True)
-    _detalle_clientes(client, df, detalle_cli, estado_cli, anio, mes)
+    with st.expander("👥 Clientes por vendedor: cartera, activos y dormidos", expanded=False):
+        _detalle_clientes(client, df, detalle_cli, estado_cli, anio, mes)
 
     with st.expander("ℹ️ Cómo se calcula", expanded=False):
         st.markdown(f"""
@@ -557,7 +558,8 @@ def render_tab(client, anio: int, mes: int):
                 alcanzado, se paga <em>proporcional a lo que va</em> — logro 90% → 90% del
                 indicador. Ej. cuota con umbral 80%: logro 79% → $0; 80% → 1,20%;
                 90% → 1,35%; 100% o más → 1,50%. Umbral en 0 = paga desde el primer punto.</li>
-            <li><strong>Cuota</strong> = Fact-NC / meta de venta.</li>
+            <li><strong>Cuota</strong> = Fact-NC / objetivo de venta del mes (el que se
+                define en el panel de gerencia).</li>
             <li><strong>Nuevos + reactivados</strong> = clientes de 1ª compra + clientes
                 que vuelven tras {GAP_REACTIVACION}+ meses dormidos. La <strong>meta es
                 automática y autorregulada</strong>: 2% de la cartera (mín. 2) + 10% de
@@ -580,23 +582,40 @@ def render_tab(client, anio: int, mes: int):
                 cliente (las configura el jefe de ventas), por eso cambian mes a mes. Si no
                 se han cargado, el KPI queda en “—” y no suma ni resta.</li>
             <li>La colocación de <strong>Galletas NY</strong> ya no es una columna del
-                scorecard: al ser una categoría nueva, empuja sola la Amplitud. El detalle
-                de qué clientes la llevan está en “Detalle por vendedor → Activos”.</li>
+                scorecard: cada galleta nueva en un cliente suma SKUs distintos y empuja
+                sola la Amplitud. Qué clientes las llevan está en “Clientes por vendedor
+                → Activos”.</li>
           </ul>
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown('<div class="seccion-titulo">Cobertura de ruta — carga mensual</div>',
+    # ── Configuración: una tarea mensual (ruta) + dos ajustes ocasionales ────
+    st.markdown('<div class="seccion-titulo">⚙️ Configuración</div>',
                 unsafe_allow_html=True)
-    _editor_ruta(client, df, anio, mes)
 
-    st.markdown('<div class="seccion-titulo">Editar metas del período</div>',
-                unsafe_allow_html=True)
-    _editor_metas(client, df, anio, mes)
+    ruta_pend = not pd.to_numeric(df["agendamientos"], errors="coerce").fillna(0).gt(0).any()
+    with st.expander(
+            "📍 Cobertura de ruta — carga mensual · "
+            + ("⚠️ pendiente este mes" if ruta_pend else "✅ cargada"),
+            expanded=ruta_pend):
+        _editor_ruta(client, df, anio, mes)
 
-    st.markdown('<div class="seccion-titulo">Umbrales de pago por indicador</div>',
-                unsafe_allow_html=True)
-    _editor_umbrales(client, df)
+    umb = {k: float(df[f"{k}_umbral"].iloc[0] or 0) for k, _, _ in KPIS}
+    if len(set(umb.values())) == 1:
+        u = next(iter(umb.values()))
+        umb_txt = "sin piso" if u <= 0 else f"{u*100:.0f}% en los 5 indicadores"
+    else:
+        umb_txt = "distinto por indicador"
+    with st.expander(f"🎯 Piso de pago · hoy: {umb_txt}", expanded=False):
+        _editor_umbrales(client, df)
+
+    ov_cols = ["ov_meta_nuevos_react", "ov_meta_cobertura", "ov_meta_lineas"]
+    n_ov = int(df[ov_cols].notna().any(axis=1).sum())
+    with st.expander(
+            "✏️ Metas manuales por vendedor (excepciones) · "
+            + (f"{n_ov} vendedor(es) con ajuste" if n_ov else "ninguno, todo automático"),
+            expanded=False):
+        _editor_metas(client, df, anio, mes)
 
 
 def _editor_ruta(client, df: pd.DataFrame, anio: int, mes: int):
@@ -960,7 +979,7 @@ def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame,
           <th style='text-align:left'>Cliente</th><th>Comuna</th>
           <th style='text-align:left'>Estado</th>
           <th title='Compra neta del mes'>Compra del mes</th>
-          <th title='Líneas (categorías) distintas'>Líneas</th><th>NY</th>
+          <th title='Productos (SKUs) distintos que compró en el mes'>SKUs</th><th>NY</th>
         </tr></thead><tbody>{rows}</tbody></table></div>
         """, unsafe_allow_html=True)
 
@@ -1077,12 +1096,15 @@ def _safe_num(val, default=0):
 
 
 def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
-    st.caption("**0 = automático**: Cuota→objetivo de venta del mes; "
-               "Nuevos+react→meta automática (2% cartera + 10% dormidos); "
-               "Cobertura→cartera oficial del reporte Autoventa "
-               "(o clientes de últimos 3 meses si el vendedor no está en ella); "
-               "Amplitud→5 SKUs. "
-               "Cualquier valor distinto de 0 reemplaza al automático.")
+    st.caption("Todas las metas se calculan solas; esto es solo para casos puntuales. "
+               "**0 = automático.** La meta de venta no va aquí: se toma del objetivo "
+               "del panel de gerencia. La de cobertura de ruta son los agendamientos "
+               "que se cargan arriba.")
+
+    ov_cols = ["ov_meta_nuevos_react", "ov_meta_cobertura", "ov_meta_lineas"]
+    con_ov = df[df[ov_cols].notna().any(axis=1)]["nombre_canonico"].tolist()
+    if con_ov:
+        st.caption("Con meta manual este mes: " + ", ".join(con_ov) + ".")
 
     vendedores = df[["vendedor_id", "nombre_canonico"]].sort_values("nombre_canonico")
     nombre_sel = st.selectbox("Seleccionar vendedor",
@@ -1092,35 +1114,25 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
     vendedor_id = int(fila["vendedor_id"])
 
     # Contexto de la meta automática del vendedor seleccionado.
-    st.markdown(
-        f"**Editando: {nombre_sel}** — {MESES[mes]} {anio} &nbsp;·&nbsp; "
-        f"meta automática Nuevos+React del mes: **{fmt_num(fila.get('nuevos_meta'))}** "
-        f"(dormidos: {fmt_num(fila.get('dormidos'))})")
 
     with st.form("form_comision_v1_meta", clear_on_submit=False):
         c1, c2, c3 = st.columns(3)
-        m_venta = c1.number_input(
-            "Meta de venta ($)", min_value=0, step=100000,
-            value=int(_safe_num(fila.get("ov_meta_venta"))),
-            help="0 = objetivo de venta del mes.")
-        m_nuevos = c2.number_input(
-            "Meta nuevos + reactivados", min_value=0, step=1,
+        m_nuevos = c1.number_input(
+            f"Clientes nuevos (auto: {fmt_num(fila.get('nuevos_meta'))})",
+            min_value=0, step=1,
             value=int(_safe_num(fila.get("ov_meta_nuevos_react"))),
-            help="0 = automática (2% de cartera + 10% de sus dormidos).")
-        m_cober = c3.number_input(
-            "Meta cobertura (n° clientes)", min_value=0, step=1,
+            help="0 = automática: 2% de su cartera + 10% de sus dormidos.")
+        m_cober = c2.number_input(
+            f"Cartera, n° clientes (auto: {fmt_num(fila.get('cobertura_meta'))})",
+            min_value=0, step=1,
             value=int(_safe_num(fila.get("ov_meta_cobertura"))),
-            help="0 = cartera asignada (o clientes de los últimos 3 meses).")
-        c4, c5 = st.columns(2)
-        m_lineas = c4.number_input(
-            "Meta amplitud (SKUs x cliente)", min_value=0.0, step=0.5,
+            help="0 = cartera oficial de Autoventa. Útil para quien no tiene "
+                 "cartera asignada.")
+        m_lineas = c3.number_input(
+            f"SKUs por cliente (auto: {DEFAULT_META_SKU:.0f})",
+            min_value=0.0, step=0.5,
             value=float(_safe_num(fila.get("ov_meta_lineas"))),
-            help=f"0 = default ({DEFAULT_META_SKU:.0f} SKUs distintos).")
-        c5.markdown(
-            "<div style='padding-top:1.9rem;color:#5a6072;font-size:.85rem'>"
-            "La meta de <strong>Cobertura de ruta</strong> son los agendamientos "
-            "del reporte de Autoventa: se cargan arriba, no se fijan aquí.</div>",
-            unsafe_allow_html=True)
+            help=f"0 = meta general de {DEFAULT_META_SKU:.0f} SKUs distintos por cliente.")
         submitted = st.form_submit_button("💾 Guardar metas", type="primary",
                                           use_container_width=True)
 
@@ -1128,7 +1140,6 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
         try:
             upsert_comision_v1_meta(
                 client, vendedor_id, anio, mes,
-                meta_venta=m_venta or None,
                 meta_nuevos_react=m_nuevos or None,
                 meta_cobertura=m_cober or None,
                 meta_lineas=m_lineas or None,
