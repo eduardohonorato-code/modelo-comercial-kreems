@@ -36,10 +36,12 @@ from app.data import (get_objetivos_maquinas, upsert_objetivos_maquinas,
                       get_dim_cliente_full)
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO)
-from app.kpis_maquinas import (DIAS_PARA_REINTENTAR, cargar_todo,
-                               conteo_semana, mezcla_movimientos, mezcla_texto,
+from app.kpis_maquinas import (ANULADA, DIAS_PARA_REINTENTAR, REINTENTO_OK,
+                               LECT_IGUAL, LECT_MENOS, LECT_NO, LECT_NUEVO,
+                               LECT_RECIENTE, LECT_SIN_BASE, LECT_DEJO, cargar_todo, conteo_semana,
+                               desde_ventas, mezcla_movimientos, mezcla_texto,
                                resumen_rechazos, seguimiento_rechazos,
-                               texto_sin_confirmar)
+                               texto_sin_confirmar, ventas_post_rechazo)
 
 _C = {"verde": "#1A7F4B", "amrl": "#D4881E", "rojo": "#C0392B",
       "gris": "#9CA3AF", "gris2": "#CBD5E1", "rosa": "#E62984",
@@ -185,6 +187,13 @@ def _cargar(_client, ini, fin):
     «Recargar» la limpia cuando se acaba de correr el ETL.
     """
     return cargar_todo(_client, ini, fin)
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def _ventas_clientes(_client, ruts: tuple, desde):
+    """Ventas de los clientes con rechazo sin reintento (caché de 5 minutos)."""
+    from app.data import get_ventas_clientes
+    return get_ventas_clientes(_client, ruts, desde)
 
 
 @st.cache_data(show_spinner=False, ttl=600)
@@ -448,7 +457,7 @@ def render(client, anio: int, mes: int):
                 "un mes sin despachos cargados — esas no se van a poder "
                 "confirmar nunca, y por eso quedan fuera del % de entrega.")
 
-    _seguimiento(seg_todo, desde_def)
+    ctx_seg = _seguimiento(client, seg_todo, desde_def)
 
     # ── Tendencia ────────────────────────────────────────────────────────────
     st.divider()
@@ -456,7 +465,7 @@ def render(client, anio: int, mes: int):
     _grafico_tendencia(mov, f_fin, meta_g)
 
     _anulaciones(anul, f_ini, f_fin)
-    _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w)
+    _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w, ctx_seg)
 
 
 def _advertencias(res: dict, w: pd.DataFrame) -> None:
@@ -509,15 +518,6 @@ def _tabla_mezcla(w: pd.DataFrame) -> None:
                "es FL-2. La meta semanal no distingue: los tres suman igual. "
                "«En ruta», «sin despacho» y «sin información» son los tres "
                "estados que suma la tarjeta «Sin confirmar».")
-
-
-# Columnas del seguimiento que se muestran en pantalla, en el orden en que se
-# leen: primero cuánto lleva, después quién y dónde, y al final el texto largo.
-# El CSV se baja completo.
-_COLS_SEG_VISTA = ["Días desde el rechazo", "Fecha rechazo",
-                   "Estado post-rechazo", "Vendedor", "Cliente", "Comuna",
-                   "Movimiento", "Motivo", "Reintento",
-                   "Lo que dijo el repartidor", "Documento"]
 
 
 def _entre(seg: pd.DataFrame, desde, hasta) -> pd.DataFrame:
@@ -583,7 +583,7 @@ def _anulaciones(anul: pd.DataFrame, f_ini, f_fin) -> None:
         }).sort_values("Fecha NC"), use_container_width=True, hide_index=True)
 
 
-def _seguimiento(seg_todo: pd.DataFrame, desde_def) -> None:
+def _seguimiento(client, seg_todo: pd.DataFrame, desde_def) -> dict:
     """
     Qué pasó con los rechazos: si volvieron a ingresarse y cómo terminaron.
 
@@ -623,7 +623,7 @@ def _seguimiento(seg_todo: pd.DataFrame, desde_def) -> None:
     res = resumen_rechazos(seg)
     if seg is None or seg.empty:
         st.success("Ningún rechazo en esas fechas.")
-        return
+        return {"desde": desde, "hasta": hasta, "ventas": None}
 
     k = st.columns(4)
     k[0].metric("Rechazos", res["n"],
@@ -657,26 +657,155 @@ def _seguimiento(seg_todo: pd.DataFrame, desde_def) -> None:
         "todavía sin DTE. La columna «Reintento» muestra con qué documento o "
         "pedido se emparejó, para poder verificarlo.")
 
-    # Los que nadie retomó van en la tabla principal y el resto en un desplegable
-    # —no en un checkbox— a propósito: un checkbox reejecuta la página entera y
-    # vuelve a bajar las ocho semanas de la base para mostrar filas que ya están
-    # calculadas. El expander es puro layout y no cuesta una consulta.
-    abiertos = seg[seg["_abierto"]]
-    if abiertos.empty:
-        st.success("Todos los rechazos de esas fechas ya se retomaron.")
-    else:
-        st.dataframe(abiertos[_COLS_SEG_VISTA], use_container_width=True,
-                     hide_index=True)
-    resto = seg[~seg["_abierto"]]
-    if not resto.empty:
-        with st.expander(f"Ver los que ya se retomaron · {len(resto)}"):
-            st.dataframe(resto[_COLS_SEG_VISTA], use_container_width=True,
+    return _tablas_seguimiento(client, seg, res, desde, hasta)
+
+
+# Qué tabla del seguimiento se ve, con sus columnas. Un selector y no pestañas:
+# `st.tabs` dibuja las cuatro siempre y no recuerda cuál estaba abierta.
+_VISTAS_SEG = {
+    "sin_cerrar": "🟡 Reingresados sin cerrar",
+    "sin_retomar": "🔴 Sin retomar",
+    "entregados": "🟢 Ya entregados",
+    "anuladas": "⚪ Anuladas por logística",
+}
+_COLS_SIN_CERRAR = ["Días desde el rechazo", "Fecha rechazo",
+                    "Estado post-rechazo", "Reintento", "Vendedor", "Cliente",
+                    "Comuna", "Movimiento", "Motivo", "Documento"]
+_COLS_ENTREGADOS = ["Fecha rechazo", "Reintento", "Días desde el rechazo",
+                    "Vendedor", "Cliente", "Comuna", "Movimiento", "Motivo",
+                    "Documento"]
+_COLS_ANULADAS = ["Fecha rechazo", "Reintento", "Vendedor", "Cliente", "Comuna",
+                  "Movimiento", "Documento"]
+_COLS_SIN_RETOMAR = ["Días desde el rechazo", "Fecha rechazo", "Vendedor",
+                     "Cliente", "Comuna", "Movimiento", "Motivo",
+                     "Lectura de la venta", "Última compra",
+                     "Compras después del rechazo", "Promedio mensual antes",
+                     "Promedio mensual después", "Lo que dijo el repartidor",
+                     "Documento"]
+# Primero los que siguen comprando (hay que cerrarlos con el vendedor: el
+# rechazo se resolvió fuera del sistema), al final los perdidos.
+_ORDEN_LECTURA = {LECT_IGUAL: 0, LECT_SIN_BASE: 1, LECT_NUEVO: 2, LECT_MENOS: 3,
+                  LECT_DEJO: 4, LECT_RECIENTE: 5, LECT_NO: 6}
+
+
+def _tablas_seguimiento(client, seg: pd.DataFrame, res: dict, desde,
+                        hasta) -> dict:
+    """
+    Los rechazos del filtro, partidos en una tabla por destino.
+
+    Antes eran dos: los sin retomar y, plegados juntos, "los que ya se
+    retomaron" (entregados + en curso). Gerencia necesitaba mirar por separado
+    los reingresados que todavía no cierran —ahí está el trabajo de logística—
+    y, en los sin retomar, saber si al cliente se le sigue vendiendo: un retiro
+    rechazado que terminó en renegociación (Valhalla) no quedó registrado en
+    ningún sistema, y la compra posterior es la única huella.
+
+    Devuelve el filtro y las ventas para que el Excel use lo mismo.
+    """
+    est = seg["Estado post-rechazo"]
+    grupos = {
+        "sin_cerrar": seg[~seg["_abierto"] & ~est.isin([REINTENTO_OK, ANULADA])],
+        "sin_retomar": seg[seg["_abierto"]],
+        "entregados": seg[est == REINTENTO_OK],
+        "anuladas": seg[est == ANULADA],
+    }
+    opciones = [k for k in _VISTAS_SEG if k != "anuladas" or len(grupos[k])]
+
+    # Las ventas se piden solo para los sin retomar: es donde falta saber por
+    # qué nadie los reingresó. Si la consulta falla, la tabla sale igual.
+    ventas, vp = None, pd.DataFrame()
+    sin = grupos["sin_retomar"]
+    if not sin.empty:
+        try:
+            with st.spinner("Buscando qué le han comprado esos clientes…"):
+                ventas = _ventas_clientes(client, tuple(sorted(set(sin["RUT"]))),
+                                          desde_ventas(sin))
+            vp = ventas_post_rechazo(sin, ventas)
+        except Exception:
+            st.caption("No se pudieron leer las ventas de los clientes sin "
+                       "reintento; la tabla sale sin esas columnas.")
+
+    vista = st.radio(
+        "Ver", opciones, horizontal=True, key="cm_seg_vista",
+        format_func=lambda k: f"{_VISTAS_SEG[k]} · {len(grupos[k])}",
+        label_visibility="collapsed")
+    g = grupos[vista]
+
+    if vista == "sin_cerrar":
+        if g.empty:
+            st.success("No hay reingresos pendientes: todo lo que se volvió a "
+                       "ingresar ya tiene resultado.")
+        else:
+            cuenta = g["Estado post-rechazo"].value_counts()
+            st.markdown(" · ".join(f"**{n}** {e.lower()}" for e, n in cuenta.items()))
+            st.dataframe(g[_COLS_SIN_CERRAR], use_container_width=True,
                          hide_index=True)
+            st.caption(
+                "Se volvieron a ingresar y todavía no cierran. «Va en camino» y "
+                "«esperando DTE» son de logística; «se volvió a rechazar» tiene "
+                "su segundo documento como fila propia en «Sin retomar» si nadie "
+                "lo retomó; «otro movimiento del cliente» es un rechazo que se "
+                "resolvió con un movimiento de otro tipo (un retiro que terminó "
+                "en cambio, por ejemplo).")
+
+    elif vista == "sin_retomar":
+        if g.empty:
+            st.success("Todos los rechazos de esas fechas ya se retomaron.")
+        else:
+            t = g.join(vp) if not vp.empty else g.assign(
+                **{c: None for c in ("Lectura de la venta", "Última compra",
+                                     "Compras después del rechazo",
+                                     "Promedio mensual antes",
+                                     "Promedio mensual después")})
+            if not vp.empty:
+                cuenta = t["Lectura de la venta"].value_counts()
+                st.markdown(" · ".join(
+                    f"**{int(cuenta[l])}** {l.lower()}"
+                    for l in _ORDEN_LECTURA if cuenta.get(l)))
+                t = (t.assign(_o=t["Lectura de la venta"].map(_ORDEN_LECTURA))
+                     .sort_values(["_o", "Días desde el rechazo"],
+                                  ascending=[True, False]))
+            v = t[_COLS_SIN_RETOMAR].copy()
+            for c in ("Compras después del rechazo", "Promedio mensual antes",
+                      "Promedio mensual después"):
+                v[c] = v[c].map(lambda x: fmt_clp(x) if pd.notna(x) else "—")
+            st.dataframe(v, use_container_width=True, hide_index=True)
+            st.caption(
+                "**Por qué la venta.** Que nadie reingrese un rechazo no siempre "
+                "es un pedido perdido: si el cliente sigue comprando, lo más "
+                "probable es que se renegoció y el retiro ya no aplica (como "
+                "Valhalla), o que compra sin la máquina. Esa conversación no "
+                "queda en ningún sistema; la compra posterior es la única huella. "
+                "Arriba salen los que siguen comprando, que son los que hay que "
+                "cerrar con el vendedor, y abajo los que no han vuelto a "
+                "comprar, que son los perdidos. «Antes» es el promedio mensual "
+                "de los 90 días previos al rechazo; «después», lo comprado "
+                "desde el día siguiente, por mes transcurrido. Sin fletes, con "
+                "notas de crédito restadas.")
+
+    elif vista == "entregados":
+        if g.empty:
+            st.info("Ningún rechazo de esas fechas terminó entregado todavía.")
+        else:
+            st.dataframe(g[_COLS_ENTREGADOS], use_container_width=True,
+                         hide_index=True)
+            st.caption("Se volvieron a ingresar y el segundo intento llegó. "
+                       "«Reintento» dice con qué documento.")
+
+    else:
+        st.dataframe(g[_COLS_ANULADAS], use_container_width=True,
+                     hide_index=True)
+        st.caption("Logística los dio de baja en la ruta «Nulas mes en curso». "
+                   "«Reintento» muestra el comentario del repartidor.")
+
+    completo = seg.join(vp) if not vp.empty else seg
     st.download_button(
         "⬇️ Descargar el seguimiento en CSV",
-        seg.drop(columns=["_abierto"]).to_csv(index=False).encode("utf-8-sig"),
+        completo.drop(columns=["_abierto"]).to_csv(index=False)
+        .encode("utf-8-sig"),
         f"rechazos_seguimiento_{datetime.date.today():%Y%m%d}.csv",
         "text/csv", key="dl_seg")
+    return {"desde": desde, "hasta": hasta, "ventas": ventas}
 
 
 def _grafico_tendencia(mov: pd.DataFrame, f_fin, meta_g):
@@ -724,7 +853,8 @@ def _grafico_tendencia(mov: pd.DataFrame, f_fin, meta_g):
                "semanas siempre tienen más amarillo: todavía van en ruta.")
 
 
-def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
+def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None,
+                     ctx_seg: dict | None = None):
     """Todo lo que no es la pregunta de la semana, fuera de la vista."""
     st.divider()
 
@@ -778,6 +908,10 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
         st.caption("Mismos números que esta página, con el detalle de cada "
                    "gestión, rechazo y pendiente. El informe completo de 19 hojas "
                    "sigue en Análisis → Máquinas.")
+        # Los rechazos del Excel son los del filtro de fechas de la sección
+        # «Qué pasó con los rechazos»: si se cambia, el informe se regenera.
+        firma = (str(f_ini), str(f_fin), str((ctx_seg or {}).get("desde")),
+                 str((ctx_seg or {}).get("hasta")))
         if st.button("Generar informe de gerencia", key="btn_informe_gerencia"):
             with st.spinner("Armando el informe…"):
                 from app.export_maquinas_gerencia import libro_gerencia
@@ -787,13 +921,15 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None):
                     cli_dim = None
                 # Se pasan las 8 semanas: el Excel filtra el período y usa las
                 # anteriores para su hoja de tendencia, igual que la página.
+                cs = ctx_seg or {}
                 data = libro_gerencia(
                     mov, ped, f_ini, f_fin, metas, "Ambas", cli_dim,
-                    seg_desde=datetime.date.today()
-                    - datetime.timedelta(weeks=_SEMANAS_TENDENCIA))
-            st.session_state["_cm_libro"] = ((str(f_ini), str(f_fin)), data)
+                    seg_desde=cs.get("desde", datetime.date.today()
+                                     - datetime.timedelta(weeks=_SEMANAS_TENDENCIA)),
+                    seg_hasta=cs.get("hasta"), ventas_cli=cs.get("ventas"))
+            st.session_state["_cm_libro"] = (firma, data)
         g = st.session_state.get("_cm_libro")
-        if g and g[0] == (str(f_ini), str(f_fin)):
+        if g and g[0] == firma:
             st.download_button(
                 "⬇️ Descargar informe de gerencia", g[1],
                 f"maquinas_gerencia_{f_ini:%Y%m%d}_{f_fin:%Y%m%d}.xlsx",

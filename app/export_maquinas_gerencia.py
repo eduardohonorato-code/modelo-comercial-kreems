@@ -25,13 +25,17 @@ from datetime import date
 
 import pandas as pd
 
-from app.export_analisis import _escribir, _con_total, _FMT_NUM, _FMT_PCT
+from app.export_analisis import (_escribir, _con_total, _FMT_NUM, _FMT_PCT,
+                                 _FMT_CLP)
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO, _desc)
-from app.kpis_maquinas import (DIAS_PARA_REINTENTAR, conteo_semana,
-                               etiqueta_mov, mezcla_movimientos,
+from app.kpis_maquinas import (DIAS_PARA_REINTENTAR, LECT_IGUAL, LECT_MENOS,
+                               LECT_NO, LECT_NUEVO, LECT_RECIENTE,
+                               LECT_SIN_BASE, LECT_DEJO,
+                               conteo_semana, etiqueta_mov, mezcla_movimientos,
                                resumen_rechazos, seguimiento_rechazos,
-                               texto_sin_confirmar)
+                               texto_sin_confirmar, ventas_por_mes,
+                               ventas_post_rechazo)
 
 _FMT_FECHA = "dd/mm/yyyy"
 _MOV = {"nueva": "Instalación", "cambio": "Cambio", "retiro": "Retiro"}
@@ -41,16 +45,22 @@ SEMANAS_TENDENCIA = 8
 def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                    metas: dict, soc_lbl: str = "Ambas",
                    clientes: pd.DataFrame | None = None,
-                   hoy: date | None = None, seg_desde: date | None = None) -> bytes:
+                   hoy: date | None = None, seg_desde: date | None = None,
+                   seg_hasta: date | None = None,
+                   ventas_cli: pd.DataFrame | None = None) -> bytes:
     """
     `mov` puede traer semanas anteriores al período —se usan para la hoja de
     tendencia— y también posteriores: el seguimiento de rechazos necesita ver lo
     que pasó DESPUÉS del período para saber si un rechazo se volvió a ingresar.
     Las demás hojas se filtran al período.
 
-    `seg_desde` acota el seguimiento de rechazos por fecha de rechazo (la página
-    pasa las últimas 8 semanas, lo mismo que su advertencia). Sin él, entran
-    todos los rechazos de `mov`.
+    `seg_desde` / `seg_hasta` acotan el seguimiento de rechazos por fecha de
+    rechazo: la página pasa su filtro de fechas, así el Excel trae los mismos
+    rechazos que la pantalla. Sin ellos, entran todos los de `mov`.
+
+    `ventas_cli` son las líneas de fact_ventas de los clientes con rechazo sin
+    reintento (las mismas que usa la página). Con ellas se agregan las hojas de
+    venta de esos clientes: si se les sigue vendiendo, y cuánto.
     """
     from openpyxl import Workbook
 
@@ -89,8 +99,15 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     # y su reintento cae después del período. Igual que en la página.
     seg = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov, ped,
                                hoy=hoy)
-    if seg_desde is not None and not seg.empty:
-        seg = seg[pd.to_datetime(seg["Fecha rechazo"]) >= pd.Timestamp(seg_desde)]
+    if not seg.empty:
+        f_r = pd.to_datetime(seg["Fecha rechazo"])
+        if seg_desde is not None:
+            seg = seg[f_r >= pd.Timestamp(seg_desde)]
+        if seg_hasta is not None:
+            seg = seg[pd.to_datetime(seg["Fecha rechazo"]) <= pd.Timestamp(seg_hasta)]
+    sin_ret = seg[seg["_abierto"]] if not seg.empty else seg
+    vp = (ventas_post_rechazo(sin_ret, ventas_cli, hoy)
+          if ventas_cli is not None and not sin_ret.empty else pd.DataFrame())
     res_seg = resumen_rechazos(seg)
     mz = mezcla_movimientos(w)
     n_mov = dict(zip(mz["Movimiento"], mz["Gestiones"])) if not mz.empty else {}
@@ -123,7 +140,8 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
          "Entregadas + sin confirmar + rechazadas = gestiones"),
         ("", "", ""),
         ("5 · RECHAZOS RETOMADOS", res_seg["n"],
-         (f"Rechazados desde el {seg_desde:%d/%m/%Y}" if seg_desde
+         (f"Rechazados entre el {seg_desde:%d/%m/%Y} y el "
+          f"{(seg_hasta or hoy):%d/%m/%Y}" if seg_desde
           else "Todos los rechazos cargados")
          + ", no solo los del período: el trabajo que deja un rechazo no vence "
            "el domingo"),
@@ -138,6 +156,13 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
         ("   Sin retomar", res_seg["abiertos"],
          f"Nadie los volvió a ingresar · {res_seg['vencidos']} llevan más de "
          f"{DIAS_PARA_REINTENTAR} días"),
+    ] + ([
+        (f"      {l}", int((vp["Lectura de la venta"] == l).sum()),
+         "Venta del cliente después del rechazo (hoja «Sin reintento · ventas»)")
+        for l in (LECT_IGUAL, LECT_SIN_BASE, LECT_NUEVO, LECT_MENOS,
+                  LECT_DEJO, LECT_RECIENTE, LECT_NO)
+        if (vp["Lectura de la venta"] == l).any()
+    ] if not vp.empty else []) + [
         ("   % recuperado", res_seg["pct"] if res_seg["pct"] is not None else "—",
          "Ya entregados sobre el total de rechazos"),
     ]
@@ -258,6 +283,58 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                         "o pedido se emparejó, para poder verificarlo. Incluye "
                         "los rechazos de las últimas semanas, no solo los del "
                         "período."))
+
+    # ── 5b. Sin reintento · ventas ───────────────────────────────────────────
+    # Que nadie reingrese un rechazo no siempre es un pedido perdido: si al
+    # cliente se le sigue vendiendo, lo más probable es que se renegoció (un
+    # retiro que ya no aplica, como Valhalla) o que compra sin la máquina.
+    if not vp.empty:
+        tv = sin_ret.join(vp)
+        _escribir(wb, "Sin reintento · ventas", pd.DataFrame({
+            "Fecha rechazo": tv["Fecha rechazo"],
+            "Documento": tv["Documento"],
+            "Vendedor": tv["Vendedor"],
+            "Cliente": tv["Cliente"],
+            "RUT": tv["RUT"],
+            "Comuna": tv["Comuna"],
+            "Movimiento": tv["Movimiento"],
+            "Motivo": tv["Motivo"],
+            "Lectura de la venta": tv["Lectura de la venta"],
+            "Última compra": tv["Última compra"],
+            "Monto última compra": pd.to_numeric(tv["Monto última compra"]),
+            "Compras después del rechazo": pd.to_numeric(tv["Compras después del rechazo"]),
+            "Facturas después del rechazo": pd.to_numeric(tv["Facturas después del rechazo"]),
+            "Promedio mensual antes": pd.to_numeric(tv["Promedio mensual antes"]),
+            "Promedio mensual después": pd.to_numeric(tv["Promedio mensual después"]),
+            "Variación": pd.to_numeric(tv["Variación"]),
+            "Días desde el rechazo": tv["Días desde el rechazo"],
+        }).sort_values(["Lectura de la venta", "Días desde el rechazo"],
+                       ascending=[True, False]),
+            {"Fecha rechazo": _FMT_FECHA, "Última compra": _FMT_FECHA,
+             "Monto última compra": _FMT_CLP,
+             "Compras después del rechazo": _FMT_CLP,
+             "Promedio mensual antes": _FMT_CLP,
+             "Promedio mensual después": _FMT_CLP,
+             "Facturas después del rechazo": _FMT_NUM,
+             "Variación": _FMT_PCT, "Días desde el rechazo": _FMT_NUM},
+            nota=("RECHAZOS SIN REINTENTO Y LO QUE EL CLIENTE COMPRÓ DESPUÉS. Si "
+                  "sigue comprando, el rechazo probablemente se resolvió fuera "
+                  "del sistema (renegociación, compra sin máquina) y hay que "
+                  "cerrarlo con el vendedor; si no ha vuelto a comprar, es un "
+                  "cliente perdido. Antes = promedio mensual de los 90 días "
+                  "previos al rechazo; después = lo comprado desde el día "
+                  "siguiente por mes transcurrido. Sin fletes, NC restadas. "
+                  "'Igual' admite hasta 20% menos (la venta de helado es "
+                  "estacional). El mes a mes, en la hoja siguiente."))
+        pm = ventas_por_mes(sin_ret, ventas_cli)
+        if not pm.empty:
+            meses = [c for c in pm.columns if "/" in c]
+            _escribir(wb, "Sin reintento · por mes", pm,
+                      {"Fecha rechazo": _FMT_FECHA} | {m: _FMT_CLP for m in meses},
+                      nota=("Lo que compró cada cliente con rechazo sin "
+                            "reintento, mes a mes (Fact-NC, sin fletes), desde 3 "
+                            "meses antes del primer rechazo. Se ve si la venta "
+                            "siguió, bajó o se cortó en el mes del rechazo."))
 
     # ── 6. Siguen en ruta ────────────────────────────────────────────────────
     ruta = w[w["Estado entrega"].isin([EN_RUTA, SIN_DESPACHO, SIN_INFO])].copy()

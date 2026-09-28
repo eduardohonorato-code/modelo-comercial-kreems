@@ -1005,6 +1005,38 @@ def get_direcciones_cliente(client: Client, cliente_rut: str,
     return df
 
 
+def get_ventas_clientes(client: Client, ruts, desde) -> pd.DataFrame:
+    """
+    Líneas de fact_ventas de un grupo de clientes desde una fecha: cliente_rut,
+    fecha, neto, n_dcto, tipo_dcto, producto_codigo.
+
+    La usa el seguimiento de rechazos de Control de Máquinas para saber si a un
+    cliente rechazado se le sigue vendiendo. Pide por tandas de 40 RUT (la lista
+    viaja en la URL) y pagina ordenado por id: sin orden, PostgREST puede saltar
+    o repetir filas entre páginas de 1000.
+    """
+    cols = "cliente_rut,fecha,neto,n_dcto,tipo_dcto,producto_codigo"
+    ruts = sorted({str(r).strip() for r in ruts if r and str(r).strip()})
+    fi = desde.isoformat() if hasattr(desde, "isoformat") else str(desde)
+    rows = []
+    for i in range(0, len(ruts), 40):
+        tanda, offset = ruts[i:i + 40], 0
+        while True:
+            r = (client.table("fact_ventas").select(cols)
+                 .in_("cliente_rut", tanda).gte("fecha", fi)
+                 .order("id").range(offset, offset + 999).execute())
+            data = r.data or []
+            rows.extend(data)
+            if len(data) < 1000:
+                break
+            offset += 1000
+    df = pd.DataFrame(rows, columns=cols.split(","))
+    if not df.empty:
+        df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+        df["neto"] = pd.to_numeric(df["neto"], errors="coerce").fillna(0)
+    return df
+
+
 def get_cliente_detalle(client: Client, cliente_rut: str):
     """
     Detalle de un cliente para su ficha: (df_ventas, df_pedidos).

@@ -656,3 +656,162 @@ def texto_sin_confirmar(c: dict) -> str:
     partes = [(c["ruta"], "en ruta"), (c["sin_desp"], "sin despacho"),
               (c["sin_info"], "sin información")]
     return " · ".join(f"{n} {lbl}" for n, lbl in partes if n) or "ninguna"
+
+
+# ── ¿Se le sigue vendiendo al cliente rechazado? ─────────────────────────────
+
+# Un rechazo sin reintento no siempre es un pedido perdido. Un retiro que el
+# cliente rechazó porque quería renegociar (Valhalla, mar-2026) puede haber
+# terminado en que se le siguió vendiendo: la máquina se quedó y está bien que
+# nadie reingrese el retiro. La compra posterior es la única señal que hay de
+# eso, porque la renegociación no queda registrada en ningún sistema.
+LECT_NO = "No ha vuelto a comprar"
+LECT_RECIENTE = "Sin compras aún (rechazo reciente)"
+LECT_IGUAL = "Sigue comprando igual o más"
+LECT_MENOS = "Compra menos que antes"
+LECT_NUEVO = "Compra, y antes no compraba"
+LECT_SIN_BASE = "Sigue comprando (sin historia previa)"
+LECT_DEJO = "Compró después, pero dejó de comprar"
+
+# Gran Natural tiene ventas en la base desde feb-2026, y los rechazos de máquina
+# son todos de Gran Natural (Acuña no tiene despachos). Antes de esa fecha el
+# "antes" del rechazo no es cero: es desconocido. Sin esto, un rechazo del 5 de
+# marzo decía "antes no compraba" solo porque faltaba historia (Valhalla).
+_INICIO_VENTAS = pd.Timestamp("2026-02-01")
+# Con menos días de historia previa que esto no se compara la intensidad.
+_DIAS_BASE_MIN = 45
+# Una última compra más vieja que esto es un cliente que se cortó, aunque haya
+# comprado algo después del rechazo (Don Héctor: compró hasta abril y nada más).
+_DIAS_CORTE = 60
+
+# Por debajo de esto, "después" no es comparable con "antes": un mes a medias
+# siempre parece una caída.
+_DIAS_COMPARABLE = 30
+# "Igual" admite una caída de hasta 20%: la venta de helado varía mucho de un
+# mes a otro por temporada.
+_TOLERANCIA = 0.8
+_DIAS_MES = 30.44
+_VENTANA_ANTES = 90
+
+_COLS_VTA = ["Lectura de la venta", "Última compra", "Monto última compra",
+             "Compras después del rechazo", "Facturas después del rechazo",
+             "Promedio mensual antes", "Promedio mensual después", "Variación"]
+
+
+def _sin_fletes(ventas: pd.DataFrame) -> pd.DataFrame:
+    """Las líneas FL-x son fletes de máquina a $1: no son venta de helado."""
+    if ventas is None or ventas.empty:
+        return pd.DataFrame(columns=["cliente_rut", "fecha", "neto", "n_dcto",
+                                     "tipo_dcto", "producto_codigo"])
+    v = ventas[~ventas["producto_codigo"].astype(str).str.upper()
+               .str.startswith("FL-")].copy()
+    v["fecha"] = pd.to_datetime(v["fecha"], errors="coerce")
+    v["neto"] = pd.to_numeric(v["neto"], errors="coerce").fillna(0)
+    v["_fact"] = v["tipo_dcto"].astype(str).str.upper().str.contains("FACTURA")
+    return v
+
+
+def desde_ventas(seg: pd.DataFrame):
+    """Desde qué fecha hay que traer ventas para comparar antes y después."""
+    if seg is None or seg.empty:
+        return None
+    return (pd.to_datetime(seg["Fecha rechazo"]).min()
+            - pd.Timedelta(days=_VENTANA_ANTES)).date()
+
+
+def ventas_post_rechazo(seg: pd.DataFrame, ventas: pd.DataFrame,
+                        hoy: date | None = None) -> pd.DataFrame:
+    """
+    Por cada rechazo, qué le compró el cliente antes y después.
+
+    Devuelve un DataFrame con el mismo índice que `seg` y las columnas de
+    `_COLS_VTA`. `ventas` son líneas de fact_ventas de esos clientes desde
+    `desde_ventas(seg)`; los fletes FL-x se descartan. Las NC entran con su signo
+    (Fact-NC), pero la "última compra" y las "facturas" miran solo facturas.
+
+    - Antes: promedio mensual de los 90 días previos al rechazo.
+    - Después: lo comprado DESDE EL DÍA SIGUIENTE al rechazo, dividido por los
+      meses transcurridos (mínimo uno). El mismo día no cuenta: el camión que
+      volvió con la máquina pudo haber dejado helado igual.
+    - Con menos de 30 días desde el rechazo no se compara la intensidad, solo
+      si compró o no.
+    - Si compró después pero su última compra tiene más de 60 días, "dejó de
+      comprar": se cortó igual, solo que un poco más tarde.
+    - Si la base no cubre al menos 45 días antes del rechazo (datos desde
+      feb-2026), "antes" queda vacío en vez de cero.
+    """
+    hoy_ts = pd.Timestamp(hoy or date.today())
+    out = pd.DataFrame(index=seg.index if seg is not None else None,
+                       columns=_COLS_VTA)
+    if seg is None or seg.empty:
+        return out
+    v = _sin_fletes(ventas)
+    por_cli = dict(tuple(v.groupby("cliente_rut"))) if not v.empty else {}
+
+    for i, r in seg.iterrows():
+        ref = pd.Timestamp(r["Fecha rechazo"])
+        vc = por_cli.get(r["RUT"])
+        if vc is None:
+            vc = v.iloc[0:0]
+        fac = vc[vc["_fact"]]
+        ult = fac["fecha"].max() if not fac.empty else pd.NaT
+        monto_ult = (float(fac.loc[fac["fecha"] == ult, "neto"].sum())
+                     if pd.notna(ult) else None)
+        desp = vc[vc["fecha"] > ref]
+        compras = float(desp["neto"].sum())
+        n_fact = int(desp.loc[desp["_fact"], "n_dcto"].nunique())
+        # "Antes" solo sobre los días que la base cubre: si el rechazo es de
+        # marzo, los 90 días previos caen en parte antes de que existan datos.
+        ini_antes = max(ref - pd.Timedelta(days=_VENTANA_ANTES), _INICIO_VENTAS)
+        dias_base = (ref - ini_antes).days
+        antes = (float(vc[(vc["fecha"] >= ini_antes) & (vc["fecha"] < ref)]
+                       ["neto"].sum()) / (dias_base / _DIAS_MES)
+                 if dias_base >= _DIAS_BASE_MIN else None)
+        dias = (hoy_ts - ref).days
+        meses = max(dias / _DIAS_MES, 1)
+        despues = compras / meses
+        var = (despues / antes - 1) if antes else None
+        dias_ult = (hoy_ts - ult).days if pd.notna(ult) else None
+
+        if n_fact == 0:
+            lect = LECT_RECIENTE if dias < _DIAS_COMPARABLE else LECT_NO
+        elif dias_ult is not None and dias_ult > _DIAS_CORTE:
+            lect = LECT_DEJO
+        elif antes is None:
+            lect = LECT_SIN_BASE
+        elif dias < _DIAS_COMPARABLE:
+            lect = LECT_IGUAL if antes <= 0 or compras >= antes * _TOLERANCIA \
+                else LECT_MENOS
+        elif antes <= 0:
+            lect = LECT_NUEVO
+        elif despues >= antes * _TOLERANCIA:
+            lect = LECT_IGUAL
+        else:
+            lect = LECT_MENOS
+
+        out.loc[i] = [lect, ult.date() if pd.notna(ult) else None, monto_ult,
+                      compras, n_fact, antes, despues, var]
+    return out
+
+
+def ventas_por_mes(seg: pd.DataFrame, ventas: pd.DataFrame) -> pd.DataFrame:
+    """
+    Una fila por rechazo y una columna por mes con lo que compró el cliente
+    (Fact-NC, sin fletes), desde 3 meses antes del primer rechazo. Para ver de
+    un vistazo si la venta siguió, bajó o se cortó en el mes del rechazo.
+    """
+    if seg is None or seg.empty:
+        return pd.DataFrame()
+    v = _sin_fletes(ventas)
+    ini = pd.Timestamp(desde_ventas(seg)).to_period("M")
+    fin = pd.Timestamp(date.today()).to_period("M")
+    meses = pd.period_range(ini, fin, freq="M")
+    piv = (v.assign(_m=v["fecha"].dt.to_period("M"))
+           .pivot_table(index="cliente_rut", columns="_m", values="neto",
+                        aggfunc="sum", fill_value=0)
+           if not v.empty else pd.DataFrame())
+    base = seg[["Fecha rechazo", "Cliente", "RUT", "Vendedor", "Movimiento"]].copy()
+    for p in meses:
+        col = piv[p] if p in getattr(piv, "columns", []) else pd.Series(dtype=float)
+        base[f"{p.strftime('%m/%Y')}"] = base["RUT"].map(col).fillna(0.0)
+    return base.reset_index(drop=True)
