@@ -297,17 +297,24 @@ def preparar_movimientos(maquinas: pd.DataFrame,
                             d["fecha_ruta"].dt.to_period("M").astype(str)))
         d["_prio"] = d["_est"].map(_PRIO_DESP).fillna(9)
         d = d.sort_values(["_prio", "fecha_ruta"])
-        n_int = d.groupby("_doc").size().rename("_intentos")
+        # El cruce es por documento Y cliente. Solo por número, una nota de
+        # crédito de flete (serie propia, folios bajos) calzaba con una factura
+        # de OTRO cliente con el mismo número: la NC 834 de Farmacia Economik
+        # (28-09-2026) salía "entregada" con el despacho de marzo de la factura
+        # 834 de otro cliente. Fueron 4 casos desde febrero, los 4 NC; de 320
+        # cruces, ninguna factura tenía RUT distinto a su despacho.
+        _llave = ["_doc", "cliente_rut"]
+        n_int = d.groupby(_llave).size().rename("_intentos")
         d["_motivo"] = clasificar_motivo(d.get("motivo_rechazo"),
                                          d.get("comentario_entrega"))
         d["_coment"] = (d["comentario_entrega"]
                         if "comentario_entrega" in d.columns else "")
-        dd = (d.drop_duplicates("_doc")
-              [["_doc", "fecha_ruta", "estado", "_est", "transportista",
-                "devolucion", "peso", "_motivo", "_coment"]]
+        dd = (d.drop_duplicates(_llave)
+              [["_doc", "cliente_rut", "fecha_ruta", "estado", "_est",
+                "transportista", "devolucion", "peso", "_motivo", "_coment"]]
               .rename(columns={"estado": "_estado_desp"}))
-        dd = dd.merge(n_int, left_on="_doc", right_index=True, how="left")
-        m = m.merge(dd, on="_doc", how="left")
+        dd = dd.merge(n_int, left_on=_llave, right_index=True, how="left")
+        m = m.merge(dd, on=_llave, how="left")
     else:
         for c in ("_estado_desp", "_est", "transportista", "devolucion",
                   "peso", "_intentos", "_motivo", "_coment"):

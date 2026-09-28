@@ -260,6 +260,16 @@ def render(client, anio: int, mes: int):
     with st.spinner("Cargando gestiones y despachos…"):
         mov, ped, desp = _cargar(client, min(ini_tend, _INI_HISTORIA), fin_carga)
 
+    # Las notas de crédito de flete ANULAN un movimiento; no son una gestión.
+    # `fact_maquinas` las trae igual que a una factura (hallazgo abierto: el
+    # ETL no mira tipo_dcto, y cambiarlo allá mueve comisiones), así que se
+    # apartan aquí. Contarlas inflaba las gestiones y, peor, la NC 834 salía
+    # como el único "retiro entregado" de la semana del 28-09.
+    anul = pd.DataFrame()
+    if mov is not None and not mov.empty and "_nc" in mov.columns:
+        anul = mov[mov["_nc"]].copy()
+        mov = mov[~mov["_nc"]].copy()
+
     if mov is None or mov.empty:
         st.markdown('<div class="estado-vacio">Sin gestiones en el período.</div>',
                     unsafe_allow_html=True)
@@ -387,6 +397,7 @@ def render(client, anio: int, mes: int):
         st.plotly_chart(fig, use_container_width=True)
 
     _tabla_mezcla(w)
+    _detalle_gestiones(w)
 
     # ── Rechazos y en ruta, lado a lado ──────────────────────────────────────
     nombres = _nombres_cliente(client)
@@ -444,6 +455,7 @@ def render(client, anio: int, mes: int):
     _sec(f"Últimas {_SEMANAS_TENDENCIA} semanas")
     _grafico_tendencia(mov, f_fin, meta_g)
 
+    _anulaciones(anul, f_ini, f_fin)
     _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w)
 
 
@@ -516,6 +528,61 @@ def _entre(seg: pd.DataFrame, desde, hasta) -> pd.DataFrame:
     return seg[f.between(pd.Timestamp(desde), pd.Timestamp(hasta))]
 
 
+def _detalle_gestiones(w: pd.DataFrame) -> None:
+    """
+    Una fila por gestión del período, con su resultado.
+
+    Las tablas de arriba muestran los rechazos y lo que falta confirmar, pero
+    las entregadas no aparecían en ninguna parte de la pantalla: para saber
+    cuál era "la entrega de retiro de esta semana" había que bajar el Excel.
+    """
+    if w is None or w.empty:
+        return
+    hoy = pd.Timestamp(datetime.date.today())
+    with st.expander(f"📋 Ver el detalle de las {len(w)} gestiones"):
+        det = pd.DataFrame({
+            "Fecha documento": w["fecha"].dt.date,
+            "Documento": w["_doc"],
+            "Movimiento": w["tipo_mov"].map(_MOV),
+            "Resultado": w["Estado entrega"],
+            "Fecha ruta": w["Fecha ruta"].dt.date,
+            "Transportista": w["Transportista"].fillna("—"),
+            "Cliente": w["Cliente"],
+            "Comuna": w["Comuna"],
+            "Vendedor": w["Vendedor"],
+            "Lo que dijo el repartidor": w["Comentario de entrega"],
+        }).sort_values(["Fecha documento", "Documento"])
+        st.dataframe(det, use_container_width=True, hide_index=True)
+        fut = int((w["fecha"] > hoy).sum())
+        st.caption("Fecha documento es la del DTE (logística factura con la "
+                   "fecha de entrega, por eso puede ser posterior a hoy"
+                   + (f": {fut} lo son" if fut else "") + "). Fecha ruta es "
+                   "cuándo salió en el camión.")
+
+
+def _anulaciones(anul: pd.DataFrame, f_ini, f_fin) -> None:
+    """Notas de crédito de flete del período: anulan, no cuentan."""
+    if anul is None or anul.empty:
+        return
+    a = anul[anul["fecha"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))]
+    if a.empty:
+        return
+    with st.expander(f"🧾 Fletes anulados con nota de crédito · {len(a)}"):
+        st.caption(
+            "Notas de crédito que anulan un flete de máquina ya facturado —un "
+            "pedido duplicado, por ejemplo—. No son gestiones y no cuentan en "
+            "ningún número de arriba. La NC no dice qué factura anula: suele "
+            "ser un flete del mismo cliente y tipo emitido días antes.")
+        st.dataframe(pd.DataFrame({
+            "Fecha NC": a["fecha"].dt.date,
+            "N° NC": a["_doc"],
+            "Movimiento anulado": a["tipo_mov"].map(_MOV),
+            "Cliente": a["Cliente"],
+            "Comuna": a["Comuna"],
+            "Vendedor": a["Vendedor"],
+        }).sort_values("Fecha NC"), use_container_width=True, hide_index=True)
+
+
 def _seguimiento(seg_todo: pd.DataFrame, desde_def) -> None:
     """
     Qué pasó con los rechazos: si volvieron a ingresarse y cómo terminaron.
@@ -575,6 +642,12 @@ def _seguimiento(seg_todo: pd.DataFrame, desde_def) -> None:
                 help="Nadie los volvió a ingresar. Esta es la lista que hay que "
                      "mandarle a los vendedores.")
 
+    if res.get("anuladas"):
+        st.caption(f"Además, **{res['anuladas']}** "
+                   + ("se anuló" if res["anuladas"] == 1 else "se anularon")
+                   + " en logística "
+                   "(ruta «Nulas mes en curso»: pedido duplicado, cliente que "
+                   "desiste…). No fueron rechazos en terreno y no se persiguen.")
     st.caption(
         "**Cómo se cruza.** Ningún sistema guarda el número de serie de la "
         "máquina, así que un reintento se reconoce por **mismo cliente + mismo "

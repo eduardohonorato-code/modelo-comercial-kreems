@@ -491,6 +491,13 @@ REINTENTO_RECHAZO = "Se volvió a rechazar"
 REINTENTO_PEDIDO = "Pedido reingresado, esperando DTE"
 REINTENTO_OTRO = "Otro movimiento del cliente"
 SIN_REINTENTO = "Sin reintento"
+# Logística registra sus anulaciones como un "rechazo" en una ruta ficticia
+# («Nulas mes en curso»): pedido duplicado, cliente que desiste, cambio que no
+# hacía falta. No es un rechazo en terreno ni hay nada que reintentar, y sin
+# esta marca el pedido duplicado de Farmacia Economik (5607, sep-2026) salía
+# como «Sin reintento» y disparaba la advertencia.
+ANULADA = "Anulada por logística"
+_RUTA_ANULACION = "nula"
 
 # Los que siguen pidiendo que alguien haga algo. Solo «Sin reintento»: el
 # entregado está cerrado, el pedido reingresado es de logística (falta el DTE), y
@@ -559,6 +566,7 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
     for _, r in rech.iterrows():
         ref = r["Fecha ruta"] if pd.notna(r.get("Fecha ruta")) else r["fecha"]
         estado, detalle = SIN_REINTENTO, ""
+        anulada = _RUTA_ANULACION in str(r.get("Transportista") or "").lower()
 
         cand = (otros[(otros["cliente_rut"] == r["cliente_rut"])
                       & (otros["_doc"] != r["_doc"])
@@ -566,7 +574,10 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
                 if not otros.empty else pd.DataFrame())
         mismo = cand[cand["tipo_mov"] == r["tipo_mov"]] if not cand.empty else cand
 
-        if not mismo.empty:
+        if anulada:
+            estado = ANULADA
+            detalle = str(r.get("Comentario de entrega") or "").strip() or "sin detalle"
+        elif not mismo.empty:
             n = mismo.sort_values("fecha").iloc[0]
             estado = _POST.get(n["Estado entrega"], REINTENTO_SININFO)
             detalle = f"doc {n['_doc']} del {n['fecha']:%d/%m}"
@@ -622,18 +633,22 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
 
 def resumen_rechazos(seg: pd.DataFrame) -> dict:
     """
-    Los números del seguimiento. `ok + en_curso + abiertos = n`, siempre:
-    en_curso es todo lo que se reingresó y todavía no cerró, incluido lo que se
-    volvió a rechazar.
+    Los números del seguimiento. `ok + en_curso + abiertos + anuladas = n`,
+    siempre: en_curso es todo lo que se reingresó y todavía no cerró, incluido
+    lo que se volvió a rechazar; anuladas son las que logística dio de baja.
     """
     if seg is None or seg.empty:
-        return dict(n=0, ok=0, en_curso=0, abiertos=0, vencidos=0, pct=None)
-    ok = int((seg["Estado post-rechazo"] == REINTENTO_OK).sum())
+        return dict(n=0, ok=0, en_curso=0, abiertos=0, anuladas=0, vencidos=0,
+                    pct=None)
+    est = seg["Estado post-rechazo"]
+    ok = int((est == REINTENTO_OK).sum())
+    anuladas = int((est == ANULADA).sum())
     abiertos = int(seg["_abierto"].sum())
     vencidos = int((seg["_abierto"]
                     & (seg["Días desde el rechazo"] > DIAS_PARA_REINTENTAR)).sum())
-    return dict(n=len(seg), ok=ok, en_curso=len(seg) - ok - abiertos,
-                abiertos=abiertos, vencidos=vencidos, pct=ok / len(seg))
+    return dict(n=len(seg), ok=ok, en_curso=len(seg) - ok - abiertos - anuladas,
+                abiertos=abiertos, anuladas=anuladas, vencidos=vencidos,
+                pct=ok / len(seg))
 
 
 def texto_sin_confirmar(c: dict) -> str:

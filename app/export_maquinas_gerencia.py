@@ -66,6 +66,10 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
         wb.save(buf)
         return buf.getvalue()
 
+    # Las NC de flete anulan un movimiento: no son gestiones (igual que en la
+    # página). Se listan aparte, al final.
+    anul = mov[mov["_nc"]].copy() if "_nc" in mov.columns else mov.iloc[0:0]
+    mov = mov[~mov["_nc"]].copy() if "_nc" in mov.columns else mov
     w = mov[mov["fecha"].between(ini, fin)].copy()
     c = conteo_semana(w)
     meta_g = metas.get("meta_gestiones_semana")
@@ -128,6 +132,9 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
         ("   Reingresados sin cerrar", res_seg["en_curso"],
          "Van en camino, esperan documento, o el segundo intento también se "
          "rechazó"),
+        ("   Anuladas por logística", res_seg["anuladas"],
+         "Ruta «Nulas mes en curso»: pedido duplicado, cliente que desiste. "
+         "No se persiguen"),
         ("   Sin retomar", res_seg["abiertos"],
          f"Nadie los volvió a ingresar · {res_seg['vencidos']} llevan más de "
          f"{DIAS_PARA_REINTENTAR} días"),
@@ -350,6 +357,20 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                   "tiene despachos cargados. O sea, no falta el archivo: falta "
                   "programar el flete. Es la otra cola de logística, después de "
                   "«Pedidos sin documento»."))
+
+    # ── 10. Fletes anulados con NC ───────────────────────────────────────────
+    a = anul[anul["fecha"].between(ini, fin)]
+    if not a.empty:
+        _escribir(wb, "Fletes anulados (NC)", pd.DataFrame({
+            "Fecha NC": a["fecha"].dt.date,
+            "N° NC": a["_doc"],
+            "Movimiento anulado": a["tipo_mov"].map(_MOV),
+            "Cliente": cli(a["cliente_rut"]),
+            "Comuna": _desc(a["cliente_rut"], clientes, "comuna"),
+            "Vendedor": a["Vendedor"],
+        }).sort_values("Fecha NC"), {"Fecha NC": _FMT_FECHA},
+            nota=("Notas de crédito que anulan un flete de máquina ya facturado. "
+                  "No son gestiones y no cuentan en ninguna otra hoja."))
 
     buf = io.BytesIO()
     wb.save(buf)
