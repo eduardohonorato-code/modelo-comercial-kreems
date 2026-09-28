@@ -790,7 +790,11 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
 
     # ── 11-12. Despachos de Autoventa ────────────────────────────────────────
     if despachos is not None and not despachos.empty:
-        docs_mov = set(m["_doc"])
+        # Por (documento, cliente), igual que el cruce de `preparar_movimientos`:
+        # una NC de flete no convierte en "despacho de máquina" la factura de
+        # helados de otro cliente con el mismo folio.
+        _llave = ["_doc", "cliente_rut"]
+        docs_mov = set(zip(m["_doc"], m["cliente_rut"]))
         d = despachos.copy()
         d["fecha_ruta"] = pd.to_datetime(d["fecha_ruta"], errors="coerce")
         # Las hojas de despachos se acotan al período del informe: la ventana
@@ -801,7 +805,9 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
               & (d["fecha_ruta"] <= pd.Timestamp(f_fin))]
         d["_doc"] = _norm_doc(d["documento"])
         d["Mes ruta"] = [_mes(f) for f in d["fecha_ruta"]]
-        d["_es_maq_mov"] = d["_doc"].isin(docs_mov)
+        _k_desp = pd.Series(list(zip(d["_doc"], d["cliente_rut"])),
+                            index=d.index, dtype=object)
+        d["_es_maq_mov"] = _k_desp.isin(docs_mov)
         marca_etl = (d["es_maquina"].fillna(False).astype(bool)
                      if "es_maquina" in d.columns
                      else pd.Series(False, index=d.index))
@@ -824,14 +830,15 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
             for col in ("Vendedor", "Cliente", "Comuna", "Región"):
                 if col not in c.columns:
                     c[col] = None
-            ctx = pd.concat([m, c], ignore_index=True).drop_duplicates("_doc")
-        docs_facturados = set(ctx["_doc"])
-        mov_por_doc = (ctx.drop_duplicates("_doc")
-                       .set_index("_doc")[["Movimiento", "Vendedor", "Cliente",
+            ctx = pd.concat([m, c], ignore_index=True).drop_duplicates(_llave)
+        docs_facturados = set(zip(ctx["_doc"], ctx["cliente_rut"]))
+        mov_por_doc = (ctx.drop_duplicates(_llave)
+                       .set_index(_llave)[["Movimiento", "Vendedor", "Cliente",
                                            "Comuna", "Región", "fecha"]])
-        dm = (d[d["_doc"].isin(docs_facturados) | marca_etl | transp_maq]
-              .join(mov_por_doc, on="_doc"))
-        dm["_sin_factura"] = ~dm["_doc"].isin(docs_facturados)
+        _facturado = _k_desp.isin(docs_facturados)
+        dm = (d[_facturado | marca_etl | transp_maq]
+              .join(mov_por_doc, on=_llave))
+        dm["_sin_factura"] = ~_facturado[dm.index]
         dm["_otro_periodo"] = (~dm["_sin_factura"]) & (~dm["_es_maq_mov"])
         nom_vend = (dict(zip(vendedores["id"], vendedores["nombre_canonico"]))
                     if vendedores is not None and not vendedores.empty else {})

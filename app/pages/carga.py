@@ -114,12 +114,12 @@ def _sincronizar_estado_maquinas(client, anio: int, mes: int) -> dict | None:
     """
     import pandas as pd
 
-    from etl.maquinas import aplicar_estado_despachos
+    from etl.maquinas import aplicar_estado_despachos, marcar_despachos_maquina
     from etl.upsert import upsert_tabla
 
     ini, fin = _rango_mes(anio, mes)
     desp = _leer_periodo(client, "fact_despachos", "fecha_ruta", ini, fin,
-                         "documento,estado,fecha_ruta")
+                         "id,documento,cliente_rut,estado,fecha_ruta")
     if desp.empty:
         return None
     cols_maq = ("documento,fecha,vendedor_id,cliente_rut,tipo_mov,estado,"
@@ -134,19 +134,21 @@ def _sincronizar_estado_maquinas(client, anio: int, mes: int) -> dict | None:
             subset=["sociedad_id", "documento", "cliente_rut", "tipo_mov"])
 
     # Reconciliar es_maquina en los despachos del mes según las máquinas (Obuma):
-    # un despacho es de máquina si su documento es una máquina derivada de Obuma.
-    machine_docs = (sorted(set(maq["documento"].dropna().astype(str)))
-                    if not maq.empty else [])
+    # un despacho es de máquina si su (documento, cliente) es una máquina
+    # derivada de Obuma. Solo por número, una NC de flete marcaba como máquina
+    # el despacho de producto de otro cliente con el mismo folio.
+    ids_maquina = (sorted(int(i) for i in marcar_despachos_maquina(desp, maq)
+                          .loc[lambda d: d["es_maquina"], "id"])
+                   if not maq.empty else [])
     n_maquina_desp = 0
     try:
         (client.table("fact_despachos").update({"es_maquina": False})
          .gte("fecha_ruta", ini).lt("fecha_ruta", fin).execute())
-        # Por tandas: la lista de documentos viaja en la URL y con muchos
-        # documentos el request se pasa de largo.
-        for i in range(0, len(machine_docs), 100):
+        # Por tandas: la lista de ids viaja en la URL y con muchos el request
+        # se pasa de largo.
+        for i in range(0, len(ids_maquina), 100):
             r = (client.table("fact_despachos").update({"es_maquina": True})
-                 .gte("fecha_ruta", ini).lt("fecha_ruta", fin)
-                 .in_("documento", machine_docs[i:i + 100]).execute())
+                 .in_("id", ids_maquina[i:i + 100]).execute())
             n_maquina_desp += len(r.data or [])
     except Exception:
         pass

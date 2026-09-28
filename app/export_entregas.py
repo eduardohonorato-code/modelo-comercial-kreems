@@ -59,10 +59,14 @@ def preparar_entregas(ventas: pd.DataFrame, despachos: pd.DataFrame,
                 .str.startswith("FL-"))
     v["neto"] = pd.to_numeric(v["neto"], errors="coerce").fillna(0)
 
+    # La llave de un documento es (número, cliente), no solo el número: las
+    # series de folios se repiten (96 folios de fact_despachos tienen dos
+    # clientes) y una NC de flete comparte número con facturas de otro cliente.
+    llave = ["_doc", "cliente_rut"]
+
     # Monto de PRODUCTO por documento: los fletes se excluyen porque valen $1 y
     # ensuciarían el monto sin aportar nada.
-    prod = (v[~v["_nc"] & ~v["_fl"]].groupby("_doc")["neto"].sum()
-            if not v.empty else pd.Series(dtype=float))
+    prod = v[~v["_nc"] & ~v["_fl"]].groupby(llave)["neto"].sum()
 
     d = despachos.copy()
     d["_doc"] = _norm_doc(d["documento"])
@@ -70,19 +74,22 @@ def preparar_entregas(ventas: pd.DataFrame, despachos: pd.DataFrame,
     prio = {"Entregada": 0, "Rechazada": 1, "Pendiente": 2}
     d["_prio"] = d["_est"].map(prio).fillna(9)
     d = (d.sort_values(["_prio", "fecha_ruta"])
-         .drop_duplicates("_doc"))
+         .drop_duplicates(llave))
 
-    d["Monto facturado"] = d["_doc"].map(prod).fillna(0.0)
+    claves = pd.MultiIndex.from_frame(d[llave])
+    d["Monto facturado"] = prod.reindex(claves).fillna(0.0).to_numpy()
     d["Transportista"] = (d["transportista"].fillna("(sin transportista)")
                           if "transportista" in d.columns
                           else "(sin transportista)")
 
-    # Marca de máquina: el documento tiene un movimiento FL derivado de Obuma.
+    # Marca de máquina: el documento DE ESE CLIENTE tiene un movimiento FL
+    # derivado de Obuma. Solo por número, la NC de flete 618 (julio) marcaba
+    # como máquina el despacho de helados de la factura 618 de otro cliente.
     if maquinas is not None and not maquinas.empty:
         mm = maquinas.copy()
         mm["_doc"] = _norm_doc(mm["documento"])
-        tipo = mm.drop_duplicates("_doc").set_index("_doc")["tipo_mov"]
-        d["tipo_mov"] = d["_doc"].map(tipo)
+        tipo = mm.drop_duplicates(llave).set_index(llave)["tipo_mov"]
+        d["tipo_mov"] = tipo.reindex(claves).to_numpy()
     else:
         d["tipo_mov"] = None
     d["Es máquina"] = d["tipo_mov"].notna()

@@ -70,9 +70,10 @@ def _leer_despachos_periodo(client, periodo: tuple) -> pd.DataFrame:
     rows, start = [], 0
     while True:
         b = (client.table("fact_despachos")
-             .select("documento,estado")
+             .select("documento,cliente_rut,estado,fecha_ruta")
              .eq("sociedad_id", 2)
              .gte("fecha_ruta", f_desde).lte("fecha_ruta", f_hasta)
+             .order("id")
              .range(start, start + 999).execute().data)
         if not b:
             break
@@ -80,7 +81,8 @@ def _leer_despachos_periodo(client, periodo: tuple) -> pd.DataFrame:
         start += 1000
         if len(b) < 1000:
             break
-    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["documento", "estado"])
+    return (pd.DataFrame(rows) if rows else
+            pd.DataFrame(columns=["documento", "cliente_rut", "estado", "fecha_ruta"]))
 
 
 def _leer_overrides_maquina(client) -> pd.DataFrame:
