@@ -248,6 +248,9 @@ def run(periodo: tuple, dry_run: bool = False):
     if not fm.empty:
         fm2 = reatribuir_vendedor_autoventa(
             fm, av.get("_vendedor_fl_folio") or {}, fallback_id=fallback_id)
+        # El vendedor de Autoventa viene por nombre (ej. el saliente cuya cuenta
+        # usa el reemplazo): se vuelve a aplicar la reasignación por fecha.
+        fm2 = aplicar_reasignacion(fm2, cargar_reasignaciones(client))
         fm2 = aplicar_override_vendedor(fm2, _leer_overrides_maquina(client))
         if not fm2["vendedor_id"].astype("Int64").equals(fm["vendedor_id"].astype("Int64")):
             upsert_tabla(client, "fact_maquinas", fm2,

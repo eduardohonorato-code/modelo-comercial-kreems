@@ -39,9 +39,9 @@ load_dotenv()
 
 import pandas as pd
 
-from etl.db import get_client, cargar_alias
+from etl.db import get_client, cargar_alias, cargar_reasignaciones
 from etl.config import SOCIEDAD_ID
-from etl.cleaners import construir_mapeo_vendedor, agregar_alias
+from etl.cleaners import construir_mapeo_vendedor, agregar_alias, aplicar_reasignacion
 from etl.upsert import upsert_tabla
 from etl.maquinas import (derivar_maquinas_obuma, aplicar_estado_despachos,
                           marcar_despachos_maquina)
@@ -248,7 +248,11 @@ def procesar_carga(client, obuma_files: list[tuple[Path, str]],
                                                   "sociedad_id", "vendedor_id"]),
             "stats":        {"obuma_filas_raw": 0},
         }
-    fact_ventas = obuma["fact_ventas"]
+    # Reasignación por fecha (reemplazos de vendedor, ver vendedor_reasignacion):
+    # lo que llega a nombre del saliente desde la fecha de corte va al entrante.
+    # Se aplica antes de derivar máquinas para que hereden el vendedor correcto.
+    reasignaciones = cargar_reasignaciones(client)
+    fact_ventas = aplicar_reasignacion(obuma["fact_ventas"], reasignaciones)
 
     # Máquinas (fuente única: Obuma)
     fact_maquinas = derivar_maquinas_obuma(fact_ventas)
@@ -273,6 +277,9 @@ def procesar_carga(client, obuma_files: list[tuple[Path, str]],
     dim_cliente_av = (pd.concat(dimcli_av_parts, ignore_index=True)
                       .drop_duplicates(subset=["cliente_rut"])
                       if dimcli_av_parts else pd.DataFrame(columns=["cliente_rut"]))
+    fact_pedidos   = aplicar_reasignacion(fact_pedidos, reasignaciones)
+    fact_despachos = aplicar_reasignacion(fact_despachos, reasignaciones,
+                                          col_fecha="fecha_ruta")
 
     # Estado de máquinas según despachos
     fact_maquinas = aplicar_estado_despachos(fact_maquinas, fact_despachos)

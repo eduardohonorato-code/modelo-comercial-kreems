@@ -194,8 +194,8 @@ def _atribuir_sucursales(client, path, sociedad: str) -> str:
 def _ejecutar_carga(anio: int, mes: int, uploads: dict) -> dict:
     """Guarda los archivos subidos en un temp, arma las listas y llama al núcleo."""
     # Import diferido: el ETL usa la service-role key (server-side, nunca al browser)
-    from etl.db import get_client
-    from etl.cleaners import construir_mapeo_vendedor
+    from etl.db import get_client, cargar_alias
+    from etl.cleaners import construir_mapeo_vendedor, agregar_alias
     from etl.run_historico import procesar_carga, _asegurar_vendedor_sin_asignar
 
     tmp = Path(tempfile.mkdtemp(prefix="kreems_carga_"))
@@ -223,7 +223,7 @@ def _ejecutar_carga(anio: int, mes: int, uploads: dict) -> dict:
 
     client = get_client()
     rows = client.table("dim_vendedor").select("id,nombre_canonico").execute().data
-    mapeo = construir_mapeo_vendedor(rows or [])
+    mapeo = agregar_alias(construir_mapeo_vendedor(rows or []), cargar_alias(client))
     fallback = _asegurar_vendedor_sin_asignar(client)
 
     rep = procesar_carga(client, obuma_files, av_pares, mapeo, fallback)
