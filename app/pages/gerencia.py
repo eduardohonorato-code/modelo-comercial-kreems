@@ -6,7 +6,7 @@ import pandas as pd
 from app.styles import fmt_clp, fmt_pct, fmt_num, color_pct
 from app.data import (get_resumen, get_pedidos_resumen, get_calendario,
                       get_todos_vendedores, get_objetivos, upsert_objetivo,
-                      get_ultima_factura, get_maquinas_sin_factura)
+                      get_ultima_factura)
 from app.export import (color_hex, bloque_descarga,
                         GRP_AZUL, GRP_VERDE, GRP_NARANJO)
 
@@ -168,25 +168,6 @@ def render(client, anio: int, mes: int):
     bloque_descarga(_disp, _col, "REPORTE DE SEGUIMIENTO DE OBJETIVOS",
                     _subt, f"seguimiento_{anio}_{mes:02d}",
                     col_labels=_PNG_LABELS, grupos=_PNG_GRUPOS)
-
-    # Aviso: máquinas FL-4 ingresadas en Autoventa que aún NO tienen factura.
-    # No cuentan en "Maq. Ingresadas AV" hasta facturarse; aquí quedan visibles.
-    df_maq_sf = get_maquinas_sin_factura(client, anio, mes)
-    if not df_maq_sf.empty:
-        filas = "".join(
-            f"<li><strong>{r['vendedor']}</strong> — cliente {r['cliente_rut']} "
-            f"(pedido {r['n_pedido']}, {str(r['fecha'])[:10]})</li>"
-            for _, r in df_maq_sf.iterrows()
-        )
-        st.markdown(f"""
-        <div class="aviso-maq">
-          <strong>⚠️ {len(df_maq_sf)} máquina(s) ingresada(s) en Autoventa aún sin factura</strong>
-          <div class="aviso-maq-sub">Instalación a cliente nuevo (FL-4) registrada en Autoventa pero
-          sin DTE emitido. NO cuenta en <em>Maq. Ingresadas AV</em> hasta que se facture el flete;
-          aparecerá automáticamente cuando salga su factura.</div>
-          <ul>{filas}</ul>
-        </div>
-        """, unsafe_allow_html=True)
 
     # Alerta de pipeline: venta ingresada (pedidos) aún sin facturar.
     _alerta_pipeline(df)
