@@ -260,7 +260,6 @@ def render(client, anio: int, mes: int):
 
 # ─── TAB 1 · Resumen ejecutivo ──────────────────────────────────────────────────
 def _tab_resumen(perfil, hist, current_ym):
-    p_cur = pd.Period(current_ym, "M")
     compraron = perfil[perfil["nfac_cur"] > 0]
     n_compra = len(compraron)
     fact_mes = float(compraron["fact_cur"].sum())

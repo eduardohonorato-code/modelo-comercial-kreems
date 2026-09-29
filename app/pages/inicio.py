@@ -11,8 +11,6 @@ Secciones:
 Solo-lectura: ninguna función modifica datos ni tablas.
 RLS aplica automáticamente vía el JWT del cliente.
 """
-import datetime
-import math
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -25,7 +23,7 @@ from app.data import (
     get_ultima_factura,
     get_ventas_diarias,
 )
-from app.styles import color_pct, fmt_clp, fmt_num, fmt_pct, logo_img
+from app.styles import fmt_clp, fmt_pct, logo_img
 
 
 # ── Paleta (idéntica a CSS variables) ─────────────────────────────────────────
@@ -250,7 +248,6 @@ def _render_tabla_vendedores(df: pd.DataFrame):
         </tr>""")
 
     # Fila TOTAL (solo vendedores con objetivo)
-    tot_fnc = float(df["fact_nc"].sum())          # total real incluye sin-obj
     tot_fnc_obj = float(df_con_obj["fact_nc"].sum())
     tot_obj = float(df_con_obj["obj_venta"].sum())
     tot_pct = tot_fnc_obj / tot_obj if tot_obj else None
@@ -472,13 +469,9 @@ def _render_ritmo(df_diario: pd.DataFrame, obj_total: float, dias_tot: int):
     n = len(df)
     df["pct_ritmo"] = [100 * (i + 1) / dias_tot for i in range(n)]
 
-    # Área entre curvas: verde si real > ritmo, rojo si real < ritmo
-    sobre = df["pct_real"] >= df["pct_ritmo"]
-
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=df["fecha"], y=df["pct_real"],
-        fill="tonexty" if False else None,
         mode="lines",
         name="% real",
         line=dict(color=_AZUL, width=2.5),
@@ -521,7 +514,6 @@ def _render_scatter(df: pd.DataFrame):
         lambda p: _VERDE if p >= 100 else (_AMARILLO if p >= 80 else _ROJO))
 
     media_fnc = dft["fact_nc"].mean()
-    media_pct = dft["pct"].mean()
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -604,7 +596,6 @@ def _render_proyeccion(df: pd.DataFrame, cal: dict):
     dias_tot  = int(cal.get("dias_totales", 30))
     proy      = (fact_nc / dias_t * dias_tot) if dias_t else 0
     resultado = proy - obj_total
-    res_cls   = "verde" if resultado >= 0 else "rojo"
     res_pfx   = "+" if resultado >= 0 else ""
 
     st.markdown(f"""
@@ -759,10 +750,6 @@ def _render_fila_inferior(df: pd.DataFrame, cal: dict):
 
 
 # ── Vista Vendedor (S2 simplificado) ─────────────────────────────────────────
-
-def _render_kpis_vendedor(df: pd.DataFrame, cal: dict):
-    """Para el rol vendedor: los mismos 6 KPIs pero sobre su única fila."""
-    _render_kpis(df, cal, pct_anterior=None)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

@@ -82,28 +82,6 @@ def _normalizar_col_ndcto(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def leer_fechas_obuma(path: Path) -> pd.Series:
-    """
-    Devuelve la columna FECHA DCTO parseada de un export Obuma, sin el resto del
-    pipeline. Se usa para (a) elegir el archivo correcto cuando hay varios y
-    (b) validar que el período cargado es el esperado.
-    """
-    df = _leer_xls_html(path)
-    df = normalizar_columnas(df)
-    col = next((c for c in df.columns if "FECHA DCTO" in c.upper()), None)
-    if col is None:
-        return pd.Series([], dtype="datetime64[ns]")
-    return parsear_fecha(df[col])
-
-
-def archivo_cubre_periodo(path: Path, anio: int, mes: int) -> bool:
-    """True si el export tiene al menos una fila en el año/mes indicado."""
-    f = leer_fechas_obuma(path)
-    if f.empty:
-        return False
-    return bool(((f.dt.year == anio) & (f.dt.month == mes)).any())
-
-
 def cargar_obuma_multi(
     archivos: list[tuple[Path, str]],
     mapeo_vendedor: dict,
@@ -114,10 +92,9 @@ def cargar_obuma_multi(
     """
     Lee y une una lista arbitraria de archivos Obuma, cada uno con su sociedad.
 
-    Generaliza `cargar_obuma` para soportar **varios archivos por sociedad**
-    (p.ej. un .xls por mes en la carga histórica). El resto del pipeline
-    —limpieza, signo NC, líneas, mapeo de vendedor, dims y hechos— es idéntico,
-    así que ambos puntos de entrada producen exactamente el mismo resultado.
+    Admite **varios archivos por sociedad** (p.ej. un .xls por mes en la carga
+    histórica) y es el único punto de entrada de los Excel de Obuma: el ETL
+    mensual, la carga histórica y la página Carga pasan todos por aquí.
 
     Args:
         archivos: lista de (path, soc_key) donde soc_key ∈ {"acuna","grannatural"}.
@@ -273,22 +250,3 @@ def cargar_obuma_multi(
     }
 
 
-def cargar_obuma(
-    path_acuna: Path,
-    path_grannatural: Path,
-    mapeo_vendedor: dict,
-    log_no_mapeados: list,
-    periodo: tuple | None = None,
-    fallback_vendedor_id: int | None = None,
-) -> dict:
-    """
-    Carga las dos sociedades a partir de un archivo por sociedad.
-
-    Mantiene la firma original que usa el ETL mensual (`run_etl.py`). Internamente
-    delega en `cargar_obuma_multi`, que admite varios archivos por sociedad.
-    """
-    return cargar_obuma_multi(
-        [(path_acuna, "acuna"), (path_grannatural, "grannatural")],
-        mapeo_vendedor, log_no_mapeados,
-        periodo=periodo, fallback_vendedor_id=fallback_vendedor_id,
-    )

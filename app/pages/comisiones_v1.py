@@ -60,7 +60,6 @@ KPIS = [
     ("amplitud",  "Amplitud de SKU",         0.15),   # 0,75%
     ("ruta",      "Cobertura de ruta",       0.15),   # 0,75%
 ]
-PESO   = {k: p for k, _, p in KPIS}
 PCT    = {k: p * TASA_MAX for k, _, p in KPIS}   # % sobre venta de cada KPI
 
 # Defaults de metas cuando no hay valor cargado ni fuente previa.
@@ -935,8 +934,6 @@ def _detalle_clientes(client, df: pd.DataFrame, detalle: pd.DataFrame,
 
     act  = d[d["tipo"] != "dormido"].sort_values("monto", ascending=False)
     dorm = d[d["tipo"] == "dormido"].sort_values("monto", ascending=False)
-    n_nuevo = int((act["tipo"] == "nuevo").sum())
-    n_react = int((act["tipo"] == "reactivado").sum())
 
     # ── Cartera oficial completa con estado ──────────────────────────────────
     cartera = _cartera_estado(client, vid, estado_cli, dfc)

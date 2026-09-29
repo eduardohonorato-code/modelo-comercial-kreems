@@ -47,10 +47,10 @@ sociedad: incluir `acuna` **o** `gran natural` (los de Autoventa se reconocen po
 `pedidos` / `despacho`). El archivo de Obuma **no trae la sociedad adentro**, por
 eso la etiqueta en el nombre es obligatoria.
 
-- `--periodo AAAA-MM` filtra las ventas Obuma a ese mes y, si hay varios archivos
-  de una sociedad en la carpeta, **elige el que tiene datos de ese mes** (evita
-  cargar por error un export viejo, p.ej. de 2025). Si un archivo no aporta filas
-  del período, el ETL se detiene con un mensaje claro en vez de cargar mal.
+- `--periodo AAAA-MM` filtra las ventas Obuma a ese mes y toma el archivo de
+  `data/mensual/<fuente>/` que lleva ese período en el nombre (lo deja así
+  `python -m etl.organizar --periodo AAAA-MM`). Sin `--periodo` se usa la carpeta
+  plana `data/muestras/` y, si hay varios archivos, el más reciente.
 - Conviene dejar **un solo archivo por sociedad y período** en la carpeta. Nombre
   sugerido: `obuma_acuna_2026-05.xls`, `obuma_grannatural_2026-05.xls`.
 

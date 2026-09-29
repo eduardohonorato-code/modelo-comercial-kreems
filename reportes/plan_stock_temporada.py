@@ -6,7 +6,6 @@ REFRESCO MENSUAL: el corte entre meses REALES y PROYECTADOS se detecta solo a
 partir de la ultima fecha cargada en Supabase (ultimo mes COMPLETO = real).
 Basta con volver a correr este script despues de cargar el mes que cerro.
 """
-import os
 import sys
 import calendar
 from datetime import date

@@ -458,7 +458,6 @@ def _export_seguimiento(df: pd.DataFrame):
                 colores[(i, "Proy.")] = h
 
     # Fila TOTAL
-    n = len(df)
     tot_obj = df["obj_venta"].sum()
     tot_fnc = df["fact_nc"].sum()
     tot_ped = df["pedidos_neto"].sum() if "pedidos_neto" in df else 0
