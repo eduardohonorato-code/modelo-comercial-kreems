@@ -40,7 +40,6 @@ load_dotenv()
 import pandas as pd
 
 from etl.db import get_client, cargar_alias, cargar_reasignaciones
-from etl.config import SOCIEDAD_ID
 from etl.cleaners import construir_mapeo_vendedor, agregar_alias, aplicar_reasignacion
 from etl.upsert import upsert_tabla
 from etl.maquinas import (derivar_maquinas_obuma, aplicar_estado_despachos,

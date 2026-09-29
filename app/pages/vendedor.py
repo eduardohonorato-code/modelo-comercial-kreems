@@ -5,7 +5,7 @@ import pandas as pd
 
 from app.styles import fmt_clp, fmt_pct, fmt_num, color_pct
 from app.auth import es_gerencia
-from app.data import get_resumen, get_maquinas, get_calendario, get_pedidos_resumen
+from app.data import get_resumen, get_calendario, get_pedidos_resumen
 
 
 def _int0(val) -> int:

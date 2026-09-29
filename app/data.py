@@ -59,16 +59,6 @@ def get_resumen(client: Client, anio: int, mes: int) -> pd.DataFrame:
     return pd.DataFrame(r.data)
 
 
-def get_resumen_anio(client: Client, anio: int) -> pd.DataFrame:
-    """Devuelve todos los meses de un año (para tendencias)."""
-    r = _con_reintento(lambda: (
-        client.table("v_resumen_vendedor_mes")
-        .select("*")
-        .eq("anio", anio)
-        .execute()))
-    return pd.DataFrame(r.data) if r.data else pd.DataFrame()
-
-
 # ── Pedidos Autoventa (columna "Pedidos" del Power BI) ──────────────────────
 
 def get_pedidos_resumen(client: Client, anio: int, mes: int) -> pd.DataFrame:
@@ -144,17 +134,6 @@ def get_maquinas_sin_factura(client: Client, anio: int, mes: int) -> pd.DataFram
 
 # ── Máquinas ─────────────────────────────────────────────────────────────────
 
-def get_maquinas(client: Client, anio: int, mes: int) -> pd.DataFrame:
-    r = (client.table("fact_maquinas")
-         .select("vendedor_id,tipo_mov,estado,fecha,cliente_rut")
-         .execute())
-    if not r.data:
-        return pd.DataFrame()
-    df = pd.DataFrame(r.data)
-    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
-    df = df[(df["fecha"].dt.year == anio) & (df["fecha"].dt.month == mes)]
-    return df
-
 
 def get_maquinas_rango(client: Client, fecha_ini, fecha_fin,
                        sociedad_ids=None) -> pd.DataFrame:
@@ -184,19 +163,6 @@ def get_maquinas_rango(client: Client, fecha_ini, fecha_fin,
         return pd.DataFrame()
     df = pd.DataFrame(rows)
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
-    return df
-
-
-def get_maquinas_historico(client: Client, anio: int) -> pd.DataFrame:
-    r = (client.table("fact_maquinas")
-         .select("vendedor_id,tipo_mov,estado,fecha")
-         .execute())
-    if not r.data:
-        return pd.DataFrame()
-    df = pd.DataFrame(r.data)
-    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
-    df = df[df["fecha"].dt.year == anio]
-    df["mes"] = df["fecha"].dt.month
     return df
 
 
@@ -279,7 +245,6 @@ def get_lineas_fl(client: Client, fecha_ini, fecha_fin,
     return df
 
 
-
 def get_pedidos_fl_todos(client: Client, sociedad_ids=None) -> pd.DataFrame:
     """
     TODOS los pedidos de flete de máquina, sin filtrar por fecha, paginado.
@@ -317,61 +282,14 @@ def get_pedidos_fl_todos(client: Client, sociedad_ids=None) -> pd.DataFrame:
     return df
 
 
-def get_pedidos_fl(client: Client, fecha_ini, fecha_fin,
-                   sociedad_ids=None, solo_sin_dte: bool = False) -> pd.DataFrame:
-    """
-    Pedidos de flete de máquina (FL-x) de Autoventa en el rango, paginado.
-
-    Es la otra mitad del seguimiento: Autoventa registra —y despacha— la máquina
-    apenas el vendedor la gestiona, mientras que el movimiento solo existe para
-    la app cuando Obuma factura el flete. Los pedidos con `doc_venta = 'Sin DTE'`
-    son justamente los que ya se movieron en terreno y todavía no facturan: son
-    la diferencia entre el conteo de este sistema y el de Autoventa.
-    """
-    fi = fecha_ini.isoformat() if hasattr(fecha_ini, "isoformat") else str(fecha_ini)
-    ff = fecha_fin.isoformat() if hasattr(fecha_fin, "isoformat") else str(fecha_fin)
-    _PAGE, offset, rows = 1000, 0, []
-    while True:
-        q = (client.table("fact_pedidos")
-             .select("n_pedido,num_documento,doc_venta,fecha,fecha_pedido,"
-                     "estado_pedido,vendedor_id,cliente_rut,producto_codigo,"
-                     "sociedad_id,facturado")
-             .in_("producto_codigo", CODIGOS_FL)
-             .gte("fecha", fi).lte("fecha", ff)
-             .order("id")
-             .range(offset, offset + _PAGE - 1))
-        if solo_sin_dte:
-            q = q.eq("doc_venta", "Sin DTE")
-        if sociedad_ids:
-            q = q.in_("sociedad_id", sociedad_ids)
-        r = q.execute()
-        if not r.data:
-            break
-        rows.extend(r.data)
-        if len(r.data) < _PAGE:
-            break
-        offset += _PAGE
-    if not rows:
-        return pd.DataFrame()
-    df = pd.DataFrame(rows)
-    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
-    return df
-
-
-
 # Metas por defecto del control de máquinas: las 22 gestiones semanales las fijó
-# gerencia (ago-2026); el resto son las propuestas sobre la línea base de
-# marzo-agosto 2026. Se usan solo si la tabla no tiene ninguna fila todavía.
+# gerencia (ago-2026); el 85% de entrega sale de la línea base de marzo-agosto
+# 2026. Se usan solo si la tabla no tiene ninguna fila todavía. La tabla tiene
+# otras siete columnas, de los indicadores que salieron en sep-2026: quedan en
+# la base, pero la app ya no las lee ni las escribe.
 OBJETIVOS_MAQUINAS_DEFAULT = {
     "meta_gestiones_semana": 22,
-    "meta_pedidos_semana": None,
-    "meta_pct_concretado": 0.90,
-    "meta_dias_gestion": 7,
-    "meta_cola_vencida": 0,
     "meta_pct_entregado": 0.85,
-    "meta_pct_rechazo": 0.10,
-    "meta_conversion_inst": 0.85,
-    "meta_parque_neto": 0,
 }
 
 
@@ -410,7 +328,6 @@ def upsert_objetivos_maquinas(client: Client, anio: int, mes: int, valores: dict
                  if k in OBJETIVOS_MAQUINAS_DEFAULT})
     return (client.table("objetivos_maquinas")
             .upsert(fila, on_conflict="anio,mes").execute())
-
 
 
 # ── Calendario laboral ───────────────────────────────────────────────────────
@@ -710,48 +627,6 @@ def get_estado_erp(client: Client) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame(columns=["rut", "activo"])
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["rut", "activo"])
-
-
-def get_top_clientes(client: Client, anio: int, mes: int,
-                     sociedad_ids=None) -> pd.DataFrame:
-    """
-    Ranking de clientes por Fact-NC en el mes. RLS aplica: un vendedor solo
-    ve sus clientes; gerencia ve todos. Reusa get_ventas_rango (paginado) para
-    no quedar corto por el límite de 1000 filas de PostgREST.
-
-    Devuelve, por cliente_rut: fact_nc (neto, NC ya negativas), n_facturas
-    (facturas distintas) y los datos descriptivos de dim_cliente. Ordenado
-    de mayor a menor Fact-NC.
-    """
-    import calendar as _cal
-    ultimo = _cal.monthrange(anio, mes)[1]
-    fini, ffin = f"{anio}-{mes:02d}-01", f"{anio}-{mes:02d}-{ultimo:02d}"
-    df = get_ventas_rango(client, fini, ffin, sociedad_ids)
-    if df.empty:
-        return pd.DataFrame()
-
-    df["neto"] = pd.to_numeric(df["neto"], errors="coerce").fillna(0)
-    es_factura = df["tipo_dcto"].str.contains("factura", case=False, na=False)
-
-    agg = (df.groupby("cliente_rut", dropna=False)
-             .agg(fact_nc=("neto", "sum"))
-             .reset_index())
-    nfac = (df[es_factura].groupby("cliente_rut")["n_dcto"]
-              .nunique().reset_index(name="n_facturas"))
-    agg = agg.merge(nfac, on="cliente_rut", how="left")
-    agg["n_facturas"] = agg["n_facturas"].fillna(0).astype(int)
-
-    # Enriquecer con datos del cliente
-    dfc = get_dim_cliente_full(client)
-    if not dfc.empty:
-        agg = agg.merge(dfc.rename(columns={"rut": "cliente_rut"}),
-                        on="cliente_rut", how="left")
-    for col in ["razon_social", "comuna", "region", "tipo"]:
-        if col not in agg.columns:
-            agg[col] = None
-    agg["razon_social"] = agg["razon_social"].fillna(agg["cliente_rut"])
-
-    return agg.sort_values("fact_nc", ascending=False).reset_index(drop=True)
 
 
 def get_dim_direccion_full(client: Client) -> pd.DataFrame:
@@ -1109,16 +984,6 @@ def get_comisiones(client: Client, anio: int, mes: int) -> pd.DataFrame:
     return pd.DataFrame(r.data) if r.data else pd.DataFrame()
 
 
-def get_comision_entradas(client: Client, anio: int, mes: int) -> pd.DataFrame:
-    """Entradas editables (cartera, salas Ganga, overrides) del período."""
-    r = (client.table("comision_entrada_mensual")
-         .select("vendedor_id,cartera_clientes,salas_ganga,"
-                 "efectividad_override,pnv_logro_override,maq_logro_override")
-         .eq("anio", anio).eq("mes", mes)
-         .execute())
-    return pd.DataFrame(r.data) if r.data else pd.DataFrame()
-
-
 def upsert_comision_entrada(client: Client, vendedor_id: int, anio: int, mes: int,
                             cartera_clientes, salas_ganga,
                             efectividad_override=None,
@@ -1324,14 +1189,6 @@ def upsert_comision_v1_meta(client: Client, vendedor_id: int, anio: int, mes: in
 
 def get_planes_comision(client: Client) -> pd.DataFrame:
     r = client.table("comision_plan").select("id,codigo,nombre").execute()
-    return pd.DataFrame(r.data) if r.data else pd.DataFrame()
-
-
-def get_vendedores_plan(client: Client) -> pd.DataFrame:
-    """Vendedores con su plan de comisión asignado."""
-    r = (client.table("dim_vendedor")
-         .select("id,nombre_canonico,plan_comision_id,activo")
-         .execute())
     return pd.DataFrame(r.data) if r.data else pd.DataFrame()
 
 

@@ -24,7 +24,7 @@ from datetime import date
 
 import pandas as pd
 
-from etl.cleaners import normalizar_rut, mapear_vendedor_id, _normalizar_nombre
+from etl.cleaners import normalizar_rut, mapear_vendedor_id
 from etl.config import SOCIEDAD_ID, TIPO_DCTO_NEGATIVO
 
 logger = logging.getLogger(__name__)
@@ -137,11 +137,6 @@ def _get(path: str) -> dict:
 _CACHE: dict[tuple, list[dict]] = {}
 
 
-def limpiar_cache() -> None:
-    """Vacía la caché de la corrida (útil en tests o procesos largos)."""
-    _CACHE.clear()
-
-
 def _get_paginado(metodo: str, filtros: str = "") -> list[dict]:
     """
     Trae TODAS las filas de un método `<recurso>.<metodo>.json` paginando de a
@@ -205,7 +200,7 @@ def cargar_obuma_api(
     """
     Carga las ventas de Gran Natural desde la API para un período (año, mes).
 
-    Devuelve el mismo dict que `cargar_obuma`:
+    Devuelve el mismo dict que `cargar_obuma_multi`:
       {dim_cliente, dim_producto, fact_ventas, stats}
     """
     anio, mes = periodo

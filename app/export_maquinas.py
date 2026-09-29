@@ -103,6 +103,10 @@ def _prep_pedidos(pedidos_fl: pd.DataFrame | None) -> pd.DataFrame:
     ingresó el pedido; `fecha` es la del DTE, o la de despacho pedida si todavía
     no factura. Si la base aún no tiene fecha_pedido —sql/036 sin correr, o un
     mes sin recargar— se cae a `fecha` para no dejar la fila fuera.
+
+    Ya no alimentan ninguna cola en pantalla (salieron en sep-2026). Los usan el
+    seguimiento de rechazos, para reconocer un pedido reingresado que todavía
+    espera su DTE, y el informe de Análisis, que cuenta los ingresados.
     """
     if pedidos_fl is None or pedidos_fl.empty:
         return pd.DataFrame()
@@ -513,8 +517,6 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
     ped_periodo = (ped[ped["_ingreso"].between(pd.Timestamp(f_ini),
                                                pd.Timestamp(f_fin))]
                    if not ped.empty else ped)
-    sin_dte_n = int((ped["_sin_dte"] & ~ped["_fantasma"]).sum()) if not ped.empty else 0
-    fantasmas_n = int((ped["_sin_dte"] & ped["_fantasma"]).sum()) if not ped.empty else 0
     ingresados = len(ped_periodo)
     dias_dte = (ped["_dias_a_dte"].dropna() if not ped.empty
                 else pd.Series(dtype=float))
@@ -535,8 +537,6 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
         ("Parque neto del período (nuevas - retiros)", nuevas - retiros),
         ("Movimientos anulados por nota de crédito", anuladas),
         ("Pedidos de máquina ingresados en el período", ingresados),
-        ("Pendientes de gestionar hoy (Sin DTE, todo el histórico)", sin_dte_n),
-        ("Pendientes que ya no aparecen en Autoventa (revisar)", fantasmas_n),
         ("Días entre el ingreso del pedido y su DTE (mediana)",
          float(dias_dte.median()) if len(dias_dte) else ""),
         ("", ""),
@@ -663,8 +663,8 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                     "semanales del equipo. Una gestión = un flete de máquina con "
                     "DTE emitido (instalación, cambio o retiro), contado en la "
                     "semana del documento. Los pedidos que siguen 'Sin DTE' no "
-                    "suman aquí: aparecen en 'Pedidos ingresados' y en su "
-                    "propia hoja. Semanas de lunes a "
+                    "suman aquí: solo cuentan en 'Pedidos ingresados'. "
+                    "Semanas de lunes a "
                     "domingo; se omiten las que quedan con menos de 4 días "
                     "dentro del rango elegido."),
               total_ultima=not semanal.empty)
@@ -879,7 +879,8 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                         "despachada y sin factura en Obuma' son máquinas que ya "
                         "salieron a ruta y cuyo flete todavía no se factura — son "
                         "la diferencia entre este informe y el conteo directo de "
-                        "Autoventa. Ver la hoja 'Sin facturar (Autoventa)'."))
+                        "Autoventa. La hoja 'Conciliación Autoventa' hace la "
+                        "cuenta."))
 
         # ── 11b. Conciliación con el conteo directo de Autoventa ────────────
         # La pregunta que aparece cada semana: "yo cuento N y el informe M".
@@ -900,7 +901,8 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
             ("(+) Despachados en el período con factura de otro período",
              n_otro, "Se facturó antes (fin de mes) y salió a ruta ahora."),
             ("(+) Despachados en el período SIN factura en Obuma",
-             n_sin_fact, "Pedido 'Sin DTE': ver hoja 'Sin facturar (Autoventa)'."),
+             n_sin_fact, "Pedido 'Sin DTE': son las filas 'AVISO' de la hoja "
+             "'Despachos de máquina'."),
             ("(=) Total de despachos de máquina del período",
              rutados_periodo + n_otro + n_sin_fact,
              "Esto es lo que cuenta el Detalle de despachos de Autoventa."),
@@ -940,78 +942,6 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
                   nota=("TODOS los despachos del período (no solo máquinas), "
                         "para poner en contexto el nivel de rechazo de las rutas."),
                   total_ultima=not gen.empty)
-
-    # ── 12b. Pendientes de gestionar (ingresados y sin DTE) ──────────────────
-    if not ped.empty:
-        nom_v = (dict(zip(vendedores["id"], vendedores["nombre_canonico"]))
-                 if vendedores is not None and not vendedores.empty else {})
-        sin_dte = ped[ped["_sin_dte"]].copy()
-        if not sin_dte.empty:
-            tabla_sd = pd.DataFrame({
-                "Fecha del pedido": sin_dte["_ingreso"].dt.date,
-                "N° pedido": sin_dte["n_pedido"],
-                "Código FL": sin_dte["_cod"],
-                "Movimiento": sin_dte["_mov"].map(MOV_LBL).fillna("(otro)"),
-                "Vendedor": sin_dte["vendedor_id"].map(nom_v).fillna("Sin asignar"),
-                "RUT": sin_dte["cliente_rut"],
-                "Cliente": _desc(sin_dte["cliente_rut"], clientes, "razon_social"),
-                "Comuna": _desc(sin_dte["cliente_rut"], clientes, "comuna"),
-                "Estado en Autoventa": sin_dte["estado_pedido"].fillna(
-                    "no aparece en la API"),
-                "Sigue vigente": sin_dte["_fantasma"].map({True: "revisar",
-                                                           False: "sí"}),
-                "Días sin gestionar": (pd.Timestamp(hoy)
-                                       - sin_dte["_ingreso"]).dt.days,
-            }).sort_values("Días sin gestionar", ascending=False)
-            _escribir(wb, "Pendientes de gestionar", tabla_sd,
-                      {"Fecha del pedido": _FMT_FECHA,
-                       "Días sin gestionar": _FMT_NUM},
-                      nota=("Pedidos de flete que el vendedor YA ingresó en "
-                            "Autoventa y que todavía no tienen DTE emitido: la "
-                            "gestión está pedida y no se ha concretado. No suman "
-                            "a la meta semanal (esa cuenta gestiones con DTE), "
-                            "pero son la cola de la que salen las próximas. "
-                            "Salen todos los que siguen abiertos hoy, sin "
-                            "importar el período del informe: un pedido de hace "
-                            "tres meses sin gestionar es el que más urge. Los "
-                            "marcados 'revisar' en Sigue vigente ya no vienen en "
-                            "la API de Autoventa: lo más probable es que se "
-                            "anularan o se reingresaran con otro número, así que "
-                            "no cuentan como cola real."))
-
-        # Gestión por vendedor: lo que pidió, lo que se le concretó y su cola.
-        g_ing = ped.groupby("vendedor_id").size().rename("Pedidos ingresados")
-        g_dte = (ped[~ped["_sin_dte"]].groupby("vendedor_id").size()
-                 .rename("Gestionados (con DTE)"))
-        g_pen = (ped[ped["_sin_dte"] & ~ped["_fantasma"]]
-                 .groupby("vendedor_id").size().rename("Pendientes (Sin DTE)"))
-        g_dias = (ped.groupby("vendedor_id")["_dias_a_dte"].median()
-                  .rename("Días ingreso a DTE (mediana)"))
-        gest = pd.concat([g_ing, g_dte, g_pen, g_dias], axis=1).fillna(0)
-        gest.insert(0, "Vendedor",
-                    pd.Series(gest.index, index=gest.index).map(nom_v)
-                    .fillna("Sin asignar"))
-        gest["% Concretado"] = gest["Gestionados (con DTE)"] / gest[
-            "Pedidos ingresados"].replace(0, pd.NA)
-        for c in ("Pedidos ingresados", "Gestionados (con DTE)",
-                  "Pendientes (Sin DTE)"):
-            gest[c] = gest[c].astype(int)
-        gest = gest.reset_index(drop=True).sort_values("Pedidos ingresados",
-                                                       ascending=False)
-        gest = _con_total(gest, "Vendedor",
-                          ("% Concretado", "Días ingreso a DTE (mediana)"))
-        _escribir(wb, "Gestión por vendedor", gest,
-                  {"Pedidos ingresados": _FMT_NUM,
-                   "Gestionados (con DTE)": _FMT_NUM,
-                   "Pendientes (Sin DTE)": _FMT_NUM,
-                   "Días ingreso a DTE (mediana)": _FMT_DEC,
-                   "% Concretado": _FMT_PCT},
-                  nota=("Todos los pedidos de flete del histórico por vendedor: "
-                        "cuántos ingresó, cuántos se concretaron con DTE, "
-                        "cuántos siguen en cola y cuánto demora en promedio la "
-                        "gestión. El % concretado no es solo mérito del "
-                        "vendedor: depende de que se emita el documento."),
-                  total_ultima=not gest.empty)
 
     # ── 13. Control del cruce ────────────────────────────────────────────────
     ctrl = []
@@ -1091,7 +1021,7 @@ def libro_maquinas(maquinas: pd.DataFrame, f_ini, f_fin, soc_lbl: str = "Ambas",
          "salido a ruta), pero Obuma todavía no emite el documento. No cuenta "
          "como movimiento aquí, porque el movimiento se deriva de la factura. "
          "Es la razón habitual de que Autoventa muestre más máquinas que este "
-         "informe; la hoja 'Sin facturar (Autoventa)' las lista una por una."),
+         "informe; la hoja 'Despachos de máquina' las marca con 'AVISO'."),
         ("Llave del cruce",
          "Obuma 'N° DCTO' = Autoventa 'Documento'. Si un documento tiene varios "
          "despachos manda el mejor resultado (Entregada, luego Rechazada, luego "

@@ -22,8 +22,7 @@ import pandas as pd
 
 from etl.cleaners import normalizar_rut, normalizar_direccion
 from etl.config import SOCIEDAD_ID
-from etl.loaders.obuma_api import (_get_paginado, REGION_MAP, TIPO_DCTO_MAP,
-                                   DTE_VALIDOS)
+from etl.loaders.obuma_api import _get_paginado, TIPO_DCTO_MAP, DTE_VALIDOS
 
 logger = logging.getLogger(__name__)
 

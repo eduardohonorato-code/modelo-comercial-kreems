@@ -13,12 +13,16 @@ Hojas:
   1. Resumen              · las respuestas de la semana, contra la meta
   2. Semana a semana      · las últimas 8 semanas partidas por resultado
   3. Gestiones por tipo   · instalaciones, cambios y retiros, y cómo terminó c/u
-  4. Rechazos             · cuántos por motivo y el detalle de cada uno
-  5. Rechazos · seguimiento · si se volvieron a ingresar y cómo terminaron
+  4. Rechazos (+ detalle) · cuántos por motivo y el detalle de cada uno
+  5. Rechazos · seguimiento · si se volvieron a ingresar y cómo terminaron,
+     con la venta de los sin reintento (Sin reintento · ventas / · por mes)
   6. Sin confirmar        · lo que todavía no tiene resultado
   7. Gestiones · detalle  · todas las gestiones del período con su estado
-  8. Pedidos sin documento· aparte y rotulado: todavía NO son gestiones
-  9. Facturados sin despacho · la otra cola de logística, toda la ventana
+  8. Fletes anulados (NC) · notas de crédito que anulan un flete, aparte
+
+Las dos colas de logística (pedidos sin documento y facturados sin despacho)
+salieron en sep-2026: gerencia ya no las usa. Los pedidos FL se siguen
+leyendo, pero solo para saber si un rechazo se volvió a ingresar.
 """
 import io
 from datetime import date
@@ -27,12 +31,12 @@ import pandas as pd
 
 from app.export_analisis import (_escribir, _con_total, _FMT_NUM, _FMT_PCT,
                                  _FMT_CLP)
-from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
-                                 SIN_INFO, _desc)
+from app.export_maquinas import (RECHAZADA, EN_RUTA, SIN_DESPACHO, SIN_INFO,
+                                 _desc)
 from app.kpis_maquinas import (DIAS_PARA_REINTENTAR, LECT_IGUAL, LECT_MENOS,
                                LECT_NO, LECT_NUEVO, LECT_RECIENTE,
                                LECT_SIN_BASE, LECT_DEJO,
-                               conteo_semana, etiqueta_mov, mezcla_movimientos,
+                               conteo_semana, mezcla_movimientos,
                                resumen_rechazos, seguimiento_rechazos,
                                texto_sin_confirmar, ventas_por_mes,
                                ventas_post_rechazo)
@@ -379,63 +383,7 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
         {"Fecha documento": _FMT_FECHA, "Fecha ruta": _FMT_FECHA},
         nota="Una fila por gestión del período. Es la base de todas las demás hojas.")
 
-    # ── 8. Pedidos sin documento ─────────────────────────────────────────────
-    if ped is not None and not ped.empty:
-        cola = ped[ped["_sin_dte"] & ~ped["_fantasma"]].copy()
-        if not cola.empty:
-            vmap = dict(mov.drop_duplicates("vendedor_id")
-                        .set_index("vendedor_id")["Vendedor"])
-            # Veinte pedidos en cola no son lo mismo si son retiros que si son
-            # instalaciones: los primeros son parque que sigue en la calle, los
-            # segundos venta que todavía no empieza.
-            n_c = cola["_mov"].value_counts()
-            mezcla_cola = " · ".join(
-                etiqueta_mov(mv, int(n_c[mv]))
-                for mv in ("nueva", "cambio", "retiro") if n_c.get(mv))
-            _escribir(wb, "Pedidos sin documento", pd.DataFrame({
-                "Días esperando": (pd.Timestamp(hoy) - cola["_ingreso"]).dt.days,
-                "Fecha pedido": cola["_ingreso"].dt.date,
-                "N° pedido": cola["n_pedido"],
-                "Movimiento": cola["_mov"].map(_MOV).fillna("(otro)"),
-                "Vendedor": cola["vendedor_id"].map(vmap).fillna("—"),
-                "Cliente": cli(cola["cliente_rut"]),
-            }).sort_values("Días esperando", ascending=False),
-                {"Fecha pedido": _FMT_FECHA, "Días esperando": _FMT_NUM},
-                nota=(f"APARTE: pedidos que el vendedor ya ingresó y todavía "
-                      f"no tienen documento. Aún NO son gestiones y no cuentan "
-                      f"en ninguna otra hoja; cuando se emita el documento pasan "
-                      f"a contar en esa semana. Salen todos los abiertos hoy. "
-                      f"De los {len(cola)}: {mezcla_cola}."))
-
-    # ── 9. Facturados sin despacho ───────────────────────────────────────────
-    # Toda la ventana de `mov`, no el período: la hermana de la cola de pedidos
-    # sin documento, un paso más adelante del recorrido. Ahí falta emitir el
-    # DTE, aquí falta subirlo a un camión; las dos son de logística y las dos
-    # envejecen, así que las dos se miran completas.
-    # Lo fechado después de hoy todavía no está atrasado: se factura con la
-    # fecha de entrega y la ruta se arma después.
-    sin_ruta = mov[(mov["Estado entrega"] == SIN_DESPACHO)
-                   & (mov["fecha"] <= pd.Timestamp(hoy))].copy()
-    if not sin_ruta.empty:
-        _escribir(wb, "Facturados sin despacho", pd.DataFrame({
-            "Días desde la factura": (pd.Timestamp(hoy) - sin_ruta["fecha"]).dt.days,
-            "Fecha factura": sin_ruta["fecha"].dt.date,
-            "Documento": sin_ruta["_doc"],
-            "Movimiento": sin_ruta["tipo_mov"].map(_MOV),
-            "Vendedor": sin_ruta["Vendedor"],
-            "Cliente": cli(sin_ruta["cliente_rut"]),
-            "Comuna": _desc(sin_ruta["cliente_rut"], clientes, "comuna"),
-            "Sociedad": sin_ruta["Sociedad"],
-        }).sort_values("Días desde la factura", ascending=False),
-            {"Fecha factura": _FMT_FECHA, "Días desde la factura": _FMT_NUM},
-            nota=("APARTE, y de toda la historia hasta hoy, no solo del período: "
-                  "documentos de flete emitidos que no aparecen en ninguna ruta "
-                  "—ni entregada, ni rechazada, ni pendiente— en un mes que SÍ "
-                  "tiene despachos cargados. O sea, no falta el archivo: falta "
-                  "programar el flete. Es la otra cola de logística, después de "
-                  "«Pedidos sin documento»."))
-
-    # ── 10. Fletes anulados con NC ───────────────────────────────────────────
+    # ── 8. Fletes anulados con NC ────────────────────────────────────────────
     a = anul[anul["fecha"].between(ini, fin)]
     if not a.empty:
         _escribir(wb, "Fletes anulados (NC)", pd.DataFrame({

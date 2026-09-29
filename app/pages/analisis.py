@@ -893,15 +893,12 @@ _HOJAS_MAQ = [
     ("Pendientes por confirmar", "Facturadas y todavía sin entrega confirmada, "
                                  "ordenadas por antigüedad. La hoja de trabajo."),
     ("Rechazadas", "Salieron a ruta y volvieron rechazadas: hay que reprogramar."),
+    ("Motivos de rechazo", "Por qué volvieron, según el comentario del repartidor."),
     ("Retiros", "Todos los FL-2, con la confirmación de que la máquina volvió."),
     ("Clientes", "Un cliente por fila, con su saldo nuevas − retiros."),
     ("Despachos de máquina", "Las filas del detalle de despachos de Autoventa que "
                              "cruzan con una máquina, incluidas las despachadas "
                              "y aún sin factura."),
-    ("Pendientes de gestionar", "Pedidos de flete ingresados y todavía sin DTE, "
-                                "por antigüedad. La cola del vendedor."),
-    ("Gestión por vendedor", "Pedidos ingresados, concretados con DTE, en cola y "
-                             "cuánto demora la gestión."),
     ("Conciliación Autoventa", "La aritmética de por qué tu recuento y el del "
                                "informe no dan igual."),
     ("Despachos (contexto)", "Todas las entregas del período y su nivel de rechazo."),
@@ -997,8 +994,8 @@ def _s04b_informe_maquinas(client, df_maq, f_ini, f_fin, soc_ids):
                 fl = None
             try:
                 # Todos los pedidos FL (son pocos): el informe los corta por
-                # fecha de ingreso y por fecha de DTE, y la cola de pendientes
-                # se muestra completa, no solo la del período.
+                # fecha de ingreso (pedidos ingresados) y por fecha de DTE
+                # (días del ingreso al documento).
                 ped_fl = get_pedidos_fl_todos(client, soc_ids)
             except Exception:
                 ped_fl = None

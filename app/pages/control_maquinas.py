@@ -21,8 +21,10 @@ no otro grupo. Por eso se sacaron de la vista los indicadores que miraban otra
 cosa (% concretado, mediana de días, cola vencida, parque neto): cada uno tenía
 su propio denominador y obligaba a explicar cuál era cuál.
 
-Lo demás —la cola de pedidos sin documento, las entregas en pesos, los Excel y
-las metas— queda abajo, plegado.
+Lo demás —las entregas en pesos, el Excel y las metas— queda abajo, plegado.
+Las dos colas de logística (pedidos esperando documento y facturados esperando
+despacho) salieron en septiembre de 2026: gerencia ya no las usa. Los pedidos
+de flete se siguen leyendo, pero solo para reconocer un rechazo reingresado.
 """
 import datetime
 
@@ -88,10 +90,9 @@ _DIAS_ADELANTE = 14
 _SEMANAS_TENDENCIA = 8
 
 _MOV = {"nueva": "Instalación", "cambio": "Cambio", "retiro": "Retiro"}
-_MOV_PL = {"nueva": "Instalaciones", "cambio": "Cambios", "retiro": "Retiros"}
 
-# Solo las metas que esta página usa. El resto de las columnas de
-# objetivos_maquinas se conserva en la base y lo sigue usando el Excel.
+# Las dos metas que existen. objetivos_maquinas tiene otras siete columnas de
+# indicadores retirados en sep-2026; quedan en la base, pero nadie las lee.
 _CAMPOS_META = [
     ("meta_gestiones_semana", "Gestiones por semana", "int",
      "Meta del equipo completo. Instalación, cambio y retiro suman igual."),
@@ -256,12 +257,9 @@ def render(client, anio: int, mes: int):
     #   · tarjetas, barra y «Qué se movió» → `w`, las gestiones del período
     #   · tendencia → las 8 semanas que terminan en `f_fin`
     #   · rechazos → su propio filtro de fechas (por defecto, últimas 8 semanas)
-    #   · facturados sin despacho → toda la historia hasta hoy
-    # Antes la carga partía 8 semanas antes del período elegido, y la cola de
-    # despacho, que no filtraba, cambiaba de tamaño según el selector: 0 con la
-    # semana en curso, 1 con el mes, cuando en la base había 9. Traer desde
-    # febrero casi no cuesta más: lo pesado son los despachos, y esos ya se
-    # pedían con 180 días de margen hacia atrás.
+    # Se trae desde febrero y no solo el período porque el reintento de un
+    # rechazo cae semanas después de él. Casi no cuesta más: lo pesado son los
+    # despachos, y esos ya se pedían con 180 días de margen hacia atrás.
     # Hacia adelante, `_DIAS_ADELANTE`: logística factura con la fecha de
     # entrega, así que un reintento reingresado hoy puede venir fechado el sábado.
     ini_tend = f_ini - datetime.timedelta(weeks=_SEMANAS_TENDENCIA - 1)
@@ -858,56 +856,13 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None,
     """Todo lo que no es la pregunta de la semana, fuera de la vista."""
     st.divider()
 
-    # Pedidos que el vendedor ya ingresó y aún no tienen documento: todavía no
-    # son gestiones, por eso van aparte y sin mezclarse con los números de arriba.
-    cola = (ped[ped["_sin_dte"] & ~ped["_fantasma"]].copy()
-            if ped is not None and not ped.empty else pd.DataFrame())
-    with st.expander(f"📥 Pedidos esperando documento · {len(cola)}"):
-        st.caption("Pedidos de flete que el vendedor ya ingresó y que todavía no "
-                   "tienen DTE. Aún no son gestiones: cuando se emita el "
-                   "documento, pasan a contar arriba en esa semana. Salen todos "
-                   "los abiertos, sin importar la semana elegida.")
-        if cola.empty:
-            st.success("No hay pedidos esperando documento.")
-        else:
-            # Veinte pedidos en cola no son lo mismo si son retiros que si son
-            # instalaciones: los primeros son parque que sigue en la calle, los
-            # segundos venta que todavía no empieza.
-            cuenta = cola["_mov"].value_counts()
-            cols_m = st.columns(4)
-            for col, mv in zip(cols_m, ("nueva", "cambio", "retiro")):
-                col.metric(_MOV_PL[mv], int(cuenta.get(mv, 0)))
-            cols_m[3].metric("Sin clasificar", int(cola["_mov"].isna().sum()),
-                             help="Líneas de flete con un código FL que no es "
-                                  "FL-1/2/3/4/5.")
-            vmap = (dict(mov.drop_duplicates("vendedor_id")
-                         .set_index("vendedor_id")["Vendedor"])
-                    if mov is not None and not mov.empty else {})
-            nombres = _nombres_cliente(client)
-            det = pd.DataFrame({
-                "Días esperando": (pd.Timestamp(datetime.date.today())
-                                   - cola["_ingreso"]).dt.days,
-                "Fecha pedido": cola["_ingreso"].dt.date,
-                "N° pedido": cola["n_pedido"],
-                "Movimiento": cola["_mov"].map(_MOV).fillna("(otro)"),
-                "Vendedor": cola["vendedor_id"].map(vmap).fillna("—"),
-                "Cliente": cola["cliente_rut"].map(nombres).fillna(cola["cliente_rut"]),
-            }).sort_values("Días esperando", ascending=False)
-            st.dataframe(det, use_container_width=True, hide_index=True)
-            st.download_button("⬇️ Descargar en CSV",
-                               det.to_csv(index=False).encode("utf-8-sig"),
-                               f"sin_dte_{datetime.date.today():%Y%m%d}.csv",
-                               "text/csv", key="dl_cola")
-
-    _cola_despacho(mov, f_ini, f_fin)
-
     with st.expander("🚚 Entregas en pesos por transportista (helados y máquinas)"):
         _entregas_pesos(client, f_ini, f_fin, mov, desp)
 
     with st.expander("📘 Informes Excel"):
         st.caption("Mismos números que esta página, con el detalle de cada "
-                   "gestión, rechazo y pendiente. El informe completo de 19 hojas "
-                   "sigue en Análisis → Máquinas.")
+                   "gestión, rechazo y pendiente. El informe de seguimiento "
+                   "completo sigue en Análisis → Máquinas.")
         # Los rechazos del Excel son los del filtro de fechas de la sección
         # «Qué pasó con los rechazos»: si se cambia, el informe se regenera.
         firma = (str(f_ini), str(f_fin), str((ctx_seg or {}).get("desde")),
@@ -938,65 +893,6 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None,
 
     with st.expander(f"🎯 Metas de {f_ini.month:02d}/{f_ini.year}"):
         _form_metas(client, f_ini.year, f_ini.month, metas)
-
-
-def _cola_despacho(mov: pd.DataFrame, f_ini, f_fin) -> None:
-    """
-    Facturados que todavía no tienen ruta, de TODA la historia hasta hoy.
-
-    Es la hermana de la cola de pedidos sin documento, un paso más adelante del
-    recorrido: ahí falta que logística emita el DTE, aquí falta que lo suba a un
-    camión. Las dos son de logística y las dos envejecen, por eso van juntas y
-    fuera del período: un documento facturado hace tres semanas sin ruta es peor
-    que uno del jueves pasado, y mirando solo la semana elegida desaparece de la
-    vista apenas se cambia de semana.
-
-    No incluye «Sin información» (Acuña, o un mes sin despachos cargados): de
-    esas no se puede afirmar que falte la ruta, simplemente no hay con qué
-    saberlo.
-    """
-    if mov is None or mov.empty:
-        return
-    # Un documento fechado mañana sin ruta todavía no está atrasado: logística
-    # factura con la fecha de entrega y la ruta se arma después.
-    hoy_ts = pd.Timestamp(datetime.date.today())
-    cola = mov[(mov["Estado entrega"] == SIN_DESPACHO)
-               & (mov["fecha"] <= hoy_ts)].copy()
-    with st.expander(f"🚛 Facturados esperando despacho · {len(cola)}"):
-        st.caption(
-            "Documentos de flete emitidos que no aparecen en ninguna ruta, ni "
-            "entregada ni rechazada ni pendiente — y en un mes que SÍ tiene "
-            "despachos cargados, así que no es un archivo que falte: es un "
-            "flete que no se ha programado. Salen todos, desde el primer "
-            f"despacho cargado ({_PRIMER_DESPACHO:%d/%m/%Y}), sin importar el "
-            "período elegido arriba.")
-        if cola.empty:
-            st.success("Todo lo facturado tiene ruta.")
-            return
-        cuenta = cola["tipo_mov"].value_counts()
-        cols_m = st.columns(3)
-        for col, mv in zip(cols_m, ("nueva", "cambio", "retiro")):
-            col.metric(_MOV_PL[mv], int(cuenta.get(mv, 0)))
-        hoy = pd.Timestamp(datetime.date.today())
-        det = pd.DataFrame({
-            "Días desde la factura": (hoy - cola["fecha"]).dt.days,
-            "Fecha factura": cola["fecha"].dt.date,
-            "Documento": cola["_doc"],
-            "Movimiento": cola["tipo_mov"].map(_MOV),
-            "Vendedor": cola["Vendedor"],
-            "Cliente": cola["Cliente"],
-            "Comuna": cola["Comuna"],
-            "Sociedad": cola["Sociedad"],
-        }).sort_values("Días desde la factura", ascending=False)
-        st.dataframe(det, use_container_width=True, hide_index=True)
-        st.caption("Los de 0 o 1 día son normales: se facturaron recién y la "
-                   "ruta se programa después. Los que hay que mirar son los de "
-                   "arriba de la tabla.")
-        st.download_button(
-            "⬇️ Descargar en CSV",
-            det.to_csv(index=False).encode("utf-8-sig"),
-            f"facturados_sin_despacho_{datetime.date.today():%Y%m%d}.csv",
-            "text/csv", key="dl_sin_desp")
 
 
 def _entregas_pesos(client, f_ini, f_fin, mov, desp):
@@ -1062,8 +958,8 @@ def _form_metas(client, anio: int, mes: int, metas: dict):
                         help=ayuda, key=f"meta_{clave}")
         guardar = st.form_submit_button("💾 Guardar metas", type="primary")
     if guardar:
-        # Solo se mandan estas dos columnas: las demás metas del mes quedan
-        # como estaban en la base (el Excel de gerencia todavía las usa).
+        # Solo se mandan estas dos columnas: las otras de la tabla quedan
+        # como estaban.
         try:
             upsert_objetivos_maquinas(client, anio, mes, nuevos)
             st.success(f"Metas de {mes:02d}/{anio} guardadas.")
