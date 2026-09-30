@@ -2,7 +2,8 @@
 Carga de pedidos Autoventa · Gran Natural · vía API REST (Fase 4).
 
 Pulea los pedidos desde la API de Autoventa y hace upsert idempotente en
-fact_pedidos, con la misma llave natural que el ETL de Excel.
+fact_pedidos, con la misma llave natural que el ETL de Excel. Después borra las
+filas GN del mes que la API ya no trae, así el mes queda igual a Autoventa hoy.
 
 Uso:
     python -m etl.run_autoventa_api --periodo 2026-06
@@ -62,6 +63,41 @@ def _asegurar_vendedor_sin_asignar(client) -> int:
     ins = (client.table("dim_vendedor")
            .insert({"nombre_canonico": "Sin asignar", "activo": True}).execute())
     return ins.data[0]["id"]
+
+
+def ids_sobrantes(existentes: list, fact_pedidos: pd.DataFrame) -> list:
+    """
+    Ids de las filas del mes que ya están en fact_pedidos y que la API ya no trae:
+    líneas que cambiaron de producto (01 → MUS-1), líneas Sin DTE que no llegaron
+    a la factura y pedidos anulados. Solo con upsert se quedaban para siempre: en
+    ago-2026 eran $1,38 M de más (750 pedidos / $82,9 M contra 731 / $81,5 M de la
+    API al 30-09).
+    """
+    vigentes = {
+        (str(n), str(c), int(l)) for n, c, l in
+        fact_pedidos[["n_pedido", "producto_codigo", "linea"]].itertuples(index=False)
+    }
+    return [
+        e["id"] for e in existentes
+        if (str(e["n_pedido"]), str(e["producto_codigo"]), int(e["linea"])) not in vigentes
+    ]
+
+
+def _pedidos_del_mes(client, periodo: tuple) -> list:
+    anio, mes = periodo
+    desde = f"{anio}-{mes:02d}-01"
+    hasta = f"{anio}-{mes:02d}-{calendar.monthrange(anio, mes)[1]:02d}"
+    filas, off = [], 0
+    while True:
+        lote = (client.table("fact_pedidos")
+                .select("id,n_pedido,producto_codigo,linea")
+                .eq("sociedad_id", SOCIEDAD_ID["grannatural"])
+                .gte("fecha", desde).lte("fecha", hasta)
+                .order("id").range(off, off + 999).execute()).data or []
+        filas += lote
+        if len(lote) < 1000:
+            return filas
+        off += 1000
 
 
 def _mapa_vendedor_doc_obuma(client, periodo: tuple, fallback_id: int) -> dict:
@@ -218,12 +254,15 @@ def run(periodo: tuple, dry_run: bool = False):
     fact_pedidos = aplicar_reasignacion(fact_pedidos, cargar_reasignaciones(client))
 
     dim_cliente = av["dim_cliente"].rename(columns={"cliente_rut": "rut"})
+    sobrantes = ids_sobrantes(_pedidos_del_mes(client, periodo), fact_pedidos)
 
     if dry_run:
         logger.info("\n-- DRY-RUN: resumen sin escribir --")
         logger.info("  fact_pedidos: %d filas | neto = %.0f",
                     len(fact_pedidos), fact_pedidos["neto"].astype(float).sum())
         logger.info("  dim_cliente:  %d", len(dim_cliente))
+        logger.info("  fact_pedidos: %d filas del mes se borrarían (la API ya no las trae)",
+                    len(sobrantes))
         logger.info("  stats: %s", av["stats"])
         if log_no_mapeados:
             unicos = sorted({r["nombre_original"] for r in log_no_mapeados})
@@ -237,6 +276,12 @@ def run(periodo: tuple, dry_run: bool = False):
     _insertar_productos_faltantes(client, av.get("dim_producto"))
     upsert_tabla(client, "fact_pedidos", fact_pedidos,
                  on_conflict="sociedad_id,n_pedido,producto_codigo,linea")
+    # Si la API no trajo nada, la función ya volvió más arriba: nunca se vacía un
+    # mes por una caída de la API.
+    for i in range(0, len(sobrantes), 200):
+        client.table("fact_pedidos").delete().in_("id", sobrantes[i:i + 200]).execute()
+    logger.info("  fact_pedidos: %d filas del mes borradas (la API ya no las trae)",
+                len(sobrantes))
 
     # ── Reatribuir el vendedor de las MÁQUINAS GN al de Autoventa ───────────
     # Las máquinas se derivan de Obuma (cubre ambas sociedades y todos los FL),
