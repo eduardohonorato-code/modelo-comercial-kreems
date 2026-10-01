@@ -137,5 +137,56 @@ class TestPrepararEntregas(unittest.TestCase):
         self.assertEqual(len(d), 2)
 
 
+
+class TestMaquinasPorCamion(unittest.TestCase):
+    """
+    El % de entrega de máquinas cuadra con la planilla de logística, que cuenta
+    por camión: julio de 2026, Máquinas Kreems 1, 11 entregadas y 1 rechazada.
+    Por factura FL solo salían 10: el camión también hace retiros sin flete FL.
+    """
+
+    def _d(self):
+        from app.export_entregas import preparar_entregas
+        desp = pd.DataFrame([
+            # retiro sin factura FL, en el camión de máquinas, $0 → máquina
+            {"documento": "96", "cliente_rut": RUT_OTRO, "estado": "Entregada",
+             "fecha_ruta": "2026-07-14", "transportista": "Máquinas Kreems 1"},
+            # helado facturado que viajó en el camión de máquinas → sigue en pesos
+            {"documento": "700", "cliente_rut": RUT_OTRO, "estado": "Entregada",
+             "fecha_ruta": "2026-07-14", "transportista": "Máquinas Kreems 1"},
+            # máquina FL en camión de helados → máquina
+            {"documento": "4853", "cliente_rut": RUT_MAQ, "estado": "Rechazada",
+             "fecha_ruta": "2026-07-15", "transportista": "Cancino Hermanos 2 Temuco"},
+            # anulación de logística → no cuenta en el % de máquinas
+            {"documento": "5607", "cliente_rut": RUT_NC, "estado": "Rechazada",
+             "fecha_ruta": "2026-07-16", "transportista": "Nulas mes en curso"},
+        ])
+        ventas = pd.DataFrame([
+            {"n_dcto": "700", "tipo_dcto": "FACTURA", "producto_codigo": "PAL-1",
+             "cliente_rut": RUT_OTRO, "neto": 50000},
+            {"n_dcto": "4853", "tipo_dcto": "FACTURA", "producto_codigo": "FL-4",
+             "cliente_rut": RUT_MAQ, "neto": 1},
+            {"n_dcto": "5607", "tipo_dcto": "FACTURA", "producto_codigo": "FL-2",
+             "cliente_rut": RUT_NC, "neto": 1},
+        ])
+        mov = pd.DataFrame([
+            {"documento": "4853", "cliente_rut": RUT_MAQ, "tipo_mov": "nueva"},
+            {"documento": "5607", "cliente_rut": RUT_NC, "tipo_mov": "retiro"},
+        ])
+        return preparar_entregas(ventas, desp, mov)
+
+    def test_marca_de_maquina(self):
+        d = self._d().set_index("_doc")
+        self.assertTrue(d.loc["96", "Es máquina"])       # $0 en camión de máquinas
+        self.assertFalse(d.loc["700", "Es máquina"])     # helado con plata
+        self.assertTrue(d.loc["4853", "Es máquina"])     # FL en camión de helados
+        self.assertTrue(d.loc["5607", "Es anulación"])
+
+    def test_maquinas_despachadas_saca_anulaciones(self):
+        from app.export_entregas import maquinas_despachadas
+        m = maquinas_despachadas(self._d())
+        self.assertEqual(sorted(m["_doc"]), ["4853", "96"])
+
+
 if __name__ == "__main__":
     unittest.main()

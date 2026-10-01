@@ -901,7 +901,8 @@ def _entregas_pesos(client, f_ini, f_fin, mov, desp):
         st.caption("Sin despachos cargados en el período.")
         return
     from app.data import get_ventas_rango
-    from app.export_entregas import preparar_entregas, _tabla_por
+    from app.export_entregas import (preparar_entregas, _tabla_por,
+                                     maquinas_despachadas)
     try:
         ventas = get_ventas_rango(client, f_ini, f_fin)
     except Exception:
@@ -921,6 +922,7 @@ def _entregas_pesos(client, f_ini, f_fin, mov, desp):
     ent = float(prods.loc[prods["_est"] == "Entregada", "Monto facturado"].sum())
     tot = float(prods["Monto facturado"].sum())
     rech = float(prods.loc[prods["_est"] == "Rechazada", "Monto facturado"].sum())
+    st.markdown("**Helados · en pesos**")
     k1, k2 = st.columns(2)
     k1.metric("% de entrega · helados", f"{ent / tot * 100:.1f}%" if tot else "—",
               help="Plata entregada sobre la plata que salió a ruta en el período.")
@@ -933,9 +935,54 @@ def _entregas_pesos(client, f_ini, f_fin, mov, desp):
         v["% de entrega"] = v["% de entrega"].apply(
             lambda x: f"{x * 100:.1f}%" if pd.notna(x) and x != "" else "")
         st.dataframe(v, use_container_width=True, hide_index=True)
-    st.caption("Se mide sobre lo que salió a ruta en el período (fecha de ruta), "
-               "no sobre lo facturado. Las máquinas no van en pesos: su flete "
-               "se factura a $1.")
+    _entregas_maquinas(d, maquinas_despachadas, _tabla_por)
+    st.caption("Todo se mide sobre lo que salió a ruta en el período elegido "
+               "arriba (fecha de ruta), no sobre lo facturado: para un mes, "
+               "elige «Mes en curso» o un rango personalizado.")
+
+
+def _entregas_maquinas(d: pd.DataFrame, maquinas_despachadas, _tabla_por):
+    """
+    El % de entrega de máquinas, en unidades y por transportista.
+
+    En unidades porque el flete de una máquina se factura a $1: en pesos no
+    dice nada. Cuadra con la planilla de logística, que cuenta por camión:
+    julio de 2026, Máquinas Kreems 1, 11 entregadas y 1 rechazada = 92%.
+    """
+    st.markdown("**Máquinas · en unidades**")
+    maqs = maquinas_despachadas(d)
+    if maqs.empty:
+        st.caption("Sin máquinas despachadas en el período.")
+        return
+    est = maqs["_est"]
+    n_ent, n_rech = int((est == "Entregada").sum()), int((est == "Rechazada").sum())
+    n_pend, n_tot = int((est == "Pendiente").sum()), len(maqs)
+    k1, k2, k3 = st.columns(3)
+    k1.metric("% de entrega · máquinas", f"{n_ent / n_tot * 100:.0f}%",
+              help="Máquinas entregadas sobre las que salieron a ruta en el "
+                   "período. Las que siguen en ruta cuentan en el total, igual "
+                   "que en helados: el mes en curso sube a medida que se "
+                   "confirman.")
+    k2.metric("Entregadas", f"{n_ent} de {n_tot}")
+    k3.metric("Rechazadas", n_rech,
+              f"{n_pend} en ruta" if n_pend else None, delta_color="off")
+    t = _tabla_por(maqs, "Transportista", "docs", "Transportista")
+    if not t.empty:
+        v = t.copy()
+        for col in [x for x in v.columns if x not in ("Transportista", "% de entrega")]:
+            v[col] = v[col].apply(lambda x: f"{int(x)}" if pd.notna(x) and x != "" else "")
+        v["% de entrega"] = v["% de entrega"].apply(
+            lambda x: f"{x * 100:.0f}%" if pd.notna(x) and x != "" else "")
+        st.dataframe(v, use_container_width=True, hide_index=True)
+    n_anul = int((d["Es máquina"] & d["Es anulación"]).sum())
+    st.caption(
+        "Cuenta cada documento despachado: todo flete de máquina (FL) y todo lo "
+        "de $0 que llevó un camión de máquinas, porque ese camión hace retiros "
+        "que no pasan por factura FL. Las máquinas que viajan en camión de "
+        "helados también cuentan."
+        + (f" Quedan fuera {n_anul} de la ruta «Nulas mes en curso»: son "
+           "anulaciones de logística, no entregas ni rechazos."
+           if n_anul else ""))
 
 
 def _form_metas(client, anio: int, mes: int, metas: dict):

@@ -39,6 +39,12 @@ _FMT_FECHA = "dd/mm/yyyy"
 # Orden fijo para que las columnas de estado no bailen entre meses.
 _ESTADOS = ["Entregada", "Rechazada", "Pendiente"]
 
+# Camiones de máquinas («Máquinas Kreems 1», «Máquinas Externo RM», «Maquinas
+# Temuco»): todo lo que llevan a $0 es una máquina, tenga o no factura FL.
+_CAMION_MAQUINAS = "quina"
+# «Nulas mes en curso» no es un camión: es como logística anula un documento.
+_RUTA_ANULACION = "nula"
+
 
 def preparar_entregas(ventas: pd.DataFrame, despachos: pd.DataFrame,
                       maquinas: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -92,8 +98,31 @@ def preparar_entregas(ventas: pd.DataFrame, despachos: pd.DataFrame,
         d["tipo_mov"] = tipo.reindex(claves).to_numpy()
     else:
         d["tipo_mov"] = None
-    d["Es máquina"] = d["tipo_mov"].notna()
+
+    # Una máquina es un documento con flete FL... o cualquier cosa de $0 que
+    # lleve el camión de máquinas. Ese camión hace retiros que no pasan por una
+    # factura FL: viajan con un documento de folio bajo y monto cero (23, 59, 88
+    # y 96 entre marzo y julio de 2026; el 96 dice «retirado»). Logística los
+    # cuenta como máquinas de ese camión, y solo así cuadra con su planilla:
+    # julio, Máquinas Kreems 1, 11 entregadas y 1 rechazada = 92%. Por FL solo
+    # salían 10 y 1. Se exige $0 para que, si algún día ese camión lleva helado
+    # facturado, siga contando en pesos.
+    camion = d["Transportista"].astype(str).str.contains(_CAMION_MAQUINAS,
+                                                        case=False)
+    d["Es máquina"] = d["tipo_mov"].notna() | (camion & (d["Monto facturado"] == 0))
+    # La anulación no es un resultado en terreno: no entra en el % de entrega
+    # de máquinas (mismo criterio que «Anulada por logística» en Control de
+    # Máquinas).
+    d["Es anulación"] = d["Transportista"].astype(str).str.contains(
+        _RUTA_ANULACION, case=False)
     return d
+
+
+def maquinas_despachadas(d: pd.DataFrame) -> pd.DataFrame:
+    """Los despachos de máquina que cuentan para el % de entrega en unidades."""
+    if d is None or d.empty:
+        return pd.DataFrame()
+    return d[d["Es máquina"] & ~d["Es anulación"]]
 
 
 def _tabla_por(d: pd.DataFrame, col: str, valor: str,
@@ -223,7 +252,7 @@ def libro_entregas(ventas: pd.DataFrame, despachos: pd.DataFrame,
         return buf.getvalue()
 
     prods = d[~d["Es máquina"]]
-    maqs = d[d["Es máquina"]]
+    maqs = maquinas_despachadas(d)
 
     v = ventas.copy()
     v["_nc"] = v["tipo_dcto"].astype(str).str.upper().str.contains("CREDITO", na=False)
@@ -320,8 +349,12 @@ def libro_entregas(ventas: pd.DataFrame, despachos: pd.DataFrame,
         _escribir(wb, "Máquinas por transportista", t_maq,
                   {c: _FMT_NUM for c in t_maq.columns if c != "Transportista"}
                   | {"% de entrega": _FMT_PCT},
-                  nota=("Máquinas movidas por cada transportista, en unidades. "
-                        "No se valorizan: el flete se factura a $1."),
+                  nota=("Máquinas movidas por cada transportista, en unidades "
+                        "(documentos despachados). No se valorizan: el flete se "
+                        "factura a $1. Cuenta todo documento con flete FL y todo "
+                        "lo de $0 que llevó un camión de máquinas (retiros sin "
+                        "factura FL); no cuenta la ruta «Nulas mes en curso», "
+                        "que son anulaciones de logística."),
                   total_ultima=not t_maq.empty)
 
         maqs_tipo = maqs.copy()
