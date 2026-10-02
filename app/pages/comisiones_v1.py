@@ -9,9 +9,10 @@ en 5 KPIs ponderados. Cada KPI paga proporcional al cumplimiento de su meta
   1. Cuota de venta                30%     1,50%       Fact-NC / objetivo de venta (panel gerencia)
   2. Clientes nuevos válidos       20%     1,00%       historia fact_ventas; META AUTOMÁTICA
                                                        (2% de cartera + 10% de sus dormidos)
-  3. Efectividad de cartera        20%     1,00%       clientes activos / cartera asignada
+  3. Efectividad de cartera        20%     1,00%       clientes activos / (meta % x cartera)
+                                                       meta por temporada: verano 65%, invierno 50%
   4. Amplitud de SKU               15%     0,75%       productos distintos x cliente vs meta (5)
-  5. Cobertura de ruta             15%     0,75%       visitas / agendamientos — CARGA MANUAL
+  5. Cobertura de ruta             15%     0,75%       visitas / (meta % x agendamientos) — CARGA MANUAL
                                                        del reporte de Autoventa (no está en su API)
 
 Modelo definido por gerencia (julio 2026). Cambios respecto de la versión previa:
@@ -64,6 +65,27 @@ PCT    = {k: p * TASA_MAX for k, _, p in KPIS}   # % sobre venta de cada KPI
 
 # Defaults de metas cuando no hay valor cargado ni fuente previa.
 DEFAULT_META_SKU = 5.0   # amplitud: SKUs (productos) distintos x cliente
+
+# Metas generales en % (editables en comision_v1_parametro; estos son los
+# defaults si la clave no existe). Calibradas con dato real feb–sep 2026 (nivel
+# del mejor tercio) y el estándar de la industria (cumplimiento de ruta ≥90%).
+MESES_VERANO = {10, 11, 12, 1, 2, 3}   # temporada alta del helado
+META_PARAMS = {
+    "meta_efec_verano":   (0.65, "Efectividad de cartera, verano (oct–mar)"),
+    "meta_efec_invierno": (0.50, "Efectividad de cartera, invierno (abr–sep)"),
+    "meta_ruta":          (0.90, "Cobertura de ruta (visitas ÷ agendamientos)"),
+}
+
+
+def _temporada(mes: int) -> str:
+    return "verano" if mes in MESES_VERANO else "invierno"
+
+
+def _metas_generales(params: dict, mes: int) -> dict:
+    """% de cartera que debe comprar en el mes (según temporada) y % de los
+    agendamientos que deben visitarse."""
+    g = {k: float(params.get(k, d)) for k, (d, _) in META_PARAMS.items()}
+    return {"efec": g[f"meta_efec_{_temporada(mes)}"], "ruta": g["meta_ruta"], **g}
 
 # Meta automática de Nuevos+Reactivados (override manual en meta_nuevos_react):
 PCT_META_NUEVOS = 0.02   # nuevos: 2% de la cartera (mín. 2)
@@ -161,6 +183,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     # Umbral de acceso por KPI (editable por gerencia; 0 = sin umbral).
     params = get_comision_v1_parametros(client)
     umbrales = {k: float(params.get(f"umbral_{k}", 0.0)) for k, _, _ in KPIS}
+    mg = _metas_generales(params, mes)
 
     # Cobertura de ruta: agendamientos y visitas del reporte de Autoventa
     # (carga manual mensual; el reporte no está publicado en la API).
@@ -234,11 +257,15 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
             parte_react  = max(1.0, round(PCT_META_REACT * dorm)) if dorm > 0 else 0.0
             m_nuevos = parte_nuevos + parte_react
         m_lineas = _coalesce(r, "meta_lineas", "__none__", DEFAULT_META_SKU)
-        # Cobertura de ruta: la meta son los agendamientos del reporte de
+        # Efectividad de cartera: no se exige que compre el 100% de la cartera,
+        # sino el % de la temporada (verano 65% / invierno 50% por defecto).
+        m_efec = m_cober * mg["efec"] if m_cober else None
+        # Cobertura de ruta: meta = % de los agendamientos del reporte de
         # Autoventa (varían cada mes). Sin dato cargado el KPI queda en "—".
         agend = r.get("agendamientos")
         vis   = r.get("visitas")
-        m_ruta = float(agend) if agend is not None and pd.notna(agend) and float(agend) > 0 else None
+        m_ruta = (float(agend) * mg["ruta"]
+                  if agend is not None and pd.notna(agend) and float(agend) > 0 else None)
 
         reales = {
             "cuota":     r.get("fact_nc") or 0,
@@ -248,7 +275,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
             "ruta":      float(vis) if vis is not None and pd.notna(vis) else 0,
         }
         metas_ef = {
-            "cuota": m_venta, "nuevos": m_nuevos, "cobertura": m_cober,
+            "cuota": m_venta, "nuevos": m_nuevos, "cobertura": m_efec,
             "amplitud": m_lineas, "ruta": m_ruta,
         }
 
@@ -258,7 +285,8 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
             "ny_clientes": r.get("ny_clientes") or 0, "ny_pct": r.get("ny_pct") or 0,
             "nuevos_solo": r.get("nuevos_solo") or 0, "react_solo": r.get("react_solo") or 0,
             "dormidos": dorm, "clientes_activos": r.get("clientes_activos") or 0,
-            "agendamientos": agend, "visitas": vis,
+            "agendamientos": agend, "visitas": vis, "cartera": m_cober,
+            "meta_efec_pct": mg["efec"], "meta_ruta_pct": mg["ruta"],
             # Overrides crudos (para que el editor distinga manual vs automático)
             "ov_meta_nuevos_react": r.get("meta_nuevos_react"),
             "ov_meta_cobertura": r.get("meta_cobertura"),
@@ -565,17 +593,20 @@ def render_tab(client, anio: int, mes: int):
                 los dormidos del vendedor (mín. 1). Quien deja dormir su cartera recibe
                 una meta de reactivación más alta al mes siguiente. Gerencia puede fijar
                 una meta manual que reemplaza a la automática.</li>
-            <li><strong>Efectividad de cartera</strong> = clientes que compraron / clientes
-                en cartera. La cartera sale de la <strong>cartera oficial</strong> (reporte
-                de clientes de Autoventa, campo Vend. exclusivo); si un vendedor no aparece
-                ahí, se estima con sus clientes de los últimos 3 meses. Cartera completa
-                activa (100%) = paga completo.</li>
+            <li><strong>Efectividad de cartera</strong> = clientes que compraron / meta. La
+                meta es un <strong>% de la cartera según la temporada</strong> (por defecto
+                65% en verano, oct–mar, y 50% en invierno, abr–sep): ej. cartera de 100
+                clientes en invierno → meta 50 clientes comprando. La cartera sale de la
+                <strong>cartera oficial</strong> (reporte de clientes de Autoventa, campo
+                Vend. exclusivo); si un vendedor no aparece ahí, se estima con sus clientes
+                de los últimos 3 meses.</li>
             <li><strong>Amplitud de SKU</strong> = promedio de productos (SKUs) distintos
                 que lleva cada cliente, contra una meta (ej. 5). No importa si son de la
                 misma categoría: lo que se premia es la variedad de productos colocados.
                 Excluye Máquinas y Servicios.</li>
-            <li><strong>Cobertura de ruta</strong> = visitas / agendamientos, del reporte
-                <em>Cobertura / Efectividad</em> de Autoventa. Es el <strong>único dato de
+            <li><strong>Cobertura de ruta</strong> = visitas / meta, donde la meta es un
+                <strong>% de los agendamientos</strong> (por defecto 90%, el estándar de la
+                industria) del reporte <em>Cobertura / Efectividad</em> de Autoventa. Es el <strong>único dato de
                 carga manual</strong>: ese reporte no está publicado en su API. Los
                 agendamientos los genera Autoventa según la ruta y frecuencia de cada
                 cliente (las configura el jefe de ventas), por eso cambian mes a mes. Si no
@@ -592,20 +623,30 @@ def render_tab(client, anio: int, mes: int):
     st.markdown('<div class="seccion-titulo">⚙️ Configuración</div>',
                 unsafe_allow_html=True)
 
-    ruta_pend = not pd.to_numeric(df["agendamientos"], errors="coerce").fillna(0).gt(0).any()
-    with st.expander(
-            "📍 Cobertura de ruta — carga mensual · "
-            + ("⚠️ pendiente este mes" if ruta_pend else "✅ cargada"),
-            expanded=ruta_pend):
+    n_ruta = int(pd.to_numeric(df["agendamientos"], errors="coerce").fillna(0).gt(0).sum())
+    ruta_pend = n_ruta < len(df)
+    if n_ruta == 0:
+        ruta_txt = "⚠️ pendiente este mes"
+    elif ruta_pend:
+        ruta_txt = f"⚠️ parcial: {n_ruta} de {len(df)} vendedores"
+    else:
+        ruta_txt = "✅ cargada"
+    with st.expander("📍 Cobertura de ruta — carga mensual · " + ruta_txt,
+                     expanded=ruta_pend):
         _editor_ruta(client, df, anio, mes)
 
     umb = {k: float(df[f"{k}_umbral"].iloc[0] or 0) for k, _, _ in KPIS}
     if len(set(umb.values())) == 1:
         u = next(iter(umb.values()))
-        umb_txt = "sin piso" if u <= 0 else f"{u*100:.0f}% en los 5 indicadores"
+        umb_txt = "sin piso" if u <= 0 else f"piso {u*100:.0f}%"
     else:
-        umb_txt = "distinto por indicador"
-    with st.expander(f"🎯 Piso de pago · hoy: {umb_txt}", expanded=False):
+        umb_txt = "piso distinto por indicador"
+    efec, ruta = float(df["meta_efec_pct"].iloc[0]), float(df["meta_ruta_pct"].iloc[0])
+    with st.expander(
+            f"🎯 Metas generales y piso · efectividad {efec*100:.0f}% ({_temporada(mes)}) · "
+            f"ruta {ruta*100:.0f}% · {umb_txt}", expanded=False):
+        _editor_metas_generales(client, mes)
+        st.markdown("<div style='height:.6rem'></div>", unsafe_allow_html=True)
         _editor_umbrales(client, df)
 
     ov_cols = ["ov_meta_nuevos_react", "ov_meta_cobertura", "ov_meta_lineas"]
@@ -671,6 +712,44 @@ def _editor_ruta(client, df: pd.DataFrame, anio: int, mes: int):
                 })
             upsert_comision_ruta(client, regs)
             st.success("✅ Cobertura de ruta guardada.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error al guardar: {e}")
+
+
+def _editor_metas_generales(client, mes: int):
+    """Metas en % que aplican a todos los vendedores: efectividad de cartera por
+    temporada y cumplimiento de ruta (visitas ÷ agendamientos)."""
+    params = get_comision_v1_parametros(client)
+    g = _metas_generales(params, mes)
+    st.markdown("**Metas generales** (iguales para todos los vendedores)")
+    st.caption(
+        "**Efectividad de cartera:** qué % de su cartera debe comprar en el mes. "
+        "Cambia con la temporada porque el helado se mueve ~20 puntos entre verano e "
+        "invierno. **Cobertura de ruta:** qué % de las visitas agendadas debe hacer "
+        "(estándar de la industria: sobre 90%). "
+        f"Este mes es **{_temporada(mes)}**.")
+    with st.form("form_metas_generales", clear_on_submit=False):
+        c1, c2, c3 = st.columns(3)
+        v = c1.number_input("Efectividad verano, oct–mar (%)", min_value=5, max_value=100,
+                            step=5, value=int(round(g["meta_efec_verano"] * 100)),
+                            key="mg_verano")
+        i = c2.number_input("Efectividad invierno, abr–sep (%)", min_value=5, max_value=100,
+                            step=5, value=int(round(g["meta_efec_invierno"] * 100)),
+                            key="mg_invierno")
+        r = c3.number_input("Cobertura de ruta (%)", min_value=5, max_value=100,
+                            step=5, value=int(round(g["meta_ruta"] * 100)),
+                            key="mg_ruta")
+        guardar = st.form_submit_button("💾 Guardar metas generales", type="primary",
+                                        use_container_width=True)
+    if guardar:
+        try:
+            upsert_comision_v1_parametros(client, {
+                "meta_efec_verano": round(v / 100, 4),
+                "meta_efec_invierno": round(i / 100, 4),
+                "meta_ruta": round(r / 100, 4),
+            })
+            st.success("✅ Metas generales guardadas.")
             st.rerun()
         except Exception as e:
             st.error(f"Error al guardar: {e}")
@@ -1027,8 +1106,13 @@ def _celda_kpi(r, k) -> str:
         detalle = f"{fmt_clp(real)} / {fmt_clp(meta)}"
     elif k == "amplitud":
         detalle = f"{(real or 0):.1f} / {fmt_num(meta)} SKUs x cliente"
+    elif k == "cobertura":
+        detalle = (f"{fmt_num(real)} compraron / meta {fmt_num(meta)} "
+                   f"({fmt_pct(r.get('meta_efec_pct'))} de {fmt_num(r.get('cartera'))} en cartera)"
+                   if meta else "sin cartera")
     elif k == "ruta":
-        detalle = (f"{fmt_num(real)} visitas / {fmt_num(meta)} agendamientos"
+        detalle = (f"{fmt_num(real)} visitas / meta {fmt_num(meta)} "
+                   f"({fmt_pct(r.get('meta_ruta_pct'))} de {fmt_num(r.get('agendamientos'))} agendamientos)"
                    if meta else "sin datos de Autoventa cargados")
     else:
         detalle = f"{fmt_num(real)} / {fmt_num(meta)}"
@@ -1044,9 +1128,9 @@ def _tabla(df: pd.DataFrame):
         "<th title='Venta neta de NC del mes'>Venta Real</th>"
         "<th title='Fact-NC / meta de venta'>Cuota</th>"
         "<th title='Clientes de 1ª compra + reactivados / meta automática (2% cartera + 10% dormidos)'>Nuevos+React</th>"
-        "<th title='Clientes que compraron / clientes en cartera'>Efec. cartera</th>"
+        "<th title='Clientes que compraron / meta (% de la cartera según temporada)'>Efec. cartera</th>"
         "<th title='Promedio de SKUs (productos) distintos por cliente / meta'>Amplitud SKU</th>"
-        "<th title='Visitas / agendamientos (reporte Cobertura-Efectividad de Autoventa)'>Cob. ruta</th>"
+        "<th title='Visitas / meta (% de los agendamientos del reporte de Autoventa)'>Cob. ruta</th>"
         "<th title='Suma de los 5 KPIs (tope 5%)'>Tasa Efec.</th>"
         "<th title='Tasa efectiva × venta real'>Comisión $</th>"
     )
@@ -1120,11 +1204,12 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
             value=int(_safe_num(fila.get("ov_meta_nuevos_react"))),
             help="0 = automática: 2% de su cartera + 10% de sus dormidos.")
         m_cober = c2.number_input(
-            f"Cartera, n° clientes (auto: {fmt_num(fila.get('cobertura_meta'))})",
+            f"Cartera, n° clientes (auto: {fmt_num(fila.get('cartera'))})",
             min_value=0, step=1,
             value=int(_safe_num(fila.get("ov_meta_cobertura"))),
             help="0 = cartera oficial de Autoventa. Útil para quien no tiene "
-                 "cartera asignada.")
+                 "cartera asignada. La meta de efectividad es el % de la "
+                 "temporada sobre esta cartera.")
         m_lineas = c3.number_input(
             f"SKUs por cliente (auto: {DEFAULT_META_SKU:.0f})",
             min_value=0.0, step=0.5,
