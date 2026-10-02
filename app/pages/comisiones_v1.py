@@ -657,6 +657,38 @@ def render_tab(client, anio: int, mes: int):
             expanded=False):
         _editor_metas(client, df, anio, mes)
 
+    with st.expander("📊 Excel simulador para gerencia — iterar pisos, pesos y metas",
+                     expanded=False):
+        _export_simulador(client, df, anio, mes)
+
+
+def _export_simulador(client, df: pd.DataFrame, anio: int, mes: int):
+    """Libro con una fila por vendedor y la comisión como fórmula de sus insumos,
+    para que gerencia simule cambios sin tocar el sistema."""
+    st.caption(
+        "Una fila por vendedor con **todos los insumos del mes** y la comisión como "
+        "fórmula. En la hoja **Parámetros** cambias pesos, pisos, tope y metas generales; "
+        "en el **Simulador**, la venta, cartera o visitas de cada vendedor. La columna "
+        "*Diferencia* muestra cuánto se aleja de lo que paga hoy el sistema. Incluye una "
+        "hoja **Guía**. No modifica el sistema.")
+    if not st.button("Generar Excel simulador", key="btn_sim_v1_xlsx",
+                     use_container_width=True):
+        return
+    try:
+        from app.export_comisiones_v1_sim import comisiones_v1_simulador_xlsx
+        data = comisiones_v1_simulador_xlsx(
+            df, anio, mes, get_comision_v1_parametros(client),
+            {k: p for k, _l, p in KPIS})
+    except Exception as e:
+        st.error(f"No se pudo generar el Excel simulador: {e}")
+        return
+    st.download_button(
+        "⬇️ Descargar Excel simulador", data=data,
+        file_name=f"comisiones_propuesta_simulador_{anio}_{mes:02d}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True, key="dl_sim_v1_xlsx",
+    )
+
 
 def _editor_ruta(client, df: pd.DataFrame, anio: int, mes: int):
     """Carga manual de agendamientos y visitas del reporte “Cobertura /
