@@ -139,7 +139,14 @@ El detector de archivos reconoce `AAAA_MM`, `AAAA-MM` y también la palabra del 
 (compatibilidad con los archivos antiguos). Al subir desde la webapp, los archivos
 se guardan automáticamente con este nombre estándar.
 
-## 7. Subir Excel desde la webapp ✅ IMPLEMENTADO
+## 7. Día 1 de cada mes: cartera, rutas y metas de comisiones
+
+Desde octubre 2026, el **primer día hábil de cada mes** se recarga la cartera de
+clientes de Autoventa (vendedor y ruta de cada cliente) y se fijan las metas del
+mes. Es la foto contra la que se miden la efectividad de cartera y la cobertura de
+ruta. Paso a paso en **[rutina_dia_1_comisiones.md](rutina_dia_1_comisiones.md)**.
+
+## 8. Subir Excel desde la webapp ✅ IMPLEMENTADO
 
 Apartado **"Carga de archivos"** (solo rol gerencia/admin) en la app:
 `app/pages/carga.py`. Subes los exports del mes, eliges el período y se cargan a

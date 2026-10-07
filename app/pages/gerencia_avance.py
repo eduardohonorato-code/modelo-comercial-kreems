@@ -221,6 +221,16 @@ def _metas(client, anio: int, mes: int, df: pd.DataFrame, base: pd.DataFrame):
 
     st.markdown('<div class="seccion-titulo">🎯 Metas del mes</div>',
                 unsafe_allow_html=True)
+    st.markdown(
+        '<div class="nota-embudo">📅 <strong>Día 1 de cada mes:</strong> exportar de '
+        'Autoventa <em>clientes.csv</em> y <em>direcciones_despacho.csv</em> y recargar la '
+        'cartera (<code>python -m etl.cargar_cartera "&lt;clientes.csv&gt;" '
+        '"&lt;direcciones.csv&gt;" --reemplazar</code>). Esa foto de clientes, vendedores y '
+        'rutas es la base de la efectividad de cartera y de las visitas programadas del mes. '
+        'Hacerlo solo el día 1: recargar a mitad de mes cambia el cálculo del mes en curso y '
+        'de los meses pasados que se vuelvan a abrir. Después, fijar las metas aquí abajo. '
+        'Guía completa: <code>docs/rutina_dia_1_comisiones.md</code>.</div>',
+        unsafe_allow_html=True)
     tab_v, tab_g, tab_p = st.tabs(["Por vendedor", "Generales (%, SKU)", "Piso de pago"])
 
     with tab_v:
