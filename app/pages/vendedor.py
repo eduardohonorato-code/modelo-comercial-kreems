@@ -9,7 +9,8 @@ from app.data import get_resumen, get_calendario, get_pedidos_resumen
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def _ficha_png(vendedor_id: int, corte, usuario: str, firma: str, _r, _ctx) -> bytes:
+def _ficha_png(vendedor_id: int, corte, usuario: str, firma: str, version: str,
+               _r, _ctx) -> bytes:
     from app.export_avance import ficha_png
     return ficha_png(_r, _ctx)
 
@@ -24,7 +25,8 @@ def _seccion_mi_avance(client, anio: int, mes: int, vendedor_id: int):
     corte = corte_por_defecto(anio, mes)
     if corte is None:
         return
-    from app.pages.gerencia_avance import avance_cacheado, firma_metas, _usuario
+    from app.pages.gerencia_avance import (avance_cacheado, firma_metas, _usuario,
+                                           _version_calculo)
     from app.export_avance import nombre_archivo
     st.markdown('<div class="seccion-titulo">🎯 Mi avance de comisiones</div>',
                 unsafe_allow_html=True)
@@ -40,7 +42,7 @@ def _seccion_mi_avance(client, anio: int, mes: int, vendedor_id: int):
         return
     r = fila.iloc[0]
     with st.spinner("Armando tu ficha…"):
-        png = _ficha_png(vendedor_id, corte, _usuario(), firma, r, ctx)
+        png = _ficha_png(vendedor_id, corte, _usuario(), firma, _version_calculo(), r, ctx)
     st.image(png, use_container_width=True)
     st.download_button("⬇️ Descargar mi ficha (PNG)", png,
                        nombre_archivo(r["vendedor"], ctx), "image/png",

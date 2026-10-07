@@ -40,11 +40,30 @@ def firma_metas(client, anio: int, mes: int) -> str:
         return ""
 
 
+def _version_calculo() -> str:
+    """Huella del código del cálculo y de las imágenes. Va en la llave del caché:
+    Streamlit solo invalida si cambia el cuerpo de la función cacheada, no los
+    módulos que llama, y tras un deploy entregaba resultados viejos (KeyError
+    'comision_hoy', 2026-10-07)."""
+    import hashlib
+    import inspect
+    from app import avance_comisiones, export_avance
+    from app.pages import comisiones_v1
+    fuente = "".join(inspect.getsource(m) for m in
+                     (avance_comisiones, export_avance, comisiones_v1))
+    return hashlib.md5(fuente.encode("utf-8")).hexdigest()
+
+
 @st.cache_data(ttl=600, show_spinner="Calculando el avance del mes…")
-def avance_cacheado(_client, anio: int, mes: int, corte: date, usuario: str, firma: str):
+def _avance_cache(_client, anio: int, mes: int, corte: date, usuario: str, firma: str,
+                  version: str):
     """`usuario` va en la llave a propósito: con RLS cada usuario ve datos
     distintos (un vendedor solo los suyos) y el caché no se puede compartir."""
     return avance_mes(_client, anio, mes, corte)
+
+
+def avance_cacheado(client, anio: int, mes: int, corte: date, usuario: str, firma: str):
+    return _avance_cache(client, anio, mes, corte, usuario, firma, _version_calculo())
 
 
 def _usuario() -> str:
