@@ -193,7 +193,7 @@ def fuentes_ruta(df: pd.DataFrame) -> str:
 
 # ── Tablero del equipo ──────────────────────────────────────────────────────
 _GRUPOS_TABLERO = [
-    ("CUOTA DE VENTA", "#1E5FA5", 1, 4),
+    ("CUOTA DE VENTA (FACT-NC)", "#1E5FA5", 1, 4),
     ("NUEVOS (MÁQ.)", "#1A7F4B", 5, 6),
     ("COBERTURA DE RUTA", "#C2185B", 7, 9),
     ("EFECTIVIDAD DE CARTERA", "#6A4C93", 10, 12),
@@ -205,12 +205,12 @@ _GRUPOS_TABLERO = [
 # si, al ritmo actual, ese indicador cobra al cierre (verde/amarillo/rojo).
 _COLS_TABLERO = [
     ("vend", "Vendedor"),
-    ("c_v", "Venta"), ("c_m", "Meta"), ("c_vp", "Venta proy."), ("c_p", "% proy."),
+    ("c_v", "Fact-NC"), ("c_m", "Meta"), ("c_vp", "Fact-NC proy."), ("c_p", "% proy."),
     ("n_l", "Llevas"), ("n_m", "Meta"),
-    ("r_l", "Visitas / Progr."), ("r_h", "Hoy"), ("r_m", "Meta"),
-    ("e_l", "Compraron / Cartera"), ("e_h", "Hoy"), ("e_m", "Meta"),
+    ("r_l", "Visitas / Progr."), ("r_h", "Llevas"), ("r_m", "Meta"),
+    ("e_l", "Compraron / Cartera"), ("e_h", "Llevas"), ("e_m", "Meta"),
     ("s_l", "SKU/cliente"), ("s_m", "Meta"),
-    ("t_hoy", "Tasa hoy"), ("com_hoy", "Hoy"), ("t_proy", "Tasa proy."), ("com", "Proyectada"),
+    ("t_hoy", "Tasa llevas"), ("com_hoy", "Llevas"), ("t_proy", "Tasa proy."), ("com", "Proyectada"),
 ]
 
 
@@ -266,9 +266,9 @@ def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int) -> bytes:
            if r0.get("nuevos_modo") == "maquinas" else "1ª compra + reactivados")
         + f" · ruta = {pct(r0['ruta_meta'])} de las visitas programadas · efectividad = "
         f"{pct(r0['cobertura_meta'])} de la cartera · amplitud = SKU distintos por cliente.\n"
-        "Hoy = lo que lleva a la fecha. El color dice si, al ritmo de hoy, el indicador cobra al cierre:  Verde ≥ 100%  ·  "
+        "Llevas = lo acumulado a la fecha de corte. El color dice si, a este ritmo, el indicador cobra al cierre:  Verde ≥ 100%  ·  "
         "Amarillo = cobra parcial (desde el piso)  ·  Rojo = bajo el piso, no cobra ese "
-        "indicador.\nComisión hoy = si el mes cerrara hoy · Proyectada = al ritmo de hoy "
+        "indicador.\nComisión que llevas = si el mes cerrara en la fecha de corte · Proyectada = a este ritmo "
         "hasta fin de mes.  " + fuentes_ruta(df))
     return tabla_png(disp, f"AVANCE DE COMISIONES · {MESES[mes].upper()} {anio}",
                      subtitulo(ctx), color_celdas=texto, fondo_celdas=fondo,
@@ -320,7 +320,7 @@ def ficha_png(r, ctx: dict, dpi: int = 220) -> bytes:
     # ── Tarjetas ────────────────────────────────────────────────────────────
     from app.pages.comisiones_v1 import TASA_MAX
     tarjetas = [
-        ("COMISIÓN HOY", clp(r.get("comision_hoy")),
+        ("COMISIÓN QUE LLEVAS", clp(r.get("comision_hoy")),
          f"si el mes cerrara hoy · tasa {pct(r.get('tasa_hoy'), 2)}", "#E9ECF5", VINO, GRIS),
         ("COMISIÓN PROYECTADA", clp(r["comision_proy"]), "si sigues al ritmo de hoy",
          VINO, "white", "white"),

@@ -154,17 +154,17 @@ def render_avance(client, anio: int, mes: int):
         <div class="kpi-sub">tasa {fmt_pct(d['comision_proy'].sum() / vp if vp else None)} · al ritmo de hoy</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Comisión hoy</div>
+        <div class="kpi-label">Comisión que llevas</div>
         <div class="kpi-value">{fmt_clp(d['comision_hoy'].sum())}</div>
         <div class="kpi-sub">tasa {fmt_pct(d['comision_hoy'].sum() / d['cuota_llevas'].sum() if d['cuota_llevas'].sum() else None)} · si el mes cerrara hoy</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Venta a la fecha</div>
+        <div class="kpi-label">Fact-NC que llevas</div>
         <div class="kpi-value">{fmt_clp(d['cuota_llevas'].sum())}</div>
         <div class="kpi-sub">meta: {fmt_clp(d['cuota_meta'].sum(min_count=1))}</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Venta proyectada</div>
+        <div class="kpi-label">Fact-NC proyectada</div>
         <div class="kpi-value">{fmt_clp(vp)}</div>
         <div class="kpi-sub">{fmt_pct(vp / d['cuota_meta'].sum() if d['cuota_meta'].sum() else None)} de la meta</div>
       </div>
@@ -172,9 +172,9 @@ def render_avance(client, anio: int, mes: int):
     """, unsafe_allow_html=True)
 
     st.markdown(_tabla_html(d), unsafe_allow_html=True)
-    st.caption("**Cuota:** % proy. = venta proyectada ÷ meta. **Resto:** lo que lleva hoy; "
+    st.caption("**Cuota:** % proy. = Fact-NC proyectada ÷ meta. **Resto (Llevas):** lo acumulado; "
                "el color dice si, al ritmo actual, ese indicador cobra al cierre (verde ≥ 100% "
-               "· amarillo = cobra parcial desde el piso · rojo = no cobra). **Comisión hoy** = "
+               "· amarillo = cobra parcial desde el piso · rojo = no cobra). **Comisión que llevas** = "
                "si el mes cerrara hoy · **Proyectada** = al ritmo de hoy hasta fin de mes. "
                "Clientes nuevos = máquinas nuevas (FL-4) facturadas. " + fuentes_ruta(d))
 
