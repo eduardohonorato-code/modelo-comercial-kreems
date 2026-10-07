@@ -298,6 +298,17 @@ def calcular_avance(client, anio: int, mes: int, corte: date,
             tasa += pago
         o["tasa_proy"] = tasa
         o["venta_proy"] = venta_proy
+        # Comisión HOY: si el mes cerrara hoy, con lo que lleva cada indicador
+        # contra la meta del mes completo y la venta a la fecha.
+        hoy_cumpl = {
+            "cuota": (venta / meta_v) if meta_v else None,
+            "nuevos": (nv / meta_n) if meta_n else None,
+            "ruta": (pct_r / meta_r) if (pct_r is not None and meta_r) else None,
+            "cobertura": (pct_e / meta_e) if (pct_e is not None and meta_e) else None,
+            "amplitud": o.get("amplitud_cumpl"),
+        }
+        o["tasa_hoy"] = sum(_paga(hoy_cumpl[k], umb[k], PCT[k]) for k in PCT)
+        o["comision_hoy"] = o["tasa_hoy"] * venta
         o["comision_proy"] = tasa * venta_proy
         o["si_todo"] = TASA_MAX * max(meta_v or 0.0, venta_proy)
         o["dejando"] = max(0.0, o["si_todo"] - o["comision_proy"])

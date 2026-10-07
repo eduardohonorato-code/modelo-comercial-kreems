@@ -132,32 +132,32 @@ def render_avance(client, anio: int, mes: int):
       <div class="kpi-card destacado">
         <div class="kpi-label">Comisión proyectada del equipo</div>
         <div class="kpi-value">{fmt_clp(d['comision_proy'].sum())}</div>
-        <div class="kpi-sub">al ritmo de hoy</div>
+        <div class="kpi-sub">al ritmo de hoy hasta fin de mes</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Comisión hoy</div>
+        <div class="kpi-value">{fmt_clp(d['comision_hoy'].sum())}</div>
+        <div class="kpi-sub">si el mes cerrara hoy</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Venta a la fecha</div>
+        <div class="kpi-value">{fmt_clp(d['cuota_llevas'].sum())}</div>
+        <div class="kpi-sub">meta: {fmt_clp(d['cuota_meta'].sum(min_count=1))}</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Venta proyectada</div>
         <div class="kpi-value">{fmt_clp(vp)}</div>
-        <div class="kpi-sub">meta: {fmt_clp(d['cuota_meta'].sum(min_count=1))}</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Tasa proyectada</div>
-        <div class="kpi-value">{fmt_pct(d['comision_proy'].sum() / vp if vp else None)}</div>
-        <div class="kpi-sub">de un máximo de 5,00%</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Se está dejando en la mesa</div>
-        <div class="kpi-value">{fmt_clp(d['dejando'].sum())}</div>
-        <div class="kpi-sub">si todos llegaran al 100%</div>
+        <div class="kpi-sub">{fmt_pct(vp / d['cuota_meta'].sum() if d['cuota_meta'].sum() else None)} de la meta</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown(_tabla_html(d), unsafe_allow_html=True)
-    st.caption("**Hoy** = lo que lleva a la fecha · **Proy.** = cumplimiento proyectado al "
-               "cierre contra la meta (es lo que define si cobra) · **SKU/cliente** es un "
-               "promedio: se compara directo con la meta. Verde ≥ 100% · Amarillo = cobra "
-               "parcial (desde el piso) · Rojo = bajo el piso, no cobra. Clientes nuevos = "
-               "máquinas nuevas (FL-4) facturadas. " + fuentes_ruta(d))
+    st.caption("**Cuota:** % proy. = venta proyectada ÷ meta. **Resto:** lo que lleva hoy; "
+               "el color dice si, al ritmo actual, ese indicador cobra al cierre (verde ≥ 100% "
+               "· amarillo = cobra parcial desde el piso · rojo = no cobra). **Comisión hoy** = "
+               "si el mes cerrara hoy · **Proyectada** = al ritmo de hoy hasta fin de mes. "
+               "Clientes nuevos = máquinas nuevas (FL-4) facturadas. " + fuentes_ruta(d))
 
     clave = f"{anio}_{mes:02d}_{corte.isoformat()}"
     if st.button("🖼️ Generar tablero del equipo en PNG", key=f"btn_tab_{clave}"):
