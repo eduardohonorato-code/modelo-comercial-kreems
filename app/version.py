@@ -7,4 +7,4 @@ cambio todavía no llegó". Con esto basta mirar el pie del login.
 
 Al hacer un cambio que el usuario deba ver, subir VERSION en el mismo commit.
 """
-VERSION = "2026-10-07 · avance de objetivos con logo"
+VERSION = "2026-10-07 · avance de objetivos: texto centrado y marcos finos"

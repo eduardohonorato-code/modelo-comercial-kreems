@@ -207,7 +207,7 @@ _COLS_TABLERO = [
     ("vend", "Vendedor"),
     ("c_v", "Fact-NC"), ("c_m", "Meta"), ("c_vp", "Fact-NC proy."), ("c_p", "% proy."),
     ("n_l", "Máquinas"), ("n_h", "Llevas"), ("n_m", "Meta"),
-    ("r_l", "Visitas / Progr."), ("r_h", "Llevas"), ("r_m", "Meta"),
+    ("r_l", "Visitas / Programadas"), ("r_h", "Llevas"), ("r_m", "Meta"),
     ("e_l", "Compraron / Cartera"), ("e_h", "Llevas"), ("e_m", "Meta"),
     ("s_l", "SKU/cliente"), ("s_m", "Meta"),
     ("t_hoy", "Tasa llevas"), ("com_hoy", "Llevas"), ("t_proy", "Tasa proy."), ("com", "Proyectada"),
@@ -276,7 +276,7 @@ def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int) -> bytes:
                      subtitulo(ctx), color_celdas=texto, fondo_celdas=fondo,
                      resaltar_ultima=True, col_labels=_labels_tablero(df),
                      grupos=_GRUPOS_TABLERO, notas=notas, dpi=220, marcos=True,
-                     logo=True)
+                     logo=True, centrado=True)
 
 
 # ── Ficha del vendedor ──────────────────────────────────────────────────────

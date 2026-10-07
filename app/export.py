@@ -112,7 +112,8 @@ def to_xlsx_multi(hojas: dict) -> bytes:
 def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = None,
               resaltar_ultima: bool = False, col_labels=None, grupos=None,
               dpi: int = 200, fondo_celdas: dict | None = None,
-              notas: str = "", marcos: bool = False, logo: bool = False) -> bytes:
+              notas: str = "", marcos: bool = False, logo: bool = False,
+              centrado: bool = False) -> bytes:
     """
     Render de un DataFrame de STRINGS ya formateados a PNG.
 
@@ -196,7 +197,8 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     band_frac = (banda_in / ax_h_in) if grupos else 0.0
 
     tbl = ax.table(cellText=df.values.tolist(), colLabels=labels,
-                   cellLoc="right", bbox=[0, 0, 1, 1 - band_frac])
+                   cellLoc="center" if centrado else "right",
+                   bbox=[0, 0, 1, 1 - band_frac])
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(9)
 
@@ -225,7 +227,7 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
             if (i, col) in color_celdas:
                 txt.set_color(color_celdas[(i, col)])
                 txt.set_fontweight("bold")
-        if c == 0:
+        if c == 0 and not centrado:
             txt.set_ha("left")
 
     # Banda de grupos sobre los encabezados
@@ -250,7 +252,7 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
             if marcos:
                 ax.add_patch(Rectangle((gx0 + 0.0008, 0.0015), (gx1 - gx0) - 0.0016,
                                        y0 - 0.003, facecolor="none", edgecolor=color_g,
-                                       linewidth=2.4, clip_on=False, zorder=5))
+                                       linewidth=1.5, clip_on=False, zorder=5))
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight",
