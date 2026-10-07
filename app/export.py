@@ -112,7 +112,7 @@ def to_xlsx_multi(hojas: dict) -> bytes:
 def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = None,
               resaltar_ultima: bool = False, col_labels=None, grupos=None,
               dpi: int = 200, fondo_celdas: dict | None = None,
-              notas: str = "", marcos: bool = False) -> bytes:
+              notas: str = "", marcos: bool = False, logo: bool = False) -> bytes:
     """
     Render de un DataFrame de STRINGS ya formateados a PNG.
 
@@ -162,6 +162,19 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     y_top = 1 - _f(PAD)
     fig.text(L, y_top, titulo, fontsize=20, fontweight="bold", color=NAVY,
              va="top", ha="left")
+    if logo:   # logo Kreems chico, arriba a la derecha
+        try:
+            import matplotlib.image as mpimg
+            from app.styles import LOGO_PATH
+            img = mpimg.imread(str(LOGO_PATH))
+            alto_in = 0.5
+            ancho_in = alto_in * img.shape[1] / img.shape[0]
+            ax_logo = fig.add_axes([R - ancho_in / fig_w, y_top - _f(alto_in),
+                                    ancho_in / fig_w, _f(alto_in)])
+            ax_logo.imshow(img)
+            ax_logo.axis("off")
+        except Exception:
+            pass
     y_after = y_top - _f(TITLE_H)
     if subtitulo:
         fig.text(L, y_after - _f(GAP), subtitulo, fontsize=10.5, color="#1A1A1A",

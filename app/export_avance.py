@@ -272,10 +272,11 @@ def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int) -> bytes:
         "Amarillo = cobra parcial (desde el piso)  ·  Rojo = bajo el piso, no cobra ese "
         "indicador.\nComisión que llevas = si el mes cerrara en la fecha de corte · Proyectada = a este ritmo "
         "hasta fin de mes.  " + fuentes_ruta(df))
-    return tabla_png(disp, f"AVANCE DE COMISIONES · {MESES[mes].upper()} {anio}",
+    return tabla_png(disp, f"AVANCE DE OBJETIVOS · {MESES[mes].upper()} {anio}",
                      subtitulo(ctx), color_celdas=texto, fondo_celdas=fondo,
                      resaltar_ultima=True, col_labels=_labels_tablero(df),
-                     grupos=_GRUPOS_TABLERO, notas=notas, dpi=220, marcos=True)
+                     grupos=_GRUPOS_TABLERO, notas=notas, dpi=220, marcos=True,
+                     logo=True)
 
 
 # ── Ficha del vendedor ──────────────────────────────────────────────────────

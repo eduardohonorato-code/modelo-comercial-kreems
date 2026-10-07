@@ -35,7 +35,7 @@ def render(client, anio: int, mes: int):
     # Desde oct-2026 las comisiones se pagan con el modelo nuevo (5 indicadores):
     # su avance es la vista principal. La de facturación/pedidos/máquinas se carga
     # SOLO si se elige (su vista en Postgres tarda ~9 s).
-    vista = st.radio("Vista", ["🎯 Avance de comisiones",
+    vista = st.radio("Vista", ["🎯 Avance de objetivos",
                               "📋 Facturación, pedidos y máquinas"],
                      horizontal=True, label_visibility="collapsed",
                      key="vista_gerencia")
