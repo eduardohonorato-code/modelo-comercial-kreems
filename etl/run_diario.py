@@ -1,5 +1,5 @@
 """
-Carga diaria automática — Obuma (ventas+máquinas) + Autoventa (pedidos) vía API.
+Carga diaria automática — Obuma (ventas+máquinas) + Autoventa (pedidos y visitas) vía API.
 
 Pensado para el Programador de tareas de Windows: sin argumentos, calcula solo
 qué períodos cargar y deja registro en etl_auto.log.
@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 from etl.run_obuma_api import run as run_obuma          # noqa: E402
 from etl.run_autoventa_api import run as run_autoventa  # noqa: E402
 from etl.loaders.obuma_api import ObumaCuotaError       # noqa: E402
+from etl.run_visitas_api import run as run_visitas      # noqa: E402
 
 
 def _periodos(hoy: date) -> list[tuple]:
@@ -64,7 +65,8 @@ def main() -> int:
     errores = 0
     obuma_sin_cuota = False
     for periodo in periodos:
-        for nombre, fn in [("Obuma", run_obuma), ("Autoventa", run_autoventa)]:
+        for nombre, fn in [("Obuma", run_obuma), ("Autoventa", run_autoventa),
+                           ("Visitas", run_visitas)]:
             # Si Obuma ya bloqueó por cuota diaria, insistir con el siguiente
             # período solo gasta más consultas y vuelve a fallar igual.
             if nombre == "Obuma" and obuma_sin_cuota:

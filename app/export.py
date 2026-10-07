@@ -111,7 +111,8 @@ def to_xlsx_multi(hojas: dict) -> bytes:
 
 def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = None,
               resaltar_ultima: bool = False, col_labels=None, grupos=None,
-              dpi: int = 200) -> bytes:
+              dpi: int = 200, fondo_celdas: dict | None = None,
+              notas: str = "") -> bytes:
     """
     Render de un DataFrame de STRINGS ya formateados a PNG.
 
@@ -123,6 +124,9 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     - `grupos`: lista opcional de (titulo, color_hex, col_ini, col_fin) — dibuja una
       banda de grupos coloreada SOBRE los encabezados (col_ini/col_fin inclusivos,
       0-based). Las columnas fuera de todo grupo quedan sin banda.
+    - `fondo_celdas`: dict {(fila_idx, nombre_col): color_hex} para el FONDO de la
+      celda (semáforos con relleno). Se combina con `color_celdas` para el texto.
+    - `notas`: texto chico al pie de la tabla (leyenda de colores, fuentes).
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -130,6 +134,7 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     from matplotlib.patches import Rectangle
 
     color_celdas = color_celdas or {}
+    fondo_celdas = fondo_celdas or {}
     df = df.astype(str)
     n_rows, n_cols = df.shape
     labels = list(col_labels) if col_labels else [str(c) for c in df.columns]
@@ -144,7 +149,8 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     PAD, TITLE_H, GAP = 0.12, 0.46, 0.16
     SUB_H = 0.34 if subtitulo else 0.0
     header_in = PAD + TITLE_H + (GAP + SUB_H if subtitulo else 0.14) + 0.05
-    fig_h = (n_rows + 1) * 0.34 + banda_in + header_in
+    notas_in = 0.24 * (notas.count(chr(10)) + 1) + 0.12 if notas else 0.0
+    fig_h = (n_rows + 1) * 0.34 + banda_in + header_in + notas_in
 
     fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi, facecolor="white")
 
@@ -162,12 +168,16 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     else:
         table_top = y_after - _f(0.14)
 
-    ax = fig.add_axes([L, 0.008, R - L, table_top - 0.008])
+    y_bot = 0.008 + (_f(notas_in) if notas else 0.0)
+    if notas:
+        fig.text(L, _f(notas_in) - _f(0.06), notas, fontsize=8.5, color="#5A6072",
+                 va="top", ha="left", linespacing=1.5)
+    ax = fig.add_axes([L, y_bot, R - L, table_top - y_bot])
     ax.axis("off")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
 
-    ax_h_in = (table_top - 0.008) * fig_h
+    ax_h_in = (table_top - y_bot) * fig_h
     band_frac = (banda_in / ax_h_in) if grupos else 0.0
 
     tbl = ax.table(cellText=df.values.tolist(), colLabels=labels,
@@ -195,6 +205,8 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
             else:
                 cell.set_facecolor(ZEBRA if (r % 2 == 0) else "white")
             col = df.columns[c]
+            if (i, col) in fondo_celdas:
+                cell.set_facecolor(fondo_celdas[(i, col)])
             if (i, col) in color_celdas:
                 txt.set_color(color_celdas[(i, col)])
                 txt.set_fontweight("bold")

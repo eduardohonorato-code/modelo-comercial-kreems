@@ -173,7 +173,7 @@ def _hoja_parametros(wb, mes: int, params: dict, pesos: dict):
          nota="La que corresponde a la temporada del mes.")
     fila(R_RUTA, "Cobertura de ruta", float(params.get("meta_ruta", 0.90)), PC0,
          nota="% de los agendamientos que debe visitar (industria: sobre 90%).")
-    fila(R_SKU, "SKUs distintos por cliente", 5.0, "0.0",
+    fila(R_SKU, "SKUs distintos por cliente", float(params.get("meta_sku", 5.0)), "0.0",
          nota="Meta general; un vendedor con meta manual la trae fija en el Simulador.")
     fila(R_NV_PCT, "Clientes nuevos · % de la cartera", 0.02, PC1,
          nota="Meta automática de nuevos = este % de su cartera…")

@@ -64,226 +64,236 @@ def render(client, anio: int, mes: int):
     # a Fact-NC (hay ventas sin pedido en Autoventa, atribución y timing distintos).
     df["pedidos_facturado"] = df["pedidos_neto"] - df["no_facturado_monto"]
 
-    # ── KPIs globales ────────────────────────────────────────────────────────
-    total_obj   = df["obj_venta"].sum()
-    total_fnc   = df["fact_nc"].sum()
-    total_fact  = df["monto_facturas"].sum()
-    total_nc    = df["monto_notas_credito"].sum()
-    total_docs  = df["n_documentos"].sum()
-    total_mgst  = df["maquinas_gestionadas"].sum()
-    total_menv  = df["maquinas_entregadas"].sum()
-    total_ped   = df["pedidos_neto"].sum() if "pedidos_neto" in df else 0
-    total_nofac = df["no_facturado_monto"].sum() if "no_facturado_monto" in df else 0
-    total_proy  = df["proyeccion_cierre"].sum() if "proyeccion_cierre" in df else 0
-    pct_global  = total_fnc / total_obj if total_obj else None
-    pct_proy    = total_proy / total_obj if total_obj else None
+    # Desde oct-2026 las comisiones se pagan con el modelo nuevo (5 indicadores):
+    # su avance diario es la vista principal. La tabla de seguimiento de siempre
+    # (facturación, pedidos, máquinas) queda en la segunda pestaña.
+    tab_av, tab_seg = st.tabs(["🎯 Avance de comisiones",
+                               "📋 Facturación, pedidos y máquinas"])
+    with tab_av:
+        from app.pages.gerencia_avance import render_avance
+        render_avance(client, anio, mes)
 
-    cls      = color_pct(pct_global)
-    cls_proy = color_pct(pct_proy)
+    with tab_seg:
+        # ── KPIs globales ────────────────────────────────────────────────────────
+        total_obj   = df["obj_venta"].sum()
+        total_fnc   = df["fact_nc"].sum()
+        total_fact  = df["monto_facturas"].sum()
+        total_nc    = df["monto_notas_credito"].sum()
+        total_docs  = df["n_documentos"].sum()
+        total_mgst  = df["maquinas_gestionadas"].sum()
+        total_menv  = df["maquinas_entregadas"].sum()
+        total_ped   = df["pedidos_neto"].sum() if "pedidos_neto" in df else 0
+        total_nofac = df["no_facturado_monto"].sum() if "no_facturado_monto" in df else 0
+        total_proy  = df["proyeccion_cierre"].sum() if "proyeccion_cierre" in df else 0
+        pct_global  = total_fnc / total_obj if total_obj else None
+        pct_proy    = total_proy / total_obj if total_obj else None
 
-    # ── KPIs financieros (4×2 = rectángulo simétrico para pantallazos) ───────
-    st.markdown(f"""
-    <div class="kpi-grid-4">
-      <div class="kpi-card">
-        <div class="kpi-label">Objetivo total</div>
-        <div class="kpi-value">{fmt_clp(total_obj)}</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Fact Total</div>
-        <div class="kpi-value">{fmt_clp(total_fact)}</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Notas de Crédito</div>
-        <div class="kpi-value rojo-bg">{fmt_clp(total_nc)}</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Fact-NC</div>
-        <div class="kpi-value {cls}">{fmt_clp(total_fnc)}</div>
-        <div class="kpi-sub">% Cumpl: <strong>{fmt_pct(pct_global)}</strong></div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Proyección Cierre</div>
-        <div class="kpi-value {cls_proy}">{fmt_clp(total_proy)}</div>
-        <div class="kpi-sub">% Proy: <strong>{fmt_pct(pct_proy)}</strong></div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Pedidos</div>
-        <div class="kpi-value">{fmt_clp(total_ped)}</div>
-        <div class="kpi-sub">No fact.: {fmt_clp(total_nofac)}</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">N° Documentos</div>
-        <div class="kpi-value">{fmt_num(total_docs)}</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Maq. Ingresadas AV</div>
-        <div class="kpi-value">{fmt_num(total_mgst)}</div>
-        <div class="kpi-sub">Maq. Entregada: {fmt_num(total_menv)}</div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+        cls      = color_pct(pct_global)
+        cls_proy = color_pct(pct_proy)
 
-    # ── Tabla principal (réplica mejorada del Power BI) ──────────────────────
-    st.markdown('<div class="seccion-titulo">Seguimiento por vendedor</div>',
-                unsafe_allow_html=True)
+        # ── KPIs financieros (4×2 = rectángulo simétrico para pantallazos) ───────
+        st.markdown(f"""
+        <div class="kpi-grid-4">
+          <div class="kpi-card">
+            <div class="kpi-label">Objetivo total</div>
+            <div class="kpi-value">{fmt_clp(total_obj)}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Fact Total</div>
+            <div class="kpi-value">{fmt_clp(total_fact)}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Notas de Crédito</div>
+            <div class="kpi-value rojo-bg">{fmt_clp(total_nc)}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Fact-NC</div>
+            <div class="kpi-value {cls}">{fmt_clp(total_fnc)}</div>
+            <div class="kpi-sub">% Cumpl: <strong>{fmt_pct(pct_global)}</strong></div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Proyección Cierre</div>
+            <div class="kpi-value {cls_proy}">{fmt_clp(total_proy)}</div>
+            <div class="kpi-sub">% Proy: <strong>{fmt_pct(pct_proy)}</strong></div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Pedidos</div>
+            <div class="kpi-value">{fmt_clp(total_ped)}</div>
+            <div class="kpi-sub">No fact.: {fmt_clp(total_nofac)}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">N° Documentos</div>
+            <div class="kpi-value">{fmt_num(total_docs)}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Maq. Ingresadas AV</div>
+            <div class="kpi-value">{fmt_num(total_mgst)}</div>
+            <div class="kpi-sub">Maq. Entregada: {fmt_num(total_menv)}</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    # Tira de contexto (días del mes + última factura) justo arriba del cuadro,
-    # para que un solo pantallazo del seguimiento incluya el período de referencia.
-    st.markdown(f"""
-    <div class="kpi-strip">
-      <div class="kpi-strip-card">
-        <div class="kpi-strip-value">{cal['dias_totales']}</div>
-        <div class="kpi-strip-label">Total días mes</div>
-      </div>
-      <div class="kpi-strip-card">
-        <div class="kpi-strip-value">{cal['dias_trabajados']}</div>
-        <div class="kpi-strip-label">Días trabajados</div>
-      </div>
-      <div class="kpi-strip-card">
-        <div class="kpi-strip-value">{ultima_factura}</div>
-        <div class="kpi-strip-label">Última factura</div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+        # ── Tabla principal (réplica mejorada del Power BI) ──────────────────────
+        st.markdown('<div class="seccion-titulo">Seguimiento por vendedor</div>',
+                    unsafe_allow_html=True)
 
-    # UNA sola tabla con TODOS los vendedores (con y sin objetivo juntos). A quien
-    # aún no tiene objetivo del mes, los % dependientes (% Cumpl, % Efec) le salen
-    # "—". "Sin asignar" (facturación sin vendedor mapeado en Obuma) se fija al
-    # final de la tabla (ver _tabla_gerencia), no se cuenta como vendedor.
-    sin_obj = df[(df["obj_venta"] == 0) & (df["nombre_canonico"] != "Sin asignar")]
-    if not sin_obj.empty:
-        st.markdown(
-            f'<div class="estado-vacio" style="margin-bottom:.75rem">'
-            f'ℹ️ {len(sin_obj)} vendedor(es) aún sin objetivo del período — aparecen '
-            f'en la tabla con "—" en los % que dependen del objetivo. Asígnalos en '
-            f'<strong>Editar objetivos</strong>.</div>',
-            unsafe_allow_html=True,
-        )
-    _tabla_gerencia(df)
+        # Tira de contexto (días del mes + última factura) justo arriba del cuadro,
+        # para que un solo pantallazo del seguimiento incluya el período de referencia.
+        st.markdown(f"""
+        <div class="kpi-strip">
+          <div class="kpi-strip-card">
+            <div class="kpi-strip-value">{cal['dias_totales']}</div>
+            <div class="kpi-strip-label">Total días mes</div>
+          </div>
+          <div class="kpi-strip-card">
+            <div class="kpi-strip-value">{cal['dias_trabajados']}</div>
+            <div class="kpi-strip-label">Días trabajados</div>
+          </div>
+          <div class="kpi-strip-card">
+            <div class="kpi-strip-value">{ultima_factura}</div>
+            <div class="kpi-strip-label">Última factura</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    # Export discreto (PNG para WhatsApp / CSV) con el contexto del período.
-    _subt = (f"{MESES[mes]} {anio}  ·  Días del mes: {cal['dias_totales']}  ·  "
-             f"Días trabajados: {cal['dias_trabajados']}  ·  Última factura: {ultima_factura}")
-    _disp, _col = _export_seguimiento(df)
-    bloque_descarga(_disp, _col, "REPORTE DE SEGUIMIENTO DE OBJETIVOS",
-                    _subt, f"seguimiento_{anio}_{mes:02d}",
-                    col_labels=_PNG_LABELS, grupos=_PNG_GRUPOS)
+        # UNA sola tabla con TODOS los vendedores (con y sin objetivo juntos). A quien
+        # aún no tiene objetivo del mes, los % dependientes (% Cumpl, % Efec) le salen
+        # "—". "Sin asignar" (facturación sin vendedor mapeado en Obuma) se fija al
+        # final de la tabla (ver _tabla_gerencia), no se cuenta como vendedor.
+        sin_obj = df[(df["obj_venta"] == 0) & (df["nombre_canonico"] != "Sin asignar")]
+        if not sin_obj.empty:
+            st.markdown(
+                f'<div class="estado-vacio" style="margin-bottom:.75rem">'
+                f'ℹ️ {len(sin_obj)} vendedor(es) aún sin objetivo del período — aparecen '
+                f'en la tabla con "—" en los % que dependen del objetivo. Asígnalos en '
+                f'<strong>Editar objetivos</strong>.</div>',
+                unsafe_allow_html=True,
+            )
+        _tabla_gerencia(df)
 
-    # Alerta de pipeline: venta ingresada (pedidos) aún sin facturar.
-    _alerta_pipeline(df)
+        # Export discreto (PNG para WhatsApp / CSV) con el contexto del período.
+        _subt = (f"{MESES[mes]} {anio}  ·  Días del mes: {cal['dias_totales']}  ·  "
+                 f"Días trabajados: {cal['dias_trabajados']}  ·  Última factura: {ultima_factura}")
+        _disp, _col = _export_seguimiento(df)
+        bloque_descarga(_disp, _col, "REPORTE DE SEGUIMIENTO DE OBJETIVOS",
+                        _subt, f"seguimiento_{anio}_{mes:02d}",
+                        col_labels=_PNG_LABELS, grupos=_PNG_GRUPOS)
 
-    # Nota explicativa: de dónde sale cada columna (colapsable)
-    with st.expander("ℹ️ Cómo leer la tabla y de dónde sale cada columna", expanded=False):
-        st.markdown(
-            """
-            <div class="nota-embudo">
-              <p><strong>Dos ERP alimentan esta tabla:</strong> <strong>Obuma</strong> (facturación
-                 oficial — DTE, notas de crédito, máquinas) y <strong>Autoventa</strong> (pedidos y
-                 logística). Los <strong>objetivos</strong> los edita gerencia. Las dos sociedades,
-                 <strong>Acuña</strong> y <strong>Gran Natural</strong>, están en Obuma;
-                 <strong>Autoventa cubre solo Gran Natural.</strong></p>
+        # Alerta de pipeline: venta ingresada (pedidos) aún sin facturar.
+        _alerta_pipeline(df)
 
-              <p><strong>De dónde sale cada columna</strong></p>
-              <ul>
-                <li><strong>Vendedor</strong> — dimensión de vendedores (se mapea el nombre de cada
-                    ERP a un id único, tolerando variaciones de escritura).</li>
-                <li><strong>Objetivo</strong> — objetivo de venta del mes, <em>cargado por gerencia</em>
-                    (editable abajo). Igual para <em>Obj Maq</em> y <em>Obj Visitas</em>.</li>
-                <li><strong>Fact-NC</strong> — <strong>Obuma</strong>. Es la <em>venta neta oficial</em>
-                    del vendedor y el número contra el que se mide el objetivo. Detalle:
-                    <ul>
-                      <li><strong>Fórmula:</strong> suma de <em>facturas</em> − suma de <em>notas de
-                          crédito</em> del mes. Las NC entran con <strong>signo negativo</strong>
-                          (devoluciones/anulaciones que restan venta).</li>
-                      <li><strong>Qué documentos cuenta:</strong> solo DTE reales —
-                          <em>factura electrónica</em>, <em>factura exenta</em> y <em>nota de
-                          crédito</em>. Se <strong>excluyen</strong> notas de venta/pedidos internos y
-                          guías de despacho (no son venta facturada).</li>
-                      <li><strong>Cubre las dos sociedades:</strong> Acuña + Gran Natural (Obuma es el
-                          único ERP con la facturación de ambas).</li>
-                      <li><strong>Atribución por documento:</strong> toda la factura suma al vendedor
-                          que figura en el DTE (por eso es la fuente de verdad para repartir las
-                          ventas entre vendedores).</li>
-                      <li>Se suma a <strong>nivel de línea de producto</strong> (cada factura puede
-                          traer varias líneas); el monto usado es el <em>neto</em>, sin IVA.</li>
-                    </ul></li>
-                <li><strong>% Cumpl</strong> — Fact-NC / Objetivo.</li>
-                <li><strong>Proyección</strong> — venta estimada al cierre del mes si el vendedor
-                    mantiene su ritmo actual: <em>(Fact-NC / días hábiles transcurridos) × días
-                    hábiles del mes</em> (descontando feriados). El color compara la proyección
-                    contra el objetivo: verde ≥100%, amarillo ≥70%, rojo &lt;70%. En meses cerrados
-                    coincide con el Fact-NC final.</li>
-                <li><strong>Pedidos</strong> — <strong>Autoventa</strong>: neto total de pedidos del
-                    mes = <em>Ped. Fact. + No Fact.</em></li>
-                <li><strong>Ped. Fact.</strong> — <strong>Autoventa</strong>: pedidos que ya tienen
-                    folio (DTE emitido) = <em>Pedidos − No Fact.</em> <strong>El vendedor de un pedido
-                    facturado se hereda del documento en Obuma</strong> (el DTE manda), no de quién
-                    cargó la línea en Autoventa — así esta columna usa el mismo criterio que Fact-NC.</li>
-                <li><strong>No Fact.</strong> — <strong>Autoventa</strong>: pedidos marcados
-                    <em>Sin DTE</em> (despachados pero aún sin factura emitida).</li>
-                <li><strong>% Fact.</strong> — Ped. Fact. / Pedidos: qué parte de lo pedido llegó a
-                    factura. <strong>"—"</strong> = vendedor sin pedidos en Autoventa (ej. solo Acuña).</li>
-                <li><strong>NC</strong> — <strong>Obuma</strong>: suma de notas de crédito del mes.</li>
-                <li><strong>Maq. Ingresadas AV</strong> <em>(AV = Autoventa)</em> — máquinas de
-                    <strong>instalación a cliente nuevo</strong> (código <strong>FL-4</strong>), tal
-                    como se ingresan en <strong>Autoventa</strong>. Es lo que el vendedor colocó en el
-                    mes. El vendedor se toma de Autoventa (quien gestionó la máquina en terreno), no de
-                    Obuma (que suele dejar estos documentos en "Sin asignar"). NO incluye cambios
-                    (FL-1/3/5) ni retiros (FL-2).</li>
-                <li><strong>Maq. Entregada</strong> — de esas máquinas ingresadas, las que figuran como
-                    <strong>"Entregada"</strong> en el <em>Detalle de despachos</em>, cruzando por N° de
-                    documento. Mide la conversión ingresada → entregada.</li>
-                <li><em>Ojo:</em> la máquina se cuenta cuando su flete FL-4 <strong>se factura</strong>.
-                    Si ya se ingresó en Autoventa pero aún no tiene factura (Sin DTE), NO cuenta todavía
-                    — pero queda <strong>listada en el aviso amarillo</strong> bajo la tabla, y entra
-                    sola cuando se emita el DTE.</li>
-                <li><strong>N° Docs</strong> — <strong>Obuma</strong>: nº de facturas distintas del
-                    vendedor en el mes.</li>
-                <li><strong>% Efec</strong> — N° Docs / Obj Visitas.</li>
-              </ul>
+        # Nota explicativa: de dónde sale cada columna (colapsable)
+        with st.expander("ℹ️ Cómo leer la tabla y de dónde sale cada columna", expanded=False):
+            st.markdown(
+                """
+                <div class="nota-embudo">
+                  <p><strong>Dos ERP alimentan esta tabla:</strong> <strong>Obuma</strong> (facturación
+                     oficial — DTE, notas de crédito, máquinas) y <strong>Autoventa</strong> (pedidos y
+                     logística). Los <strong>objetivos</strong> los edita gerencia. Las dos sociedades,
+                     <strong>Acuña</strong> y <strong>Gran Natural</strong>, están en Obuma;
+                     <strong>Autoventa cubre solo Gran Natural.</strong></p>
 
-              <p><strong>Cómo leer el embudo Pedidos → Fact-NC</strong></p>
-              <ul>
-                <li>La identidad que se cumple es <strong>Ped. Fact. − NC = Fact-NC</strong>
-                    (no "Pedidos total − NC"). Para vendedores <strong>100% Gran Natural cuadra al
-                    peso</strong> (las diferencias de unos pesos son redondeo de la API de Autoventa).</li>
-                <li><strong>Por qué a un vendedor puede NO cuadrarle, sin que sea error:</strong></li>
-                <li>① <strong>Tiene venta en Acuña.</strong> Acuña no pasa por Autoventa, así que su
-                    facturación entra en Fact-NC pero no tiene pedidos que la respalden → Fact-NC &gt;
-                    Ped. Fact. (ej.: un vendedor con Pedidos = 0 y Fact-NC &gt; 0 es 100% Acuña).</li>
-                <li>② <strong>"No Facturado" inflado por cruce de sociedades.</strong> Si un pedido se
-                    ingresa en Autoventa (Gran Natural) pero termina facturándose por <strong>Acuña</strong>,
-                    Autoventa nunca ve el DTE y lo deja <em>Sin DTE</em> para siempre — aunque la venta
-                    sí existe (ya está en Fact-NC por Acuña).</li>
-                <li>③ <strong>Documento sin vendedor en Obuma.</strong> Si Obuma dejó la factura en
-                    "Sin asignar" pero Autoventa sí sabe de quién es, los montos quedan en filas
-                    distintas. Se corrige mapeando ese vendedor en Obuma.</li>
-                <li>Pedido y factura caen en el <strong>mismo mes</strong> (sin arrastre, verificado
-                    por folio).</li>
-              </ul>
+                  <p><strong>De dónde sale cada columna</strong></p>
+                  <ul>
+                    <li><strong>Vendedor</strong> — dimensión de vendedores (se mapea el nombre de cada
+                        ERP a un id único, tolerando variaciones de escritura).</li>
+                    <li><strong>Objetivo</strong> — objetivo de venta del mes, <em>cargado por gerencia</em>
+                        (editable abajo). Igual para <em>Obj Maq</em> y <em>Obj Visitas</em>.</li>
+                    <li><strong>Fact-NC</strong> — <strong>Obuma</strong>. Es la <em>venta neta oficial</em>
+                        del vendedor y el número contra el que se mide el objetivo. Detalle:
+                        <ul>
+                          <li><strong>Fórmula:</strong> suma de <em>facturas</em> − suma de <em>notas de
+                              crédito</em> del mes. Las NC entran con <strong>signo negativo</strong>
+                              (devoluciones/anulaciones que restan venta).</li>
+                          <li><strong>Qué documentos cuenta:</strong> solo DTE reales —
+                              <em>factura electrónica</em>, <em>factura exenta</em> y <em>nota de
+                              crédito</em>. Se <strong>excluyen</strong> notas de venta/pedidos internos y
+                              guías de despacho (no son venta facturada).</li>
+                          <li><strong>Cubre las dos sociedades:</strong> Acuña + Gran Natural (Obuma es el
+                              único ERP con la facturación de ambas).</li>
+                          <li><strong>Atribución por documento:</strong> toda la factura suma al vendedor
+                              que figura en el DTE (por eso es la fuente de verdad para repartir las
+                              ventas entre vendedores).</li>
+                          <li>Se suma a <strong>nivel de línea de producto</strong> (cada factura puede
+                              traer varias líneas); el monto usado es el <em>neto</em>, sin IVA.</li>
+                        </ul></li>
+                    <li><strong>% Cumpl</strong> — Fact-NC / Objetivo.</li>
+                    <li><strong>Proyección</strong> — venta estimada al cierre del mes si el vendedor
+                        mantiene su ritmo actual: <em>(Fact-NC / días hábiles transcurridos) × días
+                        hábiles del mes</em> (descontando feriados). El color compara la proyección
+                        contra el objetivo: verde ≥100%, amarillo ≥70%, rojo &lt;70%. En meses cerrados
+                        coincide con el Fact-NC final.</li>
+                    <li><strong>Pedidos</strong> — <strong>Autoventa</strong>: neto total de pedidos del
+                        mes = <em>Ped. Fact. + No Fact.</em></li>
+                    <li><strong>Ped. Fact.</strong> — <strong>Autoventa</strong>: pedidos que ya tienen
+                        folio (DTE emitido) = <em>Pedidos − No Fact.</em> <strong>El vendedor de un pedido
+                        facturado se hereda del documento en Obuma</strong> (el DTE manda), no de quién
+                        cargó la línea en Autoventa — así esta columna usa el mismo criterio que Fact-NC.</li>
+                    <li><strong>No Fact.</strong> — <strong>Autoventa</strong>: pedidos marcados
+                        <em>Sin DTE</em> (despachados pero aún sin factura emitida).</li>
+                    <li><strong>% Fact.</strong> — Ped. Fact. / Pedidos: qué parte de lo pedido llegó a
+                        factura. <strong>"—"</strong> = vendedor sin pedidos en Autoventa (ej. solo Acuña).</li>
+                    <li><strong>NC</strong> — <strong>Obuma</strong>: suma de notas de crédito del mes.</li>
+                    <li><strong>Maq. Ingresadas AV</strong> <em>(AV = Autoventa)</em> — máquinas de
+                        <strong>instalación a cliente nuevo</strong> (código <strong>FL-4</strong>), tal
+                        como se ingresan en <strong>Autoventa</strong>. Es lo que el vendedor colocó en el
+                        mes. El vendedor se toma de Autoventa (quien gestionó la máquina en terreno), no de
+                        Obuma (que suele dejar estos documentos en "Sin asignar"). NO incluye cambios
+                        (FL-1/3/5) ni retiros (FL-2).</li>
+                    <li><strong>Maq. Entregada</strong> — de esas máquinas ingresadas, las que figuran como
+                        <strong>"Entregada"</strong> en el <em>Detalle de despachos</em>, cruzando por N° de
+                        documento. Mide la conversión ingresada → entregada.</li>
+                    <li><em>Ojo:</em> la máquina se cuenta cuando su flete FL-4 <strong>se factura</strong>.
+                        Si ya se ingresó en Autoventa pero aún no tiene factura (Sin DTE), NO cuenta todavía
+                        — pero queda <strong>listada en el aviso amarillo</strong> bajo la tabla, y entra
+                        sola cuando se emita el DTE.</li>
+                    <li><strong>N° Docs</strong> — <strong>Obuma</strong>: nº de facturas distintas del
+                        vendedor en el mes.</li>
+                    <li><strong>% Efec</strong> — N° Docs / Obj Visitas.</li>
+                  </ul>
 
-              <p><strong>Sobre máquinas:</strong> esta tabla muestra solo <em>Maq. Ingresadas AV</em> y
-                 <em>Maq. Entregada</em>. Los <strong>retiros</strong> (FL-2), los <em>cambios</em>
-                 (FL-1/3/5) y el detalle por estado están en <strong>Análisis → Máquinas</strong>.
-                 El movimiento de máquina se toma de <strong>Obuma</strong> (cubre las dos sociedades y
-                 los 5 códigos FL) y el <strong>vendedor se atribuye según Autoventa</strong>; el estado
-                 <em>entregada/rechazada</em> se completa al cargar los despachos — sin despacho, la
-                 máquina ingresada queda pendiente de entrega.</p>
+                  <p><strong>Cómo leer el embudo Pedidos → Fact-NC</strong></p>
+                  <ul>
+                    <li>La identidad que se cumple es <strong>Ped. Fact. − NC = Fact-NC</strong>
+                        (no "Pedidos total − NC"). Para vendedores <strong>100% Gran Natural cuadra al
+                        peso</strong> (las diferencias de unos pesos son redondeo de la API de Autoventa).</li>
+                    <li><strong>Por qué a un vendedor puede NO cuadrarle, sin que sea error:</strong></li>
+                    <li>① <strong>Tiene venta en Acuña.</strong> Acuña no pasa por Autoventa, así que su
+                        facturación entra en Fact-NC pero no tiene pedidos que la respalden → Fact-NC &gt;
+                        Ped. Fact. (ej.: un vendedor con Pedidos = 0 y Fact-NC &gt; 0 es 100% Acuña).</li>
+                    <li>② <strong>"No Facturado" inflado por cruce de sociedades.</strong> Si un pedido se
+                        ingresa en Autoventa (Gran Natural) pero termina facturándose por <strong>Acuña</strong>,
+                        Autoventa nunca ve el DTE y lo deja <em>Sin DTE</em> para siempre — aunque la venta
+                        sí existe (ya está en Fact-NC por Acuña).</li>
+                    <li>③ <strong>Documento sin vendedor en Obuma.</strong> Si Obuma dejó la factura en
+                        "Sin asignar" pero Autoventa sí sabe de quién es, los montos quedan en filas
+                        distintas. Se corrige mapeando ese vendedor en Obuma.</li>
+                    <li>Pedido y factura caen en el <strong>mismo mes</strong> (sin arrastre, verificado
+                        por folio).</li>
+                  </ul>
 
-              <p><strong>Tarjetas de arriba (totales del equipo):</strong> son la suma de todos los
-                 vendedores. <strong>Proyección Cierre</strong> = venta estimada a fin de mes con ritmo
-                 lineal: <em>(Fact-NC / días trabajados) × días del mes</em> (descontando feriados);
-                 <em>% Proy</em> = Proyección / Objetivo. Las demás tarjetas son los mismos conceptos
-                 de la tabla, sumados.</p>
+                  <p><strong>Sobre máquinas:</strong> esta tabla muestra solo <em>Maq. Ingresadas AV</em> y
+                     <em>Maq. Entregada</em>. Los <strong>retiros</strong> (FL-2), los <em>cambios</em>
+                     (FL-1/3/5) y el detalle por estado están en <strong>Análisis → Máquinas</strong>.
+                     El movimiento de máquina se toma de <strong>Obuma</strong> (cubre las dos sociedades y
+                     los 5 códigos FL) y el <strong>vendedor se atribuye según Autoventa</strong>; el estado
+                     <em>entregada/rechazada</em> se completa al cargar los despachos — sin despacho, la
+                     máquina ingresada queda pendiente de entrega.</p>
 
-              <p><strong>Cálculo:</strong> casi todo se lee de la vista
-                 <code>v_resumen_vendedor_mes</code> (Fact-NC, NC, máquinas, objetivos, N° Docs y sus
-                 %); <em>Pedidos</em> sale de <code>fact_pedidos</code> y <em>Ped. Fact.</em> se deriva
-                 en la app como Pedidos − No Fact. Ningún número se recalcula a mano: salen del ETL.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+                  <p><strong>Tarjetas de arriba (totales del equipo):</strong> son la suma de todos los
+                     vendedores. <strong>Proyección Cierre</strong> = venta estimada a fin de mes con ritmo
+                     lineal: <em>(Fact-NC / días trabajados) × días del mes</em> (descontando feriados);
+                     <em>% Proy</em> = Proyección / Objetivo. Las demás tarjetas son los mismos conceptos
+                     de la tabla, sumados.</p>
+
+                  <p><strong>Cálculo:</strong> casi todo se lee de la vista
+                     <code>v_resumen_vendedor_mes</code> (Fact-NC, NC, máquinas, objetivos, N° Docs y sus
+                     %); <em>Pedidos</em> sale de <code>fact_pedidos</code> y <em>Ped. Fact.</em> se deriva
+                     en la app como Pedidos − No Fact. Ningún número se recalcula a mano: salen del ETL.</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     # ── Ranking ──────────────────────────────────────────────────────────────
     st.markdown('<div class="seccion-titulo">Ranking — Fact-NC</div>',

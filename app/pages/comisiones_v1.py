@@ -74,6 +74,7 @@ META_PARAMS = {
     "meta_efec_verano":   (0.65, "Efectividad de cartera, verano (oct–mar)"),
     "meta_efec_invierno": (0.50, "Efectividad de cartera, invierno (abr–sep)"),
     "meta_ruta":          (0.90, "Cobertura de ruta (visitas ÷ agendamientos)"),
+    "meta_sku":           (DEFAULT_META_SKU, "Amplitud de SKU (SKUs distintos por cliente)"),
 }
 
 
@@ -85,7 +86,8 @@ def _metas_generales(params: dict, mes: int) -> dict:
     """% de cartera que debe comprar en el mes (según temporada) y % de los
     agendamientos que deben visitarse."""
     g = {k: float(params.get(k, d)) for k, (d, _) in META_PARAMS.items()}
-    return {"efec": g[f"meta_efec_{_temporada(mes)}"], "ruta": g["meta_ruta"], **g}
+    return {"efec": g[f"meta_efec_{_temporada(mes)}"], "ruta": g["meta_ruta"],
+            "sku": g["meta_sku"], **g}
 
 # Meta automática de Nuevos+Reactivados (override manual en meta_nuevos_react):
 PCT_META_NUEVOS = 0.02   # nuevos: 2% de la cartera (mín. 2)
@@ -256,7 +258,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
             parte_nuevos = max(2.0, round(PCT_META_NUEVOS * (m_cober or 0)))
             parte_react  = max(1.0, round(PCT_META_REACT * dorm)) if dorm > 0 else 0.0
             m_nuevos = parte_nuevos + parte_react
-        m_lineas = _coalesce(r, "meta_lineas", "__none__", DEFAULT_META_SKU)
+        m_lineas = _coalesce(r, "meta_lineas", "__none__", mg["sku"])
         # Efectividad de cartera: no se exige que compre el 100% de la cartera,
         # sino el % de la temporada (verano 65% / invierno 50% por defecto).
         m_efec = m_cober * mg["efec"] if m_cober else None
@@ -287,6 +289,7 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
             "dormidos": dorm, "clientes_activos": r.get("clientes_activos") or 0,
             "agendamientos": agend, "visitas": vis, "cartera": m_cober,
             "meta_efec_pct": mg["efec"], "meta_ruta_pct": mg["ruta"],
+            "meta_sku_gen": mg["sku"],
             # Overrides crudos (para que el editor distinga manual vs automático)
             "ov_meta_nuevos_react": r.get("meta_nuevos_react"),
             "ov_meta_cobertura": r.get("meta_cobertura"),
@@ -759,10 +762,11 @@ def _editor_metas_generales(client, mes: int):
         "**Efectividad de cartera:** qué % de su cartera debe comprar en el mes. "
         "Cambia con la temporada porque el helado se mueve ~20 puntos entre verano e "
         "invierno. **Cobertura de ruta:** qué % de las visitas agendadas debe hacer "
-        "(estándar de la industria: sobre 90%). "
+        "(estándar de la industria: sobre 90%). **SKUs por cliente:** cuántos "
+        "productos distintos debe llevar en promedio cada cliente que compra. "
         f"Este mes es **{_temporada(mes)}**.")
     with st.form("form_metas_generales", clear_on_submit=False):
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         v = c1.number_input("Efectividad verano, oct–mar (%)", min_value=5, max_value=100,
                             step=5, value=int(round(g["meta_efec_verano"] * 100)),
                             key="mg_verano")
@@ -772,6 +776,8 @@ def _editor_metas_generales(client, mes: int):
         r = c3.number_input("Cobertura de ruta (%)", min_value=5, max_value=100,
                             step=5, value=int(round(g["meta_ruta"] * 100)),
                             key="mg_ruta")
+        k = c4.number_input("SKUs por cliente", min_value=1.0, max_value=30.0,
+                            step=0.5, value=float(g["meta_sku"]), key="mg_sku")
         guardar = st.form_submit_button("💾 Guardar metas generales", type="primary",
                                         use_container_width=True)
     if guardar:
@@ -780,6 +786,7 @@ def _editor_metas_generales(client, mes: int):
                 "meta_efec_verano": round(v / 100, 4),
                 "meta_efec_invierno": round(i / 100, 4),
                 "meta_ruta": round(r / 100, 4),
+                "meta_sku": round(float(k), 2),
             })
             st.success("✅ Metas generales guardadas.")
             st.rerun()
@@ -1243,10 +1250,11 @@ def _editor_metas(client, df: pd.DataFrame, anio: int, mes: int):
                  "cartera asignada. La meta de efectividad es el % de la "
                  "temporada sobre esta cartera.")
         m_lineas = c3.number_input(
-            f"SKUs por cliente (auto: {DEFAULT_META_SKU:.0f})",
+            f"SKUs por cliente (auto: {fmt_num(fila.get('meta_sku_gen'))})",
             min_value=0.0, step=0.5,
             value=float(_safe_num(fila.get("ov_meta_lineas"))),
-            help=f"0 = meta general de {DEFAULT_META_SKU:.0f} SKUs distintos por cliente.")
+            help="0 = meta general de SKUs distintos por cliente "
+                 "(Configuración → Metas generales).")
         submitted = st.form_submit_button("💾 Guardar metas", type="primary",
                                           use_container_width=True)
 

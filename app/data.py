@@ -1072,6 +1072,34 @@ def get_cartera_map(client: Client) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def get_visitas_mes(client: Client, anio: int, mes: int, hasta: date | None = None):
+    """Visitas GPS de Autoventa del mes (tabla fact_visitas, sql/045), hasta una
+    fecha de corte. Devuelve None si la tabla aún no existe (para que el panel
+    diga que falta habilitar la carga) y DataFrame vacío si no hay visitas."""
+    ini = date(anio, mes, 1)
+    fin = (date(anio + 1, 1, 1) if mes == 12 else date(anio, mes + 1, 1)) - timedelta(days=1)
+    if hasta is not None:
+        fin = min(fin, hasta)
+    try:
+        _PAGE, offset, rows = 1000, 0, []
+        while True:
+            r = (client.table("fact_visitas")
+                 .select("id,fecha,vendedor_id,cliente_rut,con_pedido")
+                 .gte("fecha", ini.isoformat()).lte("fecha", fin.isoformat())
+                 .order("id")
+                 .range(offset, offset + _PAGE - 1).execute())
+            rows.extend(r.data or [])
+            if len(r.data or []) < _PAGE:
+                break
+            offset += _PAGE
+        return pd.DataFrame(rows)
+    except Exception as exc:
+        txt = str(exc)
+        if "42P01" in txt or "PGRST205" in txt or "does not exist" in txt:
+            return None
+        raise
+
+
 # ── Propuesta de Comisiones v1 (scorecard 5 KPIs) ───────────────────────────
 
 def get_comision_ruta(client: Client, anio: int, mes: int) -> pd.DataFrame:
