@@ -198,7 +198,7 @@ _GRUPOS_TABLERO = [
     ("COBERTURA DE RUTA", "#C2185B", 7, 9),
     ("EFECTIVIDAD DE CARTERA", "#6A4C93", 10, 12),
     ("AMPLITUD SKU", "#7A8B2E", 13, 14),
-    ("COMISIÓN", VINO, 15, 16),
+    ("COMISIÓN", VINO, 15, 18),
 ]
 # Columnas del tablero: (clave interna, encabezado). En cuota, "% proy." =
 # venta proyectada ÷ meta. En el resto se muestra lo que lleva HOY; su color dice
@@ -210,7 +210,7 @@ _COLS_TABLERO = [
     ("r_l", "Visitas / Progr."), ("r_h", "Hoy"), ("r_m", "Meta"),
     ("e_l", "Compraron / Cartera"), ("e_h", "Hoy"), ("e_m", "Meta"),
     ("s_l", "SKU/cliente"), ("s_m", "Meta"),
-    ("com_hoy", "Hoy"), ("com", "Proyectada"),
+    ("t_hoy", "Tasa hoy"), ("com_hoy", "Hoy"), ("t_proy", "Tasa proy."), ("com", "Proyectada"),
 ]
 
 
@@ -236,7 +236,8 @@ def tabla_tablero(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
             "e_l": f"{num(r['cobertura_llevas'])} / {num(cart)}" if _ok(cart) and cart else "—",
             "e_h": pct(r.get("cobertura_pct")), "e_m": pct(r.get("cobertura_meta")),
             "s_l": num(r["amplitud_llevas"], 1), "s_m": num(r["amplitud_meta"], 1),
-            "com_hoy": clp(r["comision_hoy"]), "com": clp(r["comision_proy"]),
+            "t_hoy": pct(r["tasa_hoy"], 2), "com_hoy": clp(r["comision_hoy"]),
+            "t_proy": pct(r["tasa_proy"], 2), "com": clp(r["comision_proy"]),
         }
         filas.append([fila[k] for k in cols])
         for k, c in color_col.items():
@@ -246,7 +247,12 @@ def tabla_tablero(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
     tot.update({"vend": "TOTAL EQUIPO", "c_v": clp(df["cuota_llevas"].sum()),
                 "c_m": clp(df["cuota_meta"].sum(min_count=1)),
                 "c_vp": clp(df["venta_proy"].sum()),
-                "com_hoy": clp(df["comision_hoy"].sum()), "com": clp(df["comision_proy"].sum())})
+                "com_hoy": clp(df["comision_hoy"].sum()), "com": clp(df["comision_proy"].sum()),
+                # Tasa del equipo = comisión total ÷ venta total (ponderada por venta)
+                "t_hoy": pct(df["comision_hoy"].sum() / df["cuota_llevas"].sum(), 2)
+                         if df["cuota_llevas"].sum() else "—",
+                "t_proy": pct(df["comision_proy"].sum() / df["venta_proy"].sum(), 2)
+                          if df["venta_proy"].sum() else "—"})
     filas.append([tot[k] for k in cols])
     return pd.DataFrame(filas, columns=cols), texto, fondo
 

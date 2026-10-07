@@ -132,12 +132,12 @@ def render_avance(client, anio: int, mes: int):
       <div class="kpi-card destacado">
         <div class="kpi-label">Comisión proyectada del equipo</div>
         <div class="kpi-value">{fmt_clp(d['comision_proy'].sum())}</div>
-        <div class="kpi-sub">al ritmo de hoy hasta fin de mes</div>
+        <div class="kpi-sub">tasa {fmt_pct(d['comision_proy'].sum() / vp if vp else None)} · al ritmo de hoy</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Comisión hoy</div>
         <div class="kpi-value">{fmt_clp(d['comision_hoy'].sum())}</div>
-        <div class="kpi-sub">si el mes cerrara hoy</div>
+        <div class="kpi-sub">tasa {fmt_pct(d['comision_hoy'].sum() / d['cuota_llevas'].sum() if d['cuota_llevas'].sum() else None)} · si el mes cerrara hoy</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Venta a la fecha</div>
