@@ -194,55 +194,65 @@ def fuentes_ruta(df: pd.DataFrame) -> str:
 # ── Tablero del equipo ──────────────────────────────────────────────────────
 _GRUPOS_TABLERO = [
     ("CUOTA DE VENTA", "#1E5FA5", 1, 3),
-    ("CLIENTES NUEVOS", "#1A7F4B", 4, 6),
+    ("CLIENTES NUEVOS (MÁQ.)", "#1A7F4B", 4, 6),
     ("COBERTURA DE RUTA", "#C2185B", 7, 10),
     ("EFECTIVIDAD DE CARTERA", "#6A4C93", 11, 14),
-    ("AMPLITUD DE SKU", "#7A8B2E", 15, 17),
-    ("COMISIÓN PROYECTADA", VINO, 18, 21),
+    ("AMPLITUD SKU", "#7A8B2E", 15, 16),
+    ("COMISIÓN PROYECTADA", VINO, 17, 20),
+]
+# Columnas del tablero: (clave interna, encabezado). "Proy." = cumplimiento
+# proyectado al cierre contra la meta (lo que define si cobra). En ruta y
+# efectividad, "Hoy" = cuánto lleva: visitas ÷ programadas y compraron ÷ cartera.
+_COLS_TABLERO = [
+    ("vend", "Vendedor"),
+    ("c_v", "Venta"), ("c_m", "Meta"), ("c_p", "Proy."),
+    ("n_l", "Llevas"), ("n_m", "Meta"), ("n_p", "Proy."),
+    ("r_l", "Visitas / Progr."), ("r_h", "Hoy"), ("r_m", "Meta"), ("r_p", "Proy."),
+    ("e_l", "Compraron / Cartera"), ("e_h", "Hoy"), ("e_m", "Meta"), ("e_p", "Proy."),
+    ("s_l", "SKU/cliente"), ("s_m", "Meta"),
+    ("tasa", "Tasa"), ("com", "Comisión"), ("todo", "Si cumple todo"), ("deja", "Se deja"),
 ]
 
 
 def _labels_tablero(df: pd.DataFrame) -> list:
-    r0 = df.iloc[0]
-    return ["Vendedor",
-            "Venta", "Meta", "Proy.",
-            "Llevas", "Meta", "Proy.",
-            "Visitas", "Program.", f"Meta {pct(r0['ruta_meta'])}", "Proy.",
-            "Compraron", "Cartera", f"Meta {pct(r0['cobertura_meta'])}", "Proy.",
-            "SKU/cli.", "Meta", "Proy.",
-            "Tasa", "Comisión", "Si cumple todo", "Se deja"]
+    return [h for _, h in _COLS_TABLERO]
 
 
 def tabla_tablero(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
-    """DataFrame de strings + colores (texto, fondo) de las columnas 'Proy.'."""
+    """DataFrame de strings + colores (texto, fondo) de las celdas con semáforo."""
     filas, fondo, texto = [], {}, {}
-    cols = ["Vendedor", "c_v", "c_m", "c_p", "n_l", "n_m", "n_p", "r_v", "r_a", "r_m", "r_p",
-            "e_c", "e_t", "e_m", "e_p", "s_l", "s_m", "s_p", "tasa", "com", "todo", "deja"]
-    proy_col = {"cuota": "c_p", "nuevos": "n_p", "ruta": "r_p", "cobertura": "e_p",
-                "amplitud": "s_p"}
+    cols = [k for k, _ in _COLS_TABLERO]
+    # Celda que lleva el semáforo de cada indicador. SKU es un promedio: no se
+    # proyecta, se pinta el propio promedio contra su meta.
+    color_col = {"cuota": "c_p", "nuevos": "n_p", "ruta": "r_p", "cobertura": "e_p",
+                 "amplitud": "s_l"}
     for i, (_, r) in enumerate(df.iterrows()):
-        filas.append([
-            r["vendedor"],
-            clp(r["cuota_llevas"]), clp(r["cuota_meta"]), pct(r["cuota_cumpl"]),
-            num(r["nuevos_llevas"]), num(r["nuevos_meta"]), pct(r["nuevos_cumpl"]),
-            num(r["ruta_llevas"]), num(r["ruta_agend"]), num(r["ruta_meta_n"]),
-            pct(r["ruta_cumpl"]),
-            num(r["cobertura_llevas"]), num(r["cobertura_cartera"]),
-            num(r["cobertura_meta_n"]), pct(r["cobertura_cumpl"]),
-            num(r["amplitud_llevas"], 1), num(r["amplitud_meta"], 1), pct(r["amplitud_cumpl"]),
-            pct(r["tasa_proy"], 2), clp(r["comision_proy"]), clp(r["si_todo"]),
-            clp(r["dejando"]),
-        ])
-        for k, c in proy_col.items():
+        ag, cart = r.get("ruta_agend"), r.get("cobertura_cartera")
+        fila = {
+            "vend": r["vendedor"],
+            "c_v": clp(r["cuota_llevas"]), "c_m": clp(r["cuota_meta"]), "c_p": pct(r["cuota_cumpl"]),
+            "n_l": num(r["nuevos_llevas"]), "n_m": num(r["nuevos_meta"]), "n_p": pct(r["nuevos_cumpl"]),
+            "r_l": f"{num(r['ruta_llevas'])} / {num(ag)}" if _ok(ag) and ag else "—",
+            "r_h": pct(r.get("ruta_pct")), "r_m": pct(r.get("ruta_meta")), "r_p": pct(r["ruta_cumpl"]),
+            "e_l": f"{num(r['cobertura_llevas'])} / {num(cart)}" if _ok(cart) and cart else "—",
+            "e_h": pct(r.get("cobertura_pct")), "e_m": pct(r.get("cobertura_meta")),
+            "e_p": pct(r["cobertura_cumpl"]),
+            "s_l": num(r["amplitud_llevas"], 1), "s_m": num(r["amplitud_meta"], 1),
+            "tasa": pct(r["tasa_proy"], 2), "com": clp(r["comision_proy"]),
+            "todo": clp(r["si_todo"]), "deja": clp(r["dejando"]),
+        }
+        filas.append([fila[k] for k in cols])
+        for k, c in color_col.items():
             bg, fg = SEM[estado(r.get(f"{k}_cumpl"), r.get(f"{k}_umbral", 0.8))]
             fondo[(i, c)], texto[(i, c)] = bg, fg
-    filas.append(["TOTAL EQUIPO", clp(df["cuota_llevas"].sum()),
-                  clp(df["cuota_meta"].sum(min_count=1)), "", "", "", "", "", "", "", "",
-                  "", "", "", "", "", "", "",
-                  pct(df["comision_proy"].sum() / df["venta_proy"].sum(), 2)
-                  if df["venta_proy"].sum() else "—",
-                  clp(df["comision_proy"].sum()), clp(df["si_todo"].sum()),
-                  clp(df["dejando"].sum())])
+    tot = {k: "" for k in cols}
+    vp = df["venta_proy"].sum()
+    tot.update({"vend": "TOTAL EQUIPO", "c_v": clp(df["cuota_llevas"].sum()),
+                "c_m": clp(df["cuota_meta"].sum(min_count=1)),
+                "tasa": pct(df["comision_proy"].sum() / vp, 2) if vp else "—",
+                "com": clp(df["comision_proy"].sum()), "todo": clp(df["si_todo"].sum()),
+                "deja": clp(df["dejando"].sum())})
+    filas.append([tot[k] for k in cols])
     return pd.DataFrame(filas, columns=cols), texto, fondo
 
 
@@ -255,7 +265,7 @@ def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int) -> bytes:
            if r0.get("nuevos_modo") == "maquinas" else "1ª compra + reactivados")
         + f" · ruta = {pct(r0['ruta_meta'])} de las visitas programadas · efectividad = "
         f"{pct(r0['cobertura_meta'])} de la cartera · amplitud = SKU distintos por cliente.\n"
-        "Proy. = cumplimiento proyectado al cierre al ritmo de hoy.   Verde ≥ 100%  ·  "
+        "Hoy = lo que lleva a la fecha · Proy. = cumplimiento proyectado al cierre contra la meta, al ritmo de hoy · SKU: promedio actual vs meta.   Verde ≥ 100%  ·  "
         "Amarillo = cobra parcial (desde el piso)  ·  Rojo = bajo el piso, no cobra ese "
         "indicador.\n" + fuentes_ruta(df))
     return tabla_png(disp, f"AVANCE DE COMISIONES · {MESES[mes].upper()} {anio}",

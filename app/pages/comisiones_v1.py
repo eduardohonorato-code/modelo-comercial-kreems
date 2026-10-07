@@ -199,8 +199,14 @@ def _historia_cache(_client, fecha_fin: str, cache_key: str) -> pd.DataFrame:
 
 
 # ── Cálculo del scorecard por vendedor ──────────────────────────────────────
-def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
-    base = get_comisiones(client, anio, mes)
+def _calcular(client, anio: int, mes: int, base_df: pd.DataFrame | None = None,
+              hist_df: pd.DataFrame | None = None) -> pd.DataFrame:
+    """`base_df`/`hist_df` permiten el cálculo LIVIANO del avance diario (Panel
+    Gerencia y Panel Vendedor): base armada con las ventas del mes y solo las
+    ventas del mes como historia. Sirve desde oct-2026, cuando los clientes nuevos
+    son máquinas; la historia larga solo hace falta para 1ª compra/reactivados y
+    dormidos. Sin esos argumentos, el cálculo completo de siempre."""
+    base = base_df.copy() if base_df is not None else get_comisiones(client, anio, mes)
     if base.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
@@ -270,7 +276,8 @@ def _calcular(client, anio: int, mes: int) -> pd.DataFrame:
     # Historia de ventas a nivel línea (nuevos/react, cobertura, amplitud, SKU, dormidos).
     ultimo = calendar.monthrange(anio, mes)[1]
     ffin = f"{anio}-{mes:02d}-{ultimo:02d}"
-    hist = _historia_cache(client, ffin, str(st.session_state.get("user_id", "")))
+    hist = (hist_df if hist_df is not None else
+            _historia_cache(client, ffin, str(st.session_state.get("user_id", ""))))
     métricas, detalle_cli, estado_cli = _metricas_historia(
         hist, client, anio, mes, cart_map)
 

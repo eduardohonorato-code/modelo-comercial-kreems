@@ -8,6 +8,45 @@ from app.auth import es_gerencia
 from app.data import get_resumen, get_calendario, get_pedidos_resumen
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _ficha_png(vendedor_id: int, corte, usuario: str, firma: str, _r, _ctx) -> bytes:
+    from app.export_avance import ficha_png
+    return ficha_png(_r, _ctx)
+
+
+def _seccion_mi_avance(client, anio: int, mes: int, vendedor_id: int):
+    """Ficha "Mi avance del mes": comisión proyectada, cada indicador con lo que
+    lleva, su meta, qué le falta y su foco. Misma imagen que se manda por WhatsApp."""
+    from app.pages.comisiones_v1 import _nuevos_por_maquinas
+    from app.avance_comisiones import corte_por_defecto
+    if not _nuevos_por_maquinas(anio, mes):
+        return      # antes de oct-2026 se pagaba con el modelo de tramos
+    corte = corte_por_defecto(anio, mes)
+    if corte is None:
+        return
+    from app.pages.gerencia_avance import avance_cacheado, firma_metas, _usuario
+    from app.export_avance import nombre_archivo
+    st.markdown('<div class="seccion-titulo">🎯 Mi avance de comisiones</div>',
+                unsafe_allow_html=True)
+    try:
+        firma = firma_metas(client, anio, mes)
+        df, ctx, _ = avance_cacheado(client, anio, mes, corte, _usuario(), firma)
+    except Exception as e:
+        st.info(f"No se pudo calcular el avance de comisiones: {e}")
+        return
+    fila = df[df["vendedor_id"] == vendedor_id] if not df.empty else df
+    if fila.empty or not ctx["dias_transcurridos"]:
+        st.info("Todavía no hay datos del mes para calcular el avance.")
+        return
+    r = fila.iloc[0]
+    with st.spinner("Armando tu ficha…"):
+        png = _ficha_png(vendedor_id, corte, _usuario(), firma, r, ctx)
+    st.image(png, use_container_width=True)
+    st.download_button("⬇️ Descargar mi ficha (PNG)", png,
+                       nombre_archivo(r["vendedor"], ctx), "image/png",
+                       key=f"dl_ficha_{vendedor_id}_{corte.isoformat()}")
+
+
 def _int0(val) -> int:
     """Convierte a int de forma segura: None y NaN devuelven 0."""
     try:
@@ -61,6 +100,9 @@ def render(client, anio: int, mes: int, nombre: str):
             fila = df.iloc[[0]]
 
     r = fila.iloc[0]
+
+    # ── Mi avance de comisiones (modelo nuevo, desde oct-2026) ──────────────
+    _seccion_mi_avance(client, anio, mes, int(r["vendedor_id"]))
 
     # Pedidos del vendedor (Autoventa) — no viene en la vista, se trae aparte.
     ped_neto = 0.0
@@ -185,13 +227,35 @@ def render(client, anio: int, mes: int, nombre: str):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _dormidos_data(_client, anio: int, mes: int, cache_key: str) -> pd.DataFrame:
+def _dormidos_data(_client, anio: int, mes: int, cache_key: str,
+                   ruts: tuple = ()) -> pd.DataFrame:
     """Historia de facturas hasta el fin del mes seleccionado, para derivar
-    dormidos. Cacheada por usuario (RLS: un vendedor solo trae sus filas)."""
+    dormidos. Cacheada por usuario (RLS: un vendedor solo trae sus filas).
+    Con `ruts` (la cartera del vendedor) trae SOLO las facturas de esos clientes
+    y solo las columnas que se usan: ~2 s en vez de bajar las ~185.000 líneas de
+    todos los vendedores desde 2024 (~70 s)."""
     import calendar as _cal
     from app.data import get_ventas_rango
     ultimo = _cal.monthrange(anio, mes)[1]
-    h = get_ventas_rango(_client, "2024-01-01", f"{anio}-{mes:02d}-{ultimo:02d}")
+    ffin = f"{anio}-{mes:02d}-{ultimo:02d}"
+    if ruts:
+        filas = []
+        lista = list(ruts)
+        for i in range(0, len(lista), 80):
+            off = 0
+            while True:
+                r = (_client.table("fact_ventas")
+                     .select("id,cliente_rut,fecha,vendedor_id,neto,tipo_dcto")
+                     .in_("cliente_rut", lista[i:i + 80])
+                     .gte("fecha", "2024-01-01").lte("fecha", ffin)
+                     .order("id").range(off, off + 999).execute())
+                filas += r.data or []
+                if len(r.data or []) < 1000:
+                    break
+                off += 1000
+        h = pd.DataFrame(filas)
+    else:
+        h = get_ventas_rango(_client, "2024-01-01", ffin)
     if h.empty:
         return h
     h = h[h["tipo_dcto"].astype(str).str.contains("factura", case=False, na=False)].copy()
@@ -207,8 +271,13 @@ def _seccion_dormidos(client, vendedor_id: int, anio: int, mes: int):
     from app.data import get_dim_cliente_full, get_cartera_map
 
     cache_key = f"{st.session_state.get('user_id', '')}:{vendedor_id}"
+    cart = get_cartera_map(client)
+    ruts = ()
+    if not cart.empty:
+        ruts = tuple(sorted(cart.loc[cart["vendedor_id"] == vendedor_id, "cliente_rut"]
+                            .dropna().unique()))
     with st.spinner("Buscando clientes dormidos…"):
-        h = _dormidos_data(client, anio, mes, cache_key)
+        h = _dormidos_data(client, anio, mes, cache_key, ruts)
     if h is None or h.empty:
         st.caption("Sin historial suficiente para detectar clientes dormidos.")
         return
@@ -228,7 +297,6 @@ def _seccion_dormidos(client, vendedor_id: int, anio: int, mes: int):
     # Dueño del cliente: la cartera oficial manda (un cliente dormido es de
     # quien lo tiene asignado, no de quien le vendió por última vez). Solo si
     # aún no se cargó la cartera se cae al último vendedor que facturó.
-    cart = get_cartera_map(client)
     asignado = {}
     if not cart.empty:
         asignado = {r["cliente_rut"]: int(r["vendedor_id"])

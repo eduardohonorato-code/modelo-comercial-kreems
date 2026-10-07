@@ -36,7 +36,8 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from app.data import get_cartera_map, get_objetivos, get_visitas_mes, habiles_e_inab
+from app.data import (get_cartera_map, get_objetivos, get_todos_vendedores,
+                      get_ventas_rango, get_visitas_mes, habiles_e_inab)
 
 _RE_RUTA = re.compile(r"^[A-Z]{2}\d\d(?:-([QM])\d)?$")
 
@@ -121,6 +122,59 @@ def _paga(cumpl, umbral: float, pct: float) -> float:
 
 def _ceil(x) -> int:
     return max(0, math.ceil(round(x, 6)))
+
+
+def base_liviana(client, anio: int, mes: int, ventas: pd.DataFrame) -> pd.DataFrame:
+    """La misma base que entrega v_comision_vendedor_mes (venta neta y objetivos
+    por vendedor), armada con las ventas del mes ya cargadas: Fact-NC = suma de
+    `neto` del mes (las NC vienen negativas), igual que la vista. Evita la vista,
+    que tarda ~9 s y a veces se cae por timeout."""
+    v = ventas.copy()
+    v["neto"] = pd.to_numeric(v.get("neto"), errors="coerce").fillna(0)
+    es_fac = v["tipo_dcto"].astype(str).str.upper().str.startswith("FACTURA")
+    agg = (v.groupby("vendedor_id")
+             .agg(fact_nc=("neto", "sum"))
+             .join(v[es_fac].groupby("vendedor_id")["n_dcto"].nunique().rename("n_facturas"))
+             .reset_index())
+    obj = get_objetivos(client, anio, mes)
+    if not obj.empty:
+        agg = agg.merge(obj[["vendedor_id", "obj_venta", "obj_maquinas", "obj_visitas"]],
+                        on="vendedor_id", how="outer")
+    cart = get_cartera_map(client)
+    if not cart.empty:
+        ids = pd.DataFrame({"vendedor_id": cart["vendedor_id"].dropna().astype(int).unique()})
+        agg = agg.merge(ids, on="vendedor_id", how="outer")
+    vend = get_todos_vendedores(client)
+    if vend.empty:
+        return pd.DataFrame()
+    agg = agg.dropna(subset=["vendedor_id"])
+    agg["vendedor_id"] = agg["vendedor_id"].astype(int)
+    agg = agg.merge(vend.rename(columns={"id": "vendedor_id"})[["vendedor_id", "nombre_canonico"]],
+                    on="vendedor_id", how="inner")
+    for c in ("fact_nc", "n_facturas"):
+        agg[c] = agg[c].fillna(0) if c in agg.columns else 0
+    for c in ("obj_venta", "obj_maquinas", "obj_visitas"):
+        if c not in agg.columns:
+            agg[c] = None
+    agg["cartera_clientes"] = None
+    return agg
+
+
+def avance_mes(client, anio: int, mes: int, corte: date):
+    """Avance del mes con el cálculo liviano (solo datos del mes). Devuelve
+    (df por vendedor, contexto, base del motor de comisiones)."""
+    from app.pages.comisiones_v1 import _calcular, _nuevos_por_maquinas
+    ini = date(anio, mes, 1)
+    fin = date(anio, mes, calendar.monthrange(anio, mes)[1])
+    if _nuevos_por_maquinas(anio, mes):
+        ventas = get_ventas_rango(client, ini.isoformat(), min(fin, corte).isoformat())
+        base = _calcular(client, anio, mes,
+                         base_df=base_liviana(client, anio, mes, ventas),
+                         hist_df=ventas)[0]
+    else:   # meses viejos: la definición de nuevos necesita la historia completa
+        base = _calcular(client, anio, mes)[0]
+    df, ctx = calcular_avance(client, anio, mes, corte, base)
+    return df, ctx, base
 
 
 def calcular_avance(client, anio: int, mes: int, corte: date,

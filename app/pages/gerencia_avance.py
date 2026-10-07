@@ -1,22 +1,25 @@
-"""Panel Gerencia → pestaña "Avance de comisiones" (modelo nuevo, desde oct-2026).
+"""Panel Gerencia → vista "Avance de comisiones" (modelo nuevo, desde oct-2026).
 
-Foto diaria del equipo con el cumplimiento proyectado de los 5 indicadores y la
-comisión proyectada, más la ficha "Mi avance del mes" de cada vendedor. Todo se
-descarga en PNG de alta calidad para mandar por WhatsApp. El cálculo vive en
-app/avance_comisiones.py y las imágenes en app/export_avance.py.
+Foto diaria del EQUIPO: cumplimiento de los 5 indicadores, lo que lleva cada
+uno hoy, la proyección al cierre y la comisión proyectada, descargable en PNG.
+Abajo, las metas del mes para editarlas sin salir del panel. La ficha individual
+"Mi avance del mes" vive en el Panel Vendedor.
+
+Rendimiento: el cálculo usa solo las ventas del mes (avance_mes), no la historia
+desde 2024 (de ~70 s a ~4 s), y queda en caché hasta que cambie una meta.
 """
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import pandas as pd
 import streamlit as st
 
-from app.avance_comisiones import (INDICADORES, calcular_avance, corte_por_defecto,
-                                   estado)
-from app.export_avance import (FUENTE_AGENDA, FUENTE_VIS, SEM, clp, ficha_png,
-                               fichas_zip, fuentes_ruta, nombre_archivo, num, pct,
-                               subtitulo, tablero_png)
+from app.avance_comisiones import avance_mes, corte_por_defecto
+from app.data import (get_comision_v1_parametros, get_objetivos, upsert_objetivo)
+from app.export_avance import (fuentes_ruta, subtitulo, tabla_tablero, tablero_png,
+                               _COLS_TABLERO, _GRUPOS_TABLERO)
 from app.styles import fmt_clp, fmt_pct
 
 MESES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
@@ -24,61 +27,49 @@ MESES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio"
          12: "Diciembre"}
 
 
-@st.cache_data(ttl=300, show_spinner="Calculando el avance del mes…")
-def _avance(_client, anio: int, mes: int, corte: date, _user: str):
-    from app.pages.comisiones_v1 import _calcular
-    base, _, _ = _calcular(_client, anio, mes)
-    return calcular_avance(_client, anio, mes, corte, base)
+def firma_metas(client, anio: int, mes: int) -> str:
+    """Huella de las metas vigentes (parámetros + objetivos del mes). Entra en la
+    llave del caché: si gerencia cambia una meta, el avance se recalcula solo."""
+    try:
+        p = get_comision_v1_parametros(client)
+        o = get_objetivos(client, anio, mes)
+        o = o.drop(columns=[c for c in o.columns if "actualizado" in c], errors="ignore")
+        return json.dumps([sorted(p.items()), o.to_dict("records")], default=str,
+                          sort_keys=True)
+    except Exception:
+        return ""
 
 
-def _celda(r, k) -> str:
-    c = r.get(f"{k}_cumpl")
-    bg, fg = SEM[estado(c, r.get(f"{k}_umbral", 0.8))]
-    return (f"<td style='background:{bg};color:{fg};font-weight:700'>"
-            f"{pct(c)}</td>")
+@st.cache_data(ttl=600, show_spinner="Calculando el avance del mes…")
+def avance_cacheado(_client, anio: int, mes: int, corte: date, usuario: str, firma: str):
+    """`usuario` va en la llave a propósito: con RLS cada usuario ve datos
+    distintos (un vendedor solo los suyos) y el caché no se puede compartir."""
+    return avance_mes(_client, anio, mes, corte)
 
 
-def _tabla_html(df: pd.DataFrame) -> str:
-    grupos = [("Cuota de venta", 3), ("Clientes nuevos", 3), ("Cobertura de ruta", 4),
-              ("Efectividad de cartera", 4), ("Amplitud de SKU", 3), ("Comisión proyectada", 4)]
-    r0 = df.iloc[0]
-    g = "<th></th>" + "".join(f"<th colspan='{n}'>{t}</th>" for t, n in grupos)
-    h = ("<th style='text-align:left'>Vendedor</th>"
-         "<th>Venta</th><th>Meta</th><th title='Cumplimiento proyectado al cierre'>Proy.</th>"
-         "<th>Llevas</th><th>Meta</th><th>Proy.</th>"
-         "<th>Visitas</th><th title='Visitas programadas del mes'>Program.</th>"
-         f"<th title='Visitas que debe hacer: {pct(r0['ruta_meta'])} de las programadas'>"
-         f"Meta {pct(r0['ruta_meta'])}</th><th>Proy.</th>"
-         "<th>Compraron</th><th>Cartera</th>"
-         f"<th title='Clientes que deben comprar: {pct(r0['cobertura_meta'])} de la cartera'>"
-         f"Meta {pct(r0['cobertura_meta'])}</th><th>Proy.</th>"
-         "<th>SKU/cli.</th><th>Meta</th><th>Proy.</th>"
-         "<th>Tasa</th><th>Comisión</th><th>Si cumple todo</th><th>Se deja</th>")
+def _usuario() -> str:
+    return str(st.session_state.get("user_id", ""))
+
+
+def _tabla_html(d: pd.DataFrame) -> str:
+    disp, texto, fondo = tabla_tablero(d)
+    cols = [k for k, _ in _COLS_TABLERO]
+    g = "<th></th>"
+    for titulo, color, c0, c1 in _GRUPOS_TABLERO:
+        g += (f"<th colspan='{c1 - c0 + 1}' style='background:{color};color:white'>"
+              f"{titulo.title()}</th>")
+    h = "".join(f"<th{' style=text-align:left' if k == 'vend' else ''}>{t}</th>"
+                for k, t in _COLS_TABLERO)
     filas = ""
-    for _, r in df.iterrows():
-        ruta_tip = (f"Programadas: {FUENTE_AGENDA.get(r['ruta_fuente'], '—')} · "
-                    f"Hechas: {FUENTE_VIS.get(r['ruta_fuente_vis'], '—')}")
-        filas += (
-            f"<tr><td style='text-align:left'>{r['vendedor']}</td>"
-            f"<td>{clp(r['cuota_llevas'])}</td><td>{clp(r['cuota_meta'])}</td>{_celda(r, 'cuota')}"
-            f"<td>{num(r['nuevos_llevas'])}</td><td>{num(r['nuevos_meta'])}</td>{_celda(r, 'nuevos')}"
-            f"<td title='{ruta_tip}'>{num(r['ruta_llevas'])}</td>"
-            f"<td title='{ruta_tip}'>{num(r['ruta_agend'])}</td>"
-            f"<td>{num(r['ruta_meta_n'])}</td>{_celda(r, 'ruta')}"
-            f"<td>{num(r['cobertura_llevas'])}</td><td>{num(r['cobertura_cartera'])}</td>"
-            f"<td>{num(r['cobertura_meta_n'])}</td>{_celda(r, 'cobertura')}"
-            f"<td>{num(r['amplitud_llevas'], 1)}</td><td>{num(r['amplitud_meta'], 1)}</td>"
-            f"{_celda(r, 'amplitud')}"
-            f"<td>{pct(r['tasa_proy'], 2)}</td><td><strong>{clp(r['comision_proy'])}</strong></td>"
-            f"<td>{clp(r['si_todo'])}</td><td>{clp(r['dejando'])}</td></tr>")
-    vp = df["venta_proy"].sum()
-    filas += (
-        f"<tr class='total-row'><td style='text-align:left'>TOTAL EQUIPO</td>"
-        f"<td>{clp(df['cuota_llevas'].sum())}</td><td>{clp(df['cuota_meta'].sum(min_count=1))}</td>"
-        + "<td></td>" * 15
-        + f"<td>{pct(df['comision_proy'].sum() / vp, 2) if vp else '—'}</td>"
-          f"<td>{clp(df['comision_proy'].sum())}</td><td>{clp(df['si_todo'].sum())}</td>"
-          f"<td>{clp(df['dejando'].sum())}</td></tr>")
+    ult = len(disp) - 1
+    for i, fila in disp.iterrows():
+        tds = ""
+        for k in cols:
+            estilo = "text-align:left;" if k == "vend" else ""
+            if (i, k) in fondo:
+                estilo += f"background:{fondo[(i, k)]};color:{texto[(i, k)]};font-weight:700;"
+            tds += f"<td style='{estilo}'>{fila[k]}</td>"
+        filas += f"<tr{' class=total-row' if i == ult else ''}>{tds}</tr>"
     return (f"<div class='tabla-container'><table class='kreems'><thead><tr>{g}</tr>"
             f"<tr>{h}</tr></thead><tbody>{filas}</tbody></table></div>")
 
@@ -88,51 +79,49 @@ def render_avance(client, anio: int, mes: int):
     if corte_def is None:
         st.info(f"{MESES[mes]} {anio} todavía no empieza: no hay avance que mostrar.")
         return
-    ini = date(anio, mes, 1)
     c1, c2 = st.columns([1, 3])
     corte = c1.date_input(
-        "Fecha de corte", value=corte_def, min_value=ini, max_value=corte_def,
-        format="DD-MM-YYYY", key=f"corte_avance_{anio}_{mes}",
-        help="Último día con datos cargados. Por defecto, ayer: la carga diaria "
-             "corre de madrugada.")
+        "Fecha de corte", value=corte_def, min_value=date(anio, mes, 1),
+        max_value=corte_def, format="DD-MM-YYYY", key=f"corte_avance_{anio}_{mes}",
+        help="Último día con datos cargados. Por defecto, ayer: la carga diaria corre "
+             "de madrugada.")
 
-    df, ctx = _avance(client, anio, mes, corte, str(st.session_state.get("user_id", "")))
+    df, ctx, base = avance_cacheado(client, anio, mes, corte, _usuario(),
+                                    firma_metas(client, anio, mes))
     if df is None or df.empty:
         st.info("Sin datos de comisiones para el período.")
         return
     if not ctx["dias_transcurridos"]:
-        st.info("Todavía no hay días hábiles transcurridos en el mes: la proyección "
-                "parte desde el primer día hábil.")
+        st.info("Todavía no hay días hábiles transcurridos: la proyección parte el primer "
+                "día hábil del mes.")
+        _metas(client, anio, mes, df, base)
         return
 
-    # Quiénes van en el panel: con objetivo de venta cargado; si aún no hay
-    # objetivos del mes, los que ya facturaron algo (deja fuera a quien no vende).
+    # Quiénes van: con objetivo de venta; si aún no hay objetivos, los que facturaron.
     con_obj = df[df["cuota_meta"].fillna(0) > 0]
-    defecto = (con_obj if not con_obj.empty else df[df["cuota_llevas"] > 0])["vendedor"]
+    defecto = set((con_obj if not con_obj.empty else df[df["cuota_llevas"] > 0])["vendedor"])
     nombres = df["vendedor"].tolist()
     sel = c2.multiselect("Vendedores en el panel", nombres,
-                         default=[n for n in nombres if n in set(defecto)],
+                         default=[n for n in nombres if n in defecto],
                          key=f"vend_avance_{anio}_{mes}")
     d = df[df["vendedor"].isin(sel)].sort_values("comision_proy", ascending=False)
     if d.empty:
         st.info("Elige al menos un vendedor.")
+        _metas(client, anio, mes, df, base)
         return
 
     st.caption(f"**{subtitulo(ctx)}** · Proyección lineal por días hábiles: lo que lleva "
                f"÷ {ctx['dias_transcurridos']} días × {ctx['dias_mes']} días. Los primeros "
                "3–4 días hábiles la proyección salta mucho; desde la 2ª semana es confiable.")
 
-    avisos = []
     sin_obj = d[d["cuota_meta"].isna() | (d["cuota_meta"] == 0)]["vendedor"].tolist()
+    avisos = []
     if sin_obj:
-        avisos.append(f"<strong>{len(sin_obj)} sin objetivo de venta</strong> del mes: "
-                      f"la cuota no paga ni proyecta hasta cargarlo en <em>Editar objetivos "
-                      f"del período</em> (abajo). → {', '.join(sin_obj)}.")
+        avisos.append(f"<strong>{len(sin_obj)} sin objetivo de venta</strong>: cárgalo en "
+                      f"<em>Metas del mes</em> (abajo) → {', '.join(sin_obj)}.")
     if not ctx["visitas_habilitadas"]:
         avisos.append("<strong>Visitas sin carga automática:</strong> falta correr "
-                      "<code>sql/045_fact_visitas.sql</code> en Supabase. Mientras tanto "
-                      "la cobertura de ruta solo cuenta lo cargado desde el reporte de "
-                      "Autoventa en Comisiones.")
+                      "<code>sql/045_fact_visitas.sql</code>.")
     if avisos:
         st.markdown('<div class="nota-embudo" style="border-left-color:#f59e0b">⚠️ '
                     + "<br>".join(avisos) + "</div>", unsafe_allow_html=True)
@@ -164,79 +153,105 @@ def render_avance(client, anio: int, mes: int):
     """, unsafe_allow_html=True)
 
     st.markdown(_tabla_html(d), unsafe_allow_html=True)
-    st.caption("Proy. = cumplimiento proyectado al cierre. Verde ≥ 100% · Amarillo = "
-               "cobra parcial (desde el piso) · Rojo = bajo el piso, no cobra ese indicador. "
-               + fuentes_ruta(d))
+    st.caption("**Hoy** = lo que lleva a la fecha · **Proy.** = cumplimiento proyectado al "
+               "cierre contra la meta (es lo que define si cobra) · **SKU/cliente** es un "
+               "promedio: se compara directo con la meta. Verde ≥ 100% · Amarillo = cobra "
+               "parcial (desde el piso) · Rojo = bajo el piso, no cobra. Clientes nuevos = "
+               "máquinas nuevas (FL-4) facturadas. " + fuentes_ruta(d))
 
-    # ── Descargas PNG ───────────────────────────────────────────────────────
-    st.markdown('<div class="seccion-titulo">Imágenes para enviar por WhatsApp</div>',
-                unsafe_allow_html=True)
     clave = f"{anio}_{mes:02d}_{corte.isoformat()}"
-    col_t, col_f = st.columns(2)
-    with col_t:
-        st.markdown("**Tablero del equipo**")
-        if st.button("🖼️ Generar tablero PNG", key=f"btn_tab_{clave}",
-                     use_container_width=True):
-            st.session_state[f"_png_tab_{clave}"] = tablero_png(d, ctx, anio, mes)
-        png = st.session_state.get(f"_png_tab_{clave}")
-        if png:
-            st.download_button("⬇️ Descargar tablero", png,
-                               f"avance_equipo_{corte.isoformat()}.png", "image/png",
-                               key=f"dl_tab_{clave}", use_container_width=True)
-        if st.button("📦 Generar todas las fichas (ZIP)", key=f"btn_zip_{clave}",
-                     use_container_width=True):
-            st.session_state[f"_zip_{clave}"] = fichas_zip(d, ctx)
-        z = st.session_state.get(f"_zip_{clave}")
-        if z:
-            st.download_button("⬇️ Descargar fichas (ZIP)", z,
-                               f"fichas_vendedores_{corte.isoformat()}.zip",
-                               "application/zip", key=f"dl_zip_{clave}",
-                               use_container_width=True)
-    with col_f:
-        st.markdown("**Ficha de un vendedor** (\"Mi avance del mes\")")
-        quien = st.selectbox("Vendedor", d["vendedor"].tolist(), key=f"sel_ficha_{clave}",
-                             label_visibility="collapsed")
-        r = d[d["vendedor"] == quien].iloc[0]
-        k_png = f"_png_ficha_{clave}_{r['vendedor_id']}"
-        if st.button("🖼️ Generar ficha PNG", key=f"btn_ficha_{clave}",
-                     use_container_width=True):
-            st.session_state[k_png] = ficha_png(r, ctx)
-        png = st.session_state.get(k_png)
-        if png:
-            st.download_button("⬇️ Descargar ficha", png, nombre_archivo(quien, ctx),
-                               "image/png", key=f"dl_ficha_{clave}_{r['vendedor_id']}",
-                               use_container_width=True)
-    if png := st.session_state.get(k_png):
-        st.image(png, use_container_width=True)
+    if st.button("🖼️ Generar tablero del equipo en PNG", key=f"btn_tab_{clave}"):
+        st.session_state[f"_png_tab_{clave}"] = tablero_png(d, ctx, anio, mes)
+    png = st.session_state.get(f"_png_tab_{clave}")
+    if png:
+        st.download_button("⬇️ Descargar tablero (PNG)", png,
+                           f"avance_equipo_{corte.isoformat()}.png", "image/png",
+                           key=f"dl_tab_{clave}")
+    st.caption("La ficha individual de cada vendedor (\"Mi avance del mes\") está en el "
+               "**Panel Vendedor**.")
+
+    _metas(client, anio, mes, df, base)
 
     with st.expander("ℹ️ Cómo se calcula cada número", expanded=False):
         st.markdown(f"""
         <div class="nota-embudo"><ul>
           <li><strong>Comisión = tasa × venta neta del mes.</strong> La tasa suma los 5
-              indicadores (cuota 1,50% · nuevos 1,00% · efectividad 1,00% · amplitud 0,75%
-              · ruta 0,75% = 5,00%). Cada uno paga desde su piso, proporcional a lo que
-              cumple, con tope 100%. Es el mismo motor de <em>Comisiones → Propuesta</em>:
-              las metas, pisos y definiciones se cambian ahí.</li>
+              indicadores (cuota 1,50% · nuevos 1,00% · efectividad 1,00% · ruta 0,75% ·
+              SKU 0,75% = 5,00%). Cada uno paga desde su piso, proporcional, tope 100%.</li>
           <li><strong>Proyección al cierre:</strong> lo acumulado ÷ días hábiles
               transcurridos × días hábiles del mes ({ctx['dias_transcurridos']} de
-              {ctx['dias_mes']}). La amplitud es un promedio y se proyecta igual a lo que
-              lleva; la efectividad se topa en el 100% de la cartera.</li>
-          <li><strong>Cartera:</strong> clientes asignados en la cartera oficial de
-              Autoventa. <strong>Compraron</strong>: clientes distintos con factura en el mes.</li>
-          <li><strong>Visitas programadas</strong>, en este orden: (1) el reporte de
-              Autoventa cargado en <em>Comisiones → Cobertura de ruta</em>; (2) el
-              <em>Obj. visitas</em> de este panel (ahí se cargaron los agendamientos de
-              septiembre); (3) si no hay ninguno, se estiman con la ruta de la casa matriz
-              de cada cliente de la cartera: semanal = 1 por semana del mes
-              ({ctx['semanas']} semanas), quincenal (-Q) = la mitad, mensual (-M) = 1.
-              Autoventa agenda por semana; la estimación quedó a 4% del reporte de
-              septiembre. Para que sea exacto, carga los agendamientos del mes en
-              <em>Obj. visitas</em> apenas Autoventa los tenga.</li>
-          <li><strong>Visitas hechas:</strong> del reporte si ya trae visitas; si no, el GPS
-              de Autoventa (carga diaria automática) contando una visita por cliente por
-              semana: 6,8% de diferencia con el reporte en julio y 3,5% en septiembre. El
-              dato oficial para pagar es el reporte de fin de mes.</li>
-          <li><strong>Si cumple todo</strong> = 5% × la mayor entre la meta y la venta
-              proyectada. <strong>Se deja</strong> = esa cifra − la comisión proyectada.</li>
+              {ctx['dias_mes']}). SKU es un promedio y no se proyecta; la efectividad se
+              topa en el 100% de la cartera.</li>
+          <li><strong>Clientes nuevos</strong> = máquinas nuevas (FL-4) facturadas en el
+              mes, igual que "Máq. ingresadas"; meta = objetivo de máquinas.</li>
+          <li><strong>Cartera:</strong> cartera oficial de Autoventa. <strong>Compraron</strong>:
+              clientes distintos con factura en el mes.</li>
+          <li><strong>Visitas programadas:</strong> reporte de Autoventa cargado en Comisiones
+              → si no, "Visitas programadas" de las metas del mes → si no, estimadas con la
+              ruta de cada cliente (semanal = 1 por semana, quincenal = la mitad, mensual =
+              1; 4% de error contra el reporte de septiembre).</li>
+          <li><strong>Visitas hechas:</strong> GPS de Autoventa, una por cliente por semana
+              (3,5–6,8% de diferencia con el reporte). Para pagar manda el reporte oficial.</li>
         </ul></div>
         """, unsafe_allow_html=True)
+
+
+# ── Metas del mes (editables aquí mismo) ────────────────────────────────────
+def _metas(client, anio: int, mes: int, df: pd.DataFrame, base: pd.DataFrame):
+    from app.pages.comisiones_v1 import _editor_metas_generales, _editor_umbrales
+
+    st.markdown('<div class="seccion-titulo">🎯 Metas del mes</div>',
+                unsafe_allow_html=True)
+    tab_v, tab_g, tab_p = st.tabs(["Por vendedor", "Generales (%, SKU)", "Piso de pago"])
+
+    with tab_v:
+        st.caption(f"Metas de **{MESES[mes]} {anio}** por vendedor. La meta de clientes "
+                   "nuevos es el objetivo de máquinas. \"Visitas programadas\": si cargas "
+                   "aquí el total del mes que muestra Autoventa, el panel lo usa en vez de "
+                   "estimarlo (0 = estimar por ruta).")
+        obj = get_objetivos(client, anio, mes)
+        ids = df[["vendedor_id", "vendedor"]].copy()
+        if not obj.empty:
+            ids = ids.merge(obj[["vendedor_id", "obj_venta", "obj_maquinas", "obj_visitas"]],
+                            on="vendedor_id", how="left")
+        for c in ("obj_venta", "obj_maquinas", "obj_visitas"):
+            if c not in ids.columns:
+                ids[c] = 0
+            ids[c] = pd.to_numeric(ids[c], errors="coerce").fillna(0).astype(int)
+        ids = ids.sort_values("vendedor").reset_index(drop=True)
+        ed = st.data_editor(
+            ids.drop(columns=["vendedor_id"]), hide_index=True, use_container_width=True,
+            disabled=["vendedor"], key=f"ed_metas_{anio}_{mes}",
+            column_config={
+                "vendedor": st.column_config.TextColumn("Vendedor"),
+                "obj_venta": st.column_config.NumberColumn(
+                    "Objetivo de venta ($)", min_value=0, step=100000, format="%d"),
+                "obj_maquinas": st.column_config.NumberColumn(
+                    "Clientes nuevos (máquinas)", min_value=0, step=1),
+                "obj_visitas": st.column_config.NumberColumn(
+                    "Visitas programadas", min_value=0, step=1,
+                    help="Total del mes según Autoventa. 0 = estimar por la ruta."),
+            })
+        if st.button("💾 Guardar metas por vendedor", type="primary",
+                     key=f"save_metas_{anio}_{mes}"):
+            n = 0
+            try:
+                for i, r in ed.iterrows():
+                    orig = ids.iloc[i]
+                    if any(int(r[c] or 0) != int(orig[c]) for c in
+                           ("obj_venta", "obj_maquinas", "obj_visitas")):
+                        upsert_objetivo(client, int(orig["vendedor_id"]), anio, mes,
+                                        float(r["obj_venta"] or 0), int(r["obj_maquinas"] or 0),
+                                        int(r["obj_visitas"] or 0))
+                        n += 1
+                st.success(f"✅ {n} vendedor(es) actualizados." if n else "Sin cambios.")
+                if n:
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error al guardar: {e}")
+
+    with tab_g:
+        _editor_metas_generales(client, anio, mes)
+
+    with tab_p:
+        _editor_umbrales(client, base)
