@@ -178,7 +178,9 @@ def render_avance(client, anio: int, mes: int):
                "si el mes cerrara hoy · **Proyectada** = al ritmo de hoy hasta fin de mes. "
                "Clientes nuevos = máquinas nuevas (FL-4) facturadas. " + fuentes_ruta(d))
 
-    clave = f"{anio}_{mes:02d}_{corte.isoformat()}"
+    # La versión del cálculo va en la clave: un PNG generado antes de un deploy no
+    # debe seguir ofreciéndose con el formato viejo.
+    clave = f"{anio}_{mes:02d}_{corte.isoformat()}_{_version_calculo()[:8]}"
     if st.button("🖼️ Generar tablero del equipo en PNG", key=f"btn_tab_{clave}"):
         st.session_state[f"_png_tab_{clave}"] = tablero_png(d, ctx, anio, mes)
     png = st.session_state.get(f"_png_tab_{clave}")
