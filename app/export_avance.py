@@ -320,6 +320,8 @@ def ficha_png(r, ctx: dict, dpi: int = 220) -> bytes:
     # ── Tarjetas ────────────────────────────────────────────────────────────
     from app.pages.comisiones_v1 import TASA_MAX
     tarjetas = [
+        ("COMISIÓN HOY", clp(r.get("comision_hoy")),
+         f"si el mes cerrara hoy · tasa {pct(r.get('tasa_hoy'), 2)}", "#E9ECF5", VINO, GRIS),
         ("COMISIÓN PROYECTADA", clp(r["comision_proy"]), "si sigues al ritmo de hoy",
          VINO, "white", "white"),
         ("TU TASA PROYECTADA", pct(r["tasa_proy"], 2),
@@ -329,7 +331,7 @@ def ficha_png(r, ctx: dict, dpi: int = 220) -> bytes:
         ("TE ESTÁS DEJANDO EN LA MESA", clp(r["dejando"]),
          "lo que ganas si llevas todo al 100%", "#FFF3CC", "#A36A10", "#A36A10"),
     ]
-    anchos = [2.95, 2.95, 3.3, X1 - X0 - 9.2]
+    anchos = [2.55, 2.6, 2.45, 2.6, X1 - X0 - 10.2]
     x, y, h = X0, 1.22, 0.98
     for (lab, val, sub, bg, fg, fs), w in zip(tarjetas, anchos):
         caja(x, y, w, h, bg)
