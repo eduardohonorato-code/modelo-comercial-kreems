@@ -194,11 +194,11 @@ def fuentes_ruta(df: pd.DataFrame) -> str:
 # ── Tablero del equipo ──────────────────────────────────────────────────────
 _GRUPOS_TABLERO = [
     ("CUOTA DE VENTA (FACT-NC)", "#1E5FA5", 1, 4),
-    ("NUEVOS (MÁQ.)", "#1A7F4B", 5, 6),
-    ("COBERTURA DE RUTA", "#C2185B", 7, 9),
-    ("EFECTIVIDAD DE CARTERA", "#6A4C93", 10, 12),
-    ("AMPLITUD SKU", "#7A8B2E", 13, 14),
-    ("COMISIÓN", VINO, 15, 18),
+    ("CLIENTES NUEVOS", "#1A7F4B", 5, 7),
+    ("COBERTURA DE RUTA", "#C2185B", 8, 10),
+    ("EFECTIVIDAD DE CARTERA", "#6A4C93", 11, 13),
+    ("AMPLITUD SKU", "#7A8B2E", 14, 15),
+    ("COMISIÓN", VINO, 16, 19),
 ]
 # Columnas del tablero: (clave interna, encabezado). En cuota, "% proy." =
 # venta proyectada ÷ meta. En el resto se muestra lo que lleva HOY; su color dice
@@ -206,7 +206,7 @@ _GRUPOS_TABLERO = [
 _COLS_TABLERO = [
     ("vend", "Vendedor"),
     ("c_v", "Fact-NC"), ("c_m", "Meta"), ("c_vp", "Fact-NC proy."), ("c_p", "% proy."),
-    ("n_l", "Llevas"), ("n_m", "Meta"),
+    ("n_l", "Máquinas"), ("n_h", "Llevas"), ("n_m", "Meta"),
     ("r_l", "Visitas / Progr."), ("r_h", "Llevas"), ("r_m", "Meta"),
     ("e_l", "Compraron / Cartera"), ("e_h", "Llevas"), ("e_m", "Meta"),
     ("s_l", "SKU/cliente"), ("s_m", "Meta"),
@@ -222,7 +222,7 @@ def tabla_tablero(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
     """DataFrame de strings + colores (texto, fondo) de las celdas con semáforo."""
     filas, fondo, texto = [], {}, {}
     cols = [k for k, _ in _COLS_TABLERO]
-    color_col = {"cuota": "c_p", "nuevos": "n_l", "ruta": "r_h", "cobertura": "e_h",
+    color_col = {"cuota": "c_p", "nuevos": "n_h", "ruta": "r_h", "cobertura": "e_h",
                  "amplitud": "s_l"}
     for i, (_, r) in enumerate(df.iterrows()):
         ag, cart = r.get("ruta_agend"), r.get("cobertura_cartera")
@@ -231,6 +231,8 @@ def tabla_tablero(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
             "c_v": clp(r["cuota_llevas"]), "c_m": clp(r["cuota_meta"]),
             "c_vp": clp(r["venta_proy"]), "c_p": pct(r["cuota_cumpl"]),
             "n_l": num(r["nuevos_llevas"]), "n_m": num(r["nuevos_meta"]),
+            "n_h": (pct(r["nuevos_llevas"] / r["nuevos_meta"])
+                    if _ok(r.get("nuevos_meta")) and r["nuevos_meta"] else "—"),
             "r_l": f"{num(r['ruta_llevas'])} / {num(ag)}" if _ok(ag) and ag else "—",
             "r_h": pct(r.get("ruta_pct")), "r_m": pct(r.get("ruta_meta")),
             "e_l": f"{num(r['cobertura_llevas'])} / {num(cart)}" if _ok(cart) and cart else "—",
@@ -273,7 +275,7 @@ def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int) -> bytes:
     return tabla_png(disp, f"AVANCE DE COMISIONES · {MESES[mes].upper()} {anio}",
                      subtitulo(ctx), color_celdas=texto, fondo_celdas=fondo,
                      resaltar_ultima=True, col_labels=_labels_tablero(df),
-                     grupos=_GRUPOS_TABLERO, notas=notas, dpi=220)
+                     grupos=_GRUPOS_TABLERO, notas=notas, dpi=220, marcos=True)
 
 
 # ── Ficha del vendedor ──────────────────────────────────────────────────────

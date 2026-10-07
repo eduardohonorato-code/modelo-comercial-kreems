@@ -77,14 +77,23 @@ def _tabla_html(d: pd.DataFrame) -> str:
     for titulo, color, c0, c1 in _GRUPOS_TABLERO:
         g += (f"<th colspan='{c1 - c0 + 1}' style='background:{color};color:white'>"
               f"{titulo.title()}</th>")
-    h = "".join(f"<th{' style=text-align:left' if k == 'vend' else ''}>{t}</th>"
-                for k, t in _COLS_TABLERO)
+    # Marco del color de cada categoría: borde izquierdo en su 1ª columna y
+    # derecho en la última, de arriba a abajo.
+    borde, color_de = {}, {}
+    for _t, color, c0, c1 in _GRUPOS_TABLERO:
+        color_de.update({cols[j]: color for j in range(c0, c1 + 1)})
+        borde[cols[c0]] = borde.get(cols[c0], "") + f"border-left:3px solid {color};"
+        borde[cols[c1]] = borde.get(cols[c1], "") + f"border-right:3px solid {color};"
+    h = "".join(f"<th style='{'text-align:left;' if k == 'vend' else ''}{borde.get(k, '')}'>"
+                f"{t}</th>" for k, t in _COLS_TABLERO)
     filas = ""
     ult = len(disp) - 1
     for i, fila in disp.iterrows():
         tds = ""
         for k in cols:
-            estilo = "text-align:left;" if k == "vend" else ""
+            estilo = ("text-align:left;" if k == "vend" else "") + borde.get(k, "")
+            if i == ult and k in color_de:
+                estilo += f"border-bottom:3px solid {color_de[k]};"
             if (i, k) in fondo:
                 estilo += f"background:{fondo[(i, k)]};color:{texto[(i, k)]};font-weight:700;"
             tds += f"<td style='{estilo}'>{fila[k]}</td>"

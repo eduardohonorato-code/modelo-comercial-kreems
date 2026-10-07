@@ -112,7 +112,7 @@ def to_xlsx_multi(hojas: dict) -> bytes:
 def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = None,
               resaltar_ultima: bool = False, col_labels=None, grupos=None,
               dpi: int = 200, fondo_celdas: dict | None = None,
-              notas: str = "") -> bytes:
+              notas: str = "", marcos: bool = False) -> bytes:
     """
     Render de un DataFrame de STRINGS ya formateados a PNG.
 
@@ -127,6 +127,8 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     - `fondo_celdas`: dict {(fila_idx, nombre_col): color_hex} para el FONDO de la
       celda (semáforos con relleno). Se combina con `color_celdas` para el texto.
     - `notas`: texto chico al pie de la tabla (leyenda de colores, fuentes).
+    - `marcos`: con `grupos`, dibuja un marco del color de cada grupo alrededor de
+      sus columnas (encabezado + filas), para separar las categorías hacia abajo.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -232,6 +234,10 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
             ax.text((gx0 + gx1) / 2, y0 + band_frac / 2, titulo_g,
                     ha="center", va="center", fontsize=fs, fontweight="bold",
                     color="white", clip_on=False)
+            if marcos:
+                ax.add_patch(Rectangle((gx0 + 0.0008, 0.0015), (gx1 - gx0) - 0.0016,
+                                       y0 - 0.003, facecolor="none", edgecolor=color_g,
+                                       linewidth=2.4, clip_on=False, zorder=5))
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight",
