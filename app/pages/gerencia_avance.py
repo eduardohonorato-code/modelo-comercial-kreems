@@ -39,14 +39,19 @@ def _celda(r, k) -> str:
 
 
 def _tabla_html(df: pd.DataFrame) -> str:
-    grupos = [("Cuota de venta", 3), ("Clientes nuevos", 3), ("Cobertura de ruta", 3),
-              ("Efectividad de cartera", 3), ("Amplitud de SKU", 3), ("Comisión proyectada", 4)]
+    grupos = [("Cuota de venta", 3), ("Clientes nuevos", 3), ("Cobertura de ruta", 4),
+              ("Efectividad de cartera", 4), ("Amplitud de SKU", 3), ("Comisión proyectada", 4)]
+    r0 = df.iloc[0]
     g = "<th></th>" + "".join(f"<th colspan='{n}'>{t}</th>" for t, n in grupos)
     h = ("<th style='text-align:left'>Vendedor</th>"
          "<th>Venta</th><th>Meta</th><th title='Cumplimiento proyectado al cierre'>Proy.</th>"
          "<th>Llevas</th><th>Meta</th><th>Proy.</th>"
-         "<th>Visitas</th><th title='Visitas programadas del mes'>Program.</th><th>Proy.</th>"
-         "<th>Compraron</th><th>Cartera</th><th>Proy.</th>"
+         "<th>Visitas</th><th title='Visitas programadas del mes'>Program.</th>"
+         f"<th title='Visitas que debe hacer: {pct(r0['ruta_meta'])} de las programadas'>"
+         f"Meta {pct(r0['ruta_meta'])}</th><th>Proy.</th>"
+         "<th>Compraron</th><th>Cartera</th>"
+         f"<th title='Clientes que deben comprar: {pct(r0['cobertura_meta'])} de la cartera'>"
+         f"Meta {pct(r0['cobertura_meta'])}</th><th>Proy.</th>"
          "<th>SKU/cli.</th><th>Meta</th><th>Proy.</th>"
          "<th>Tasa</th><th>Comisión</th><th>Si cumple todo</th><th>Se deja</th>")
     filas = ""
@@ -58,9 +63,10 @@ def _tabla_html(df: pd.DataFrame) -> str:
             f"<td>{clp(r['cuota_llevas'])}</td><td>{clp(r['cuota_meta'])}</td>{_celda(r, 'cuota')}"
             f"<td>{num(r['nuevos_llevas'])}</td><td>{num(r['nuevos_meta'])}</td>{_celda(r, 'nuevos')}"
             f"<td title='{ruta_tip}'>{num(r['ruta_llevas'])}</td>"
-            f"<td title='{ruta_tip}'>{num(r['ruta_agend'])}</td>{_celda(r, 'ruta')}"
+            f"<td title='{ruta_tip}'>{num(r['ruta_agend'])}</td>"
+            f"<td>{num(r['ruta_meta_n'])}</td>{_celda(r, 'ruta')}"
             f"<td>{num(r['cobertura_llevas'])}</td><td>{num(r['cobertura_cartera'])}</td>"
-            f"{_celda(r, 'cobertura')}"
+            f"<td>{num(r['cobertura_meta_n'])}</td>{_celda(r, 'cobertura')}"
             f"<td>{num(r['amplitud_llevas'], 1)}</td><td>{num(r['amplitud_meta'], 1)}</td>"
             f"{_celda(r, 'amplitud')}"
             f"<td>{pct(r['tasa_proy'], 2)}</td><td><strong>{clp(r['comision_proy'])}</strong></td>"
@@ -69,7 +75,7 @@ def _tabla_html(df: pd.DataFrame) -> str:
     filas += (
         f"<tr class='total-row'><td style='text-align:left'>TOTAL EQUIPO</td>"
         f"<td>{clp(df['cuota_llevas'].sum())}</td><td>{clp(df['cuota_meta'].sum(min_count=1))}</td>"
-        + "<td></td>" * 13
+        + "<td></td>" * 15
         + f"<td>{pct(df['comision_proy'].sum() / vp, 2) if vp else '—'}</td>"
           f"<td>{clp(df['comision_proy'].sum())}</td><td>{clp(df['si_todo'].sum())}</td>"
           f"<td>{clp(df['dejando'].sum())}</td></tr>")

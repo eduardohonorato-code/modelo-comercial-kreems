@@ -195,27 +195,29 @@ def fuentes_ruta(df: pd.DataFrame) -> str:
 _GRUPOS_TABLERO = [
     ("CUOTA DE VENTA", "#1E5FA5", 1, 3),
     ("CLIENTES NUEVOS", "#1A7F4B", 4, 6),
-    ("COBERTURA DE RUTA", "#C2185B", 7, 9),
-    ("EFECTIVIDAD DE CARTERA", "#6A4C93", 10, 12),
-    ("AMPLITUD DE SKU", "#7A8B2E", 13, 15),
-    ("COMISIÓN PROYECTADA", VINO, 16, 19),
+    ("COBERTURA DE RUTA", "#C2185B", 7, 10),
+    ("EFECTIVIDAD DE CARTERA", "#6A4C93", 11, 14),
+    ("AMPLITUD DE SKU", "#7A8B2E", 15, 17),
+    ("COMISIÓN PROYECTADA", VINO, 18, 21),
 ]
-_LABELS_TABLERO = [
-    "Vendedor",
-    "Venta", "Meta", "Proy.",
-    "Llevas", "Meta", "Proy.",
-    "Visitas", "Program.", "Proy.",
-    "Compraron", "Cartera", "Proy.",
-    "SKU/cli.", "Meta", "Proy.",
-    "Tasa", "Comisión", "Si cumple todo", "Se deja",
-]
+
+
+def _labels_tablero(df: pd.DataFrame) -> list:
+    r0 = df.iloc[0]
+    return ["Vendedor",
+            "Venta", "Meta", "Proy.",
+            "Llevas", "Meta", "Proy.",
+            "Visitas", "Program.", f"Meta {pct(r0['ruta_meta'])}", "Proy.",
+            "Compraron", "Cartera", f"Meta {pct(r0['cobertura_meta'])}", "Proy.",
+            "SKU/cli.", "Meta", "Proy.",
+            "Tasa", "Comisión", "Si cumple todo", "Se deja"]
 
 
 def tabla_tablero(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
     """DataFrame de strings + colores (texto, fondo) de las columnas 'Proy.'."""
     filas, fondo, texto = [], {}, {}
-    cols = ["Vendedor", "c_v", "c_m", "c_p", "n_l", "n_m", "n_p", "r_v", "r_a", "r_p",
-            "e_c", "e_t", "e_p", "s_l", "s_m", "s_p", "tasa", "com", "todo", "deja"]
+    cols = ["Vendedor", "c_v", "c_m", "c_p", "n_l", "n_m", "n_p", "r_v", "r_a", "r_m", "r_p",
+            "e_c", "e_t", "e_m", "e_p", "s_l", "s_m", "s_p", "tasa", "com", "todo", "deja"]
     proy_col = {"cuota": "c_p", "nuevos": "n_p", "ruta": "r_p", "cobertura": "e_p",
                 "amplitud": "s_p"}
     for i, (_, r) in enumerate(df.iterrows()):
@@ -223,8 +225,10 @@ def tabla_tablero(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
             r["vendedor"],
             clp(r["cuota_llevas"]), clp(r["cuota_meta"]), pct(r["cuota_cumpl"]),
             num(r["nuevos_llevas"]), num(r["nuevos_meta"]), pct(r["nuevos_cumpl"]),
-            num(r["ruta_llevas"]), num(r["ruta_agend"]), pct(r["ruta_cumpl"]),
-            num(r["cobertura_llevas"]), num(r["cobertura_cartera"]), pct(r["cobertura_cumpl"]),
+            num(r["ruta_llevas"]), num(r["ruta_agend"]), num(r["ruta_meta_n"]),
+            pct(r["ruta_cumpl"]),
+            num(r["cobertura_llevas"]), num(r["cobertura_cartera"]),
+            num(r["cobertura_meta_n"]), pct(r["cobertura_cumpl"]),
             num(r["amplitud_llevas"], 1), num(r["amplitud_meta"], 1), pct(r["amplitud_cumpl"]),
             pct(r["tasa_proy"], 2), clp(r["comision_proy"]), clp(r["si_todo"]),
             clp(r["dejando"]),
@@ -233,8 +237,8 @@ def tabla_tablero(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
             bg, fg = SEM[estado(r.get(f"{k}_cumpl"), r.get(f"{k}_umbral", 0.8))]
             fondo[(i, c)], texto[(i, c)] = bg, fg
     filas.append(["TOTAL EQUIPO", clp(df["cuota_llevas"].sum()),
-                  clp(df["cuota_meta"].sum(min_count=1)), "", "", "", "", "", "", "",
-                  "", "", "", "", "", "",
+                  clp(df["cuota_meta"].sum(min_count=1)), "", "", "", "", "", "", "", "",
+                  "", "", "", "", "", "", "",
                   pct(df["comision_proy"].sum() / df["venta_proy"].sum(), 2)
                   if df["venta_proy"].sum() else "—",
                   clp(df["comision_proy"].sum()), clp(df["si_todo"].sum()),
@@ -246,15 +250,17 @@ def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int) -> bytes:
     disp, texto, fondo = tabla_tablero(df)
     r0 = df.iloc[0]
     notas = (
-        f"Metas: cuota = objetivo de venta del mes · nuevos = meta automática por vendedor · "
-        f"ruta = {pct(r0['ruta_meta'])} de las visitas programadas · efectividad = "
+        f"Metas: cuota = objetivo de venta del mes · nuevos = "
+        + ("instalaciones de máquina FL-4 facturadas vs objetivo de máquinas"
+           if r0.get("nuevos_modo") == "maquinas" else "1ª compra + reactivados")
+        + f" · ruta = {pct(r0['ruta_meta'])} de las visitas programadas · efectividad = "
         f"{pct(r0['cobertura_meta'])} de la cartera · amplitud = SKU distintos por cliente.\n"
         "Proy. = cumplimiento proyectado al cierre al ritmo de hoy.   Verde ≥ 100%  ·  "
         "Amarillo = cobra parcial (desde el piso)  ·  Rojo = bajo el piso, no cobra ese "
         "indicador.\n" + fuentes_ruta(df))
     return tabla_png(disp, f"AVANCE DE COMISIONES · {MESES[mes].upper()} {anio}",
                      subtitulo(ctx), color_celdas=texto, fondo_celdas=fondo,
-                     resaltar_ultima=True, col_labels=_LABELS_TABLERO,
+                     resaltar_ultima=True, col_labels=_labels_tablero(df),
                      grupos=_GRUPOS_TABLERO, notas=notas, dpi=220)
 
 

@@ -156,7 +156,8 @@ def calcular_avance(client, anio: int, mes: int, corte: date,
 
     filas = []
     for _, r in df.iterrows():
-        o = {"vendedor_id": int(r["vendedor_id"]), "vendedor": r["nombre_canonico"]}
+        o = {"vendedor_id": int(r["vendedor_id"]), "vendedor": r["nombre_canonico"],
+             "nuevos_modo": r.get("nuevos_modo")}
         umb = {k: float(_num(r.get(f"{k}_umbral")) or 0.0) for k in PCT}
 
         # ── Cuota de venta ──────────────────────────────────────────────────
@@ -203,6 +204,7 @@ def calcular_avance(client, anio: int, mes: int, corte: date,
             pct_r = pct_r_proy = None
             o.update(ruta_cumpl=None, ruta_falta=None, ruta_min=None)
         o.update(ruta_llevas=visitas, ruta_agend=agend, ruta_meta=meta_r,
+                 ruta_meta_n=(math.ceil(round(meta_r * agend, 6)) if agend else None),
                  ruta_pct=pct_r, ruta_proy=pct_r_proy, ruta_fuente=fuente,
                  ruta_fuente_vis=fuente_v)
 
@@ -221,6 +223,7 @@ def calcular_avance(client, anio: int, mes: int, corte: date,
             o.update(cobertura_cumpl=None, cobertura_falta=None, cobertura_min=None)
         o.update(cobertura_llevas=compr, cobertura_cartera=cart,
                  cobertura_meta=meta_e, cobertura_pct=pct_e,
+                 cobertura_meta_n=(math.ceil(round(meta_e * cart, 6)) if cart else None),
                  cobertura_proy=pct_e_proy)
 
         # ── Amplitud de SKU (promedio: se proyecta igual) ───────────────────

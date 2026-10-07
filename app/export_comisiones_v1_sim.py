@@ -61,7 +61,7 @@ COLS = [
     ("Objetivo de venta", "in", CLP, 14),
     ("Logro cuota", "fx", PC0, 9),
     ("Paga cuota", "fx", PC2, 9),
-    ("Nuevos + react.", "in", "0", 9),
+    ("Clientes nuevos", "in", "0", 9),
     ("Dormidos", "in", "0", 9),
     ("Meta nuevos", "in", "0", 9),
     ("Logro nuevos", "fx", PC0, 9),
@@ -90,7 +90,7 @@ L = {h: get_column_letter(i) for i, (h, *_r) in enumerate(COLS, start=1)}
 # Bloques de encabezado agrupado (fila 3) → (primera col, última col, texto)
 GRUPOS = [
     ("Venta real", "Paga cuota", "① CUOTA DE VENTA"),
-    ("Nuevos + react.", "Paga nuevos", "② CLIENTES NUEVOS"),
+    ("Clientes nuevos", "Paga nuevos", "② CLIENTES NUEVOS"),
     ("Clientes que compraron", "Paga efectividad", "③ EFECTIVIDAD DE CARTERA"),
     ("SKUs por cliente", "Paga SKU", "④ AMPLITUD DE SKU"),
     ("Visitas", "Paga ruta", "⑤ COBERTURA DE RUTA"),
@@ -131,8 +131,8 @@ def _hoja_parametros(wb, mes: int, params: dict, pesos: dict):
 
     fila(R_MES, "Mes del cálculo", mes, "0",
          nota="1–12. Define la temporada de la meta de efectividad.")
-    fila(R_TEMP, "Temporada", f'=IF(OR(B{R_MES}>=10,B{R_MES}<=3),"verano","invierno")',
-         "@", editable=False, nota="Verano = octubre a marzo.")
+    fila(R_TEMP, "Temporada", f'=IF(OR(B{R_MES}>=11,B{R_MES}<=3),"verano","invierno")',
+         "@", editable=False, nota="Temporada alta = noviembre a marzo.")
     fila(R_TOPE, "Tope de la tasa efectiva", 0.05, PC2,
          nota="Máximo que se paga sobre la venta de cada vendedor.")
 
@@ -163,11 +163,11 @@ def _hoja_parametros(wb, mes: int, params: dict, pesos: dict):
     ws.cell(rt, 5, "Los pesos deberían sumar 100%.").font = F_IT
 
     ws.cell(R_EF_V - 2, 1, "Metas generales (iguales para todos)").font = F_SEC
-    fila(R_EF_V, "Efectividad de cartera · verano", float(params.get("meta_efec_verano", 0.65)),
-         PC0, nota="% de la cartera que debe comprar en el mes (oct–mar).")
-    fila(R_EF_I, "Efectividad de cartera · invierno",
+    fila(R_EF_V, "Efectividad de cartera · nov–mar", float(params.get("meta_efec_verano", 0.65)),
+         PC0, nota="% de la cartera que debe comprar en el mes, temporada alta (nov–mar).")
+    fila(R_EF_I, "Efectividad de cartera · abr–oct",
          float(params.get("meta_efec_invierno", 0.50)), PC0,
-         nota="Idem, abr–sep. El helado se mueve ~20 puntos entre temporadas.")
+         nota="Idem, temporada baja (abr–oct). El helado se mueve ~20 puntos entre temporadas.")
     fila(R_EF_APL, "→ Meta de efectividad aplicada",
          f'=IF(B{R_TEMP}="verano",B{R_EF_V},B{R_EF_I})', PC0, editable=False,
          nota="La que corresponde a la temporada del mes.")
@@ -241,10 +241,12 @@ def _hoja_guia(wb, anio: int, mes: int):
           "5. La tasa topa en 5%, pero la comisión en pesos no tiene techo: crece con la venta."]),
         ("Las metas",
          ["Cuota: el objetivo de venta del Panel Gerencia.",
-          "Clientes nuevos: automática = máx(2; 2% de la cartera) + máx(1; 10% de sus "
-          "dormidos). Si gerencia fijó una meta manual, viene como número fijo.",
-          "Efectividad de cartera: % de la cartera según temporada (verano oct–mar / "
-          "invierno abr–sep) × cartera.",
+          "Clientes nuevos: desde octubre 2026 = instalaciones de máquina (FL-4) "
+          "facturadas en el mes, contra el objetivo de máquinas del Panel Gerencia. Hasta "
+          "septiembre: 1ª compra + reactivados, con meta automática = máx(2; 2% de la "
+          "cartera) + máx(1; 10% de sus dormidos).",
+          "Efectividad de cartera: % de la cartera según temporada (temporada alta nov–mar / "
+          "temporada baja abr–oct) × cartera.",
           "Amplitud de SKU: meta general de SKUs distintos por cliente (o la manual del vendedor).",
           "Cobertura de ruta: % × agendamientos del reporte de Autoventa. Sin agendamientos "
           "cargados el indicador queda en blanco y no suma."]),
@@ -313,10 +315,12 @@ def comisiones_v1_simulador_xlsx(df: pd.DataFrame, anio: int, mes: int,
             "Vendedor": x["nombre_canonico"],
             "Venta real": _num(x.get("fact_nc")),
             "Objetivo de venta": _num(x.get("cuota_meta")),
-            "Nuevos + react.": _num(x.get("nuevos_real")),
+            "Clientes nuevos": _num(x.get("nuevos_real")),
             "Dormidos": _num(x.get("dormidos")),
+            # Desde oct-2026 la meta de nuevos es el objetivo de máquinas (número fijo).
             "Meta nuevos": (_num(ov_nv) if ov_nv is not None and pd.notna(ov_nv)
-                            else meta_nv_auto),
+                            else _num(x.get("nuevos_meta"))
+                            if x.get("nuevos_modo") == "maquinas" else meta_nv_auto),
             "Clientes que compraron": _num(x.get("cobertura_real")),
             "Cartera": _num(x.get("cartera")),
             "SKUs por cliente": _num(x.get("amplitud_real")),
@@ -333,7 +337,7 @@ def comisiones_v1_simulador_xlsx(df: pd.DataFrame, anio: int, mes: int,
         fx = {
             "Logro cuota": lg("Venta real", "Objetivo de venta"),
             "Paga cuota": _paga(c_["Logro cuota"], k["cuota"]),
-            "Logro nuevos": lg("Nuevos + react.", "Meta nuevos"),
+            "Logro nuevos": lg("Clientes nuevos", "Meta nuevos"),
             "Paga nuevos": _paga(c_["Logro nuevos"], k["nuevos"]),
             "Meta efectividad": f"={cart}*{P}$B${R_EF_APL}",
             "Logro efectividad": lg("Clientes que compraron", "Meta efectividad"),
