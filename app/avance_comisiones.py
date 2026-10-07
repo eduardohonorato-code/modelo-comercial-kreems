@@ -7,16 +7,20 @@ usan las mismas definiciones y metas. Lo que esa planilla pedía a mano se
 calcula acá:
 
   · Clientes en cartera   → cartera oficial (tabla cartera_cliente).
-  · Visitas programadas   → reporte de Autoventa cargado en Comisiones si existe;
-                            si no, estimadas desde el código de ruta de cada
-                            cliente de la cartera: semanal = 1 por semana del
-                            mes, quincenal = media, mensual = 1. Autoventa agenda
-                            por SEMANA (jul-2026: Jorge, 103 clientes semanales
-                            × 5 semanas = 515, igual al reporte).
-  · Visitas hechas        → reporte de Autoventa si existe; si no, GPS de
-                            Autoventa (fact_visitas) contando UNA visita por
-                            cliente por semana. Validado contra el reporte:
-                            8,6% de error en jul-2026 y 3,5% en sep-2026.
+  · Visitas programadas   → en este orden: (1) reporte de Autoventa cargado en
+                            Comisiones → Cobertura de ruta; (2) "Obj. visitas"
+                            del Panel Gerencia (en sep-2026 gerencia cargó ahí
+                            los agendamientos del reporte); (3) estimadas desde
+                            el código de ruta de la casa matriz de cada cliente
+                            de la cartera: semanal = 1 por semana del mes,
+                            quincenal (-Q) = la mitad, mensual (-M) = 1.
+                            Autoventa agenda por SEMANA. Validado contra el
+                            reporte de sep-2026: 4% de error promedio (sumar las
+                            sucursales lo sube a 11%).
+  · Visitas hechas        → reporte de Autoventa si tiene visitas cargadas; si
+                            no, GPS de Autoventa (fact_visitas) contando UNA
+                            visita por cliente por semana. Validado contra el
+                            reporte: 6,8% de error en jul-2026 y 3,5% en sep-2026.
 
 Proyección al cierre: lineal por días hábiles (lo acumulado ÷ días hábiles
 transcurridos × días hábiles del mes). Amplitud de SKU es un promedio, así que
@@ -32,7 +36,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from app.data import get_cartera_map, get_visitas_mes, habiles_e_inab
+from app.data import get_cartera_map, get_objetivos, get_visitas_mes, habiles_e_inab
 
 _RE_RUTA = re.compile(r"^[A-Z]{2}\d\d(?:-([QM])\d)?$")
 
@@ -143,6 +147,12 @@ def calcular_avance(client, anio: int, mes: int, corte: date,
     df = (base.merge(agenda_estimada(get_cartera_map(client), anio, mes),
                      on="vendedor_id", how="left")
               .merge(visitas_estimadas(vis), on="vendedor_id", how="left"))
+    obj = get_objetivos(client, anio, mes)
+    if not obj.empty and "obj_visitas" in obj.columns:
+        df = df.merge(obj[["vendedor_id", "obj_visitas"]].rename(
+            columns={"obj_visitas": "agend_obj"}), on="vendedor_id", how="left")
+    else:
+        df["agend_obj"] = None
 
     filas = []
     for _, r in df.iterrows():
@@ -168,13 +178,20 @@ def calcular_avance(client, anio: int, mes: int, corte: date,
                  nuevos_min=_ceil(umb["nuevos"] * meta_n - nv) if meta_n else None)
 
         # ── Cobertura de ruta ───────────────────────────────────────────────
+        # Programadas: reporte → "Obj. visitas" del panel → estimación por ruta.
+        # Hechas: reporte si ya trae visitas → GPS (una por cliente por semana).
         ag_of, vi_of = _num(r.get("agendamientos")), _num(r.get("visitas"))
+        ag_obj = _num(r.get("agend_obj"))
         if ag_of:
-            agend, visitas, fuente = ag_of, (vi_of or 0.0), "reporte"
+            agend, fuente = ag_of, "reporte"
+        elif ag_obj:
+            agend, fuente = ag_obj, "objetivo"
         else:
-            agend = _num(r.get("agend_est"))
-            visitas = _num(r.get("vis_est")) or 0.0
-            fuente = "estimado"
+            agend, fuente = _num(r.get("agend_est")), "estimado"
+        if vi_of:
+            visitas, fuente_v = vi_of, "reporte"
+        else:
+            visitas, fuente_v = (_num(r.get("vis_est")) or 0.0), "gps"
         meta_r = _num(r.get("meta_ruta_pct")) or 0.0
         if agend:
             pct_r = visitas / agend
@@ -186,7 +203,8 @@ def calcular_avance(client, anio: int, mes: int, corte: date,
             pct_r = pct_r_proy = None
             o.update(ruta_cumpl=None, ruta_falta=None, ruta_min=None)
         o.update(ruta_llevas=visitas, ruta_agend=agend, ruta_meta=meta_r,
-                 ruta_pct=pct_r, ruta_proy=pct_r_proy, ruta_fuente=fuente)
+                 ruta_pct=pct_r, ruta_proy=pct_r_proy, ruta_fuente=fuente,
+                 ruta_fuente_vis=fuente_v)
 
         # ── Efectividad de cartera ──────────────────────────────────────────
         cart = _num(r.get("cartera"))

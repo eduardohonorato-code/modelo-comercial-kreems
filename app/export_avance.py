@@ -177,6 +177,20 @@ def foco_texto(r, ctx: dict) -> str:
             f"de comisión")
 
 
+FUENTE_AGENDA = {"reporte": "reporte de Autoventa",
+                 "objetivo": "Obj. visitas del Panel Gerencia",
+                 "estimado": "estimadas por la ruta de cada cliente"}
+FUENTE_VIS = {"reporte": "reporte de Autoventa", "gps": "GPS de Autoventa (1 por cliente por semana)"}
+
+
+def fuentes_ruta(df: pd.DataFrame) -> str:
+    """Una línea con de dónde salen las visitas programadas y las hechas."""
+    ag = sorted({FUENTE_AGENDA.get(x, x) for x in df["ruta_fuente"].dropna()})
+    vi = sorted({FUENTE_VIS.get(x, x) for x in df["ruta_fuente_vis"].dropna()})
+    return (f"Visitas programadas: {' / '.join(ag)}.  Visitas hechas: {' / '.join(vi)}. "
+            "Para pagar manda el reporte de Autoventa de fin de mes.")
+
+
 # ── Tablero del equipo ──────────────────────────────────────────────────────
 _GRUPOS_TABLERO = [
     ("CUOTA DE VENTA", "#1E5FA5", 1, 3),
@@ -237,10 +251,7 @@ def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int) -> bytes:
         f"{pct(r0['cobertura_meta'])} de la cartera · amplitud = SKU distintos por cliente.\n"
         "Proy. = cumplimiento proyectado al cierre al ritmo de hoy.   Verde ≥ 100%  ·  "
         "Amarillo = cobra parcial (desde el piso)  ·  Rojo = bajo el piso, no cobra ese "
-        "indicador.\nVisitas y programadas: "
-        + ("reporte de Autoventa." if (df["ruta_fuente"] == "reporte").all() else
-           "estimadas con el GPS y las rutas de Autoventa (el reporte oficial de fin de "
-           "mes manda)."))
+        "indicador.\n" + fuentes_ruta(df))
     return tabla_png(disp, f"AVANCE DE COMISIONES · {MESES[mes].upper()} {anio}",
                      subtitulo(ctx), color_celdas=texto, fondo_celdas=fondo,
                      resaltar_ultima=True, col_labels=_LABELS_TABLERO,

@@ -14,8 +14,9 @@ import streamlit as st
 
 from app.avance_comisiones import (INDICADORES, calcular_avance, corte_por_defecto,
                                    estado)
-from app.export_avance import (SEM, clp, ficha_png, fichas_zip, nombre_archivo, num,
-                               pct, subtitulo, tablero_png)
+from app.export_avance import (FUENTE_AGENDA, FUENTE_VIS, SEM, clp, ficha_png,
+                               fichas_zip, fuentes_ruta, nombre_archivo, num, pct,
+                               subtitulo, tablero_png)
 from app.styles import fmt_clp, fmt_pct
 
 MESES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
@@ -50,8 +51,8 @@ def _tabla_html(df: pd.DataFrame) -> str:
          "<th>Tasa</th><th>Comisión</th><th>Si cumple todo</th><th>Se deja</th>")
     filas = ""
     for _, r in df.iterrows():
-        ruta_tip = ("reporte de Autoventa" if r["ruta_fuente"] == "reporte"
-                    else "estimado (GPS y rutas de Autoventa)")
+        ruta_tip = (f"Programadas: {FUENTE_AGENDA.get(r['ruta_fuente'], '—')} · "
+                    f"Hechas: {FUENTE_VIS.get(r['ruta_fuente_vis'], '—')}")
         filas += (
             f"<tr><td style='text-align:left'>{r['vendedor']}</td>"
             f"<td>{clp(r['cuota_llevas'])}</td><td>{clp(r['cuota_meta'])}</td>{_celda(r, 'cuota')}"
@@ -159,9 +160,7 @@ def render_avance(client, anio: int, mes: int):
     st.markdown(_tabla_html(d), unsafe_allow_html=True)
     st.caption("Proy. = cumplimiento proyectado al cierre. Verde ≥ 100% · Amarillo = "
                "cobra parcial (desde el piso) · Rojo = bajo el piso, no cobra ese indicador. "
-               "Visitas y programadas: reporte de Autoventa si está cargado en Comisiones; "
-               "si no, estimadas (GPS de Autoventa, una visita por cliente por semana, y "
-               "rutas de la cartera).")
+               + fuentes_ruta(d))
 
     # ── Descargas PNG ───────────────────────────────────────────────────────
     st.markdown('<div class="seccion-titulo">Imágenes para enviar por WhatsApp</div>',
@@ -218,14 +217,19 @@ def render_avance(client, anio: int, mes: int):
               lleva; la efectividad se topa en el 100% de la cartera.</li>
           <li><strong>Cartera:</strong> clientes asignados en la cartera oficial de
               Autoventa. <strong>Compraron</strong>: clientes distintos con factura en el mes.</li>
-          <li><strong>Visitas programadas:</strong> del reporte de Autoventa si se cargó
-              en Comisiones; si no, desde la ruta de cada cliente de la cartera: semanal =
-              1 por semana del mes ({ctx['semanas']} semanas), quincenal = la mitad,
-              mensual = 1. Autoventa agenda por semana.</li>
-          <li><strong>Visitas hechas:</strong> del reporte si está cargado; si no, el GPS de
-              Autoventa contando una visita por cliente por semana (validado contra el
-              reporte: 3–9% de diferencia). El dato oficial para pagar es el reporte de
-              fin de mes.</li>
+          <li><strong>Visitas programadas</strong>, en este orden: (1) el reporte de
+              Autoventa cargado en <em>Comisiones → Cobertura de ruta</em>; (2) el
+              <em>Obj. visitas</em> de este panel (ahí se cargaron los agendamientos de
+              septiembre); (3) si no hay ninguno, se estiman con la ruta de la casa matriz
+              de cada cliente de la cartera: semanal = 1 por semana del mes
+              ({ctx['semanas']} semanas), quincenal (-Q) = la mitad, mensual (-M) = 1.
+              Autoventa agenda por semana; la estimación quedó a 4% del reporte de
+              septiembre. Para que sea exacto, carga los agendamientos del mes en
+              <em>Obj. visitas</em> apenas Autoventa los tenga.</li>
+          <li><strong>Visitas hechas:</strong> del reporte si ya trae visitas; si no, el GPS
+              de Autoventa (carga diaria automática) contando una visita por cliente por
+              semana: 6,8% de diferencia con el reporte en julio y 3,5% en septiembre. El
+              dato oficial para pagar es el reporte de fin de mes.</li>
           <li><strong>Si cumple todo</strong> = 5% × la mayor entre la meta y la venta
               proyectada. <strong>Se deja</strong> = esa cifra − la comisión proyectada.</li>
         </ul></div>
