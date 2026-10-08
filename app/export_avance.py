@@ -221,12 +221,20 @@ def _labels_tablero(df: pd.DataFrame) -> list:
     return [h for _, h in _COLS_TABLERO]
 
 
-def tabla_tablero(df: pd.DataFrame, ctx: dict | None = None) -> tuple[pd.DataFrame, dict, dict]:
+def _tasa_equipo(df: pd.DataFrame, com: str, venta: str) -> str:
+    """Comisión ÷ venta de los que comisionan (fuera los solo-cuota)."""
+    d = df[~df.get("solo_cuota", pd.Series(False, index=df.index)).fillna(False).astype(bool)]
+    v = d[venta].sum()
+    return pct(d[com].sum() / v, 2) if v else "—"
+
+
+def tabla_tablero(df: pd.DataFrame, extra: list | None = None) -> tuple[pd.DataFrame, dict, dict]:
     """DataFrame de strings + colores (texto, fondo) de las celdas con semáforo.
-    Con `ctx` (totales del mes) agrega bajo TOTAL EQUIPO filas informativas para
-    cuadrar con la Fact-NC de Inicio: "Sin asignar" (facturas sin vendedor, no
-    comisionan), lo de vendedores fuera del panel y el total del mes.
-    `disp.attrs` lleva los índices de filas total e informativas."""
+    `extra` = [(etiqueta, fact_nc), ...]: filas que van antes de TOTAL EQUIPO solo
+    con su Fact-NC ("Sin asignar", una vendedora fuera del panel con su nota de
+    crédito) para que el total cuadre con la Fact-NC de Inicio. No comisionan.
+    Los vendedores `solo_cuota` (Fernando) muestran solo la cuota de venta.
+    `disp.attrs` lleva los índices de la fila total y de las filas extra."""
     filas, fondo, texto = [], {}, {}
     cols = [k for k, _ in _COLS_TABLERO]
     color_col = {"cuota": "c_p", "nuevos": "n_h", "ruta": "r_h", "cobertura": "e_h",
@@ -248,47 +256,57 @@ def tabla_tablero(df: pd.DataFrame, ctx: dict | None = None) -> tuple[pd.DataFra
             "t_hoy": pct(r["tasa_hoy"], 2), "com_hoy": clp(r["comision_hoy"]),
             "t_proy": pct(r["tasa_proy"], 2), "com": clp(r["comision_proy"]),
         }
+        if r.get("solo_cuota"):
+            fila.update({k: "" for k in cols if not k.startswith("c_") and k != "vend"})
+            filas.append([fila[k] for k in cols])
+            bg, fg = SEM[estado(r.get("cuota_cumpl"), r.get("cuota_umbral", 0.8))]
+            fondo[(i, "c_p")], texto[(i, "c_p")] = bg, fg
+            continue
         filas.append([fila[k] for k in cols])
         for k, c in color_col.items():
             bg, fg = SEM[estado(r.get(f"{k}_cumpl"), r.get(f"{k}_umbral", 0.8))]
             fondo[(i, c)], texto[(i, c)] = bg, fg
+    filas_info = []
+    for etiqueta, monto in (extra or []):
+        f = {k: "" for k in cols}
+        f.update({"vend": etiqueta, "c_v": clp(monto)})
+        filas.append([f[k] for k in cols])
+        filas_info.append(len(filas) - 1)
+    total_fnc = float(df["cuota_llevas"].sum()) + sum(m for _, m in (extra or []))
     tot = {k: "" for k in cols}
-    tot.update({"vend": "TOTAL EQUIPO", "c_v": clp(df["cuota_llevas"].sum()),
+    tot.update({"vend": "TOTAL EQUIPO", "c_v": clp(total_fnc),
                 "c_m": clp(df["cuota_meta"].sum(min_count=1)),
                 "c_vp": clp(df["venta_proy"].sum()),
                 "com_hoy": clp(df["comision_hoy"].sum()), "com": clp(df["comision_proy"].sum()),
                 # Tasa del equipo = comisión total ÷ venta total (ponderada por venta)
-                "t_hoy": pct(df["comision_hoy"].sum() / df["cuota_llevas"].sum(), 2)
-                         if df["cuota_llevas"].sum() else "—",
-                "t_proy": pct(df["comision_proy"].sum() / df["venta_proy"].sum(), 2)
-                          if df["venta_proy"].sum() else "—"})
+                "t_hoy": _tasa_equipo(df, "comision_hoy", "cuota_llevas"),
+                "t_proy": _tasa_equipo(df, "comision_proy", "venta_proy")})
     filas.append([tot[k] for k in cols])
-    filas_total, filas_info = [len(filas) - 1], []
-    ctx = ctx or {}
-    if ctx.get("fact_nc_total") is not None:
-        sa = ctx.get("fact_nc_sin_asignar") or 0.0
-        fuera = ctx["fact_nc_total"] - sa - float(df["cuota_llevas"].sum())
-
-        def _info(etiqueta, monto):
-            f = {k: "" for k in cols}
-            f.update({"vend": etiqueta, "c_v": clp(monto)})
-            filas.append([f[k] for k in cols])
-            filas_info.append(len(filas) - 1)
-
-        _info("Sin asignar (sin vendedor, no comisiona)", sa)
-        if abs(fuera) >= 1:
-            _info("Otros vendedores fuera del panel", fuera)
-        f = {k: "" for k in cols}
-        f.update({"vend": "TOTAL FACT-NC DEL MES", "c_v": clp(ctx["fact_nc_total"])})
-        filas.append([f[k] for k in cols])
-        filas_total.append(len(filas) - 1)
+    filas_total = [len(filas) - 1]
     disp = pd.DataFrame(filas, columns=cols)
     disp.attrs["filas_total"], disp.attrs["filas_info"] = filas_total, filas_info
     return disp, texto, fondo
 
 
-def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int) -> bytes:
-    disp, texto, fondo = tabla_tablero(df, ctx)
+def filas_extra(df_todos: pd.DataFrame, df_panel: pd.DataFrame, ctx: dict) -> list:
+    """Filas solo-Fact-NC para que TOTAL EQUIPO cuadre con Inicio: "Sin asignar" y
+    cada vendedor con venta en el mes que quedó fuera del panel (por nombre; si es
+    negativo, con su nota de crédito)."""
+    extra = []
+    sa = (ctx or {}).get("fact_nc_sin_asignar")
+    if sa:
+        extra.append(("Sin asignar", float(sa)))
+    fuera = df_todos[~df_todos["vendedor_id"].isin(df_panel["vendedor_id"])]
+    for _, r in fuera.iterrows():
+        m = float(r.get("cuota_llevas") or 0)
+        if abs(m) >= 1:
+            extra.append((f"{r['vendedor']} (nota de crédito)" if m < 0 else r["vendedor"], m))
+    return extra
+
+
+def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int,
+                extra: list | None = None) -> bytes:
+    disp, texto, fondo = tabla_tablero(df, extra)
     r0 = df.iloc[0]
     notas = (
         f"Metas: cuota = objetivo de venta del mes · nuevos = "
@@ -305,8 +323,7 @@ def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int) -> bytes:
                      resaltar_ultima=True, col_labels=_labels_tablero(df),
                      grupos=_GRUPOS_TABLERO, notas=notas, dpi=220, marcos=True,
                      logo=True, centrado=True,
-                     filas_total=disp.attrs.get("filas_total"),
-                     filas_info=disp.attrs.get("filas_info"))
+                     filas_total=disp.attrs.get("filas_total"))
 
 
 # ── Ficha del vendedor ──────────────────────────────────────────────────────

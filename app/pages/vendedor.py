@@ -42,6 +42,10 @@ def _seccion_mi_avance(client, anio: int, mes: int, vendedor_id: int):
         st.info("Todavía no hay datos del mes para calcular el avance.")
         return
     r = fila.iloc[0]
+    if r.get("solo_cuota"):
+        st.info("Este vendedor no trabaja con el esquema de comisiones por indicadores: "
+                "se mide solo por su cuota de venta.")
+        return
     with st.spinner("Armando tu ficha…"):
         png = _ficha_png(vendedor_id, corte, _usuario(), firma, _version_calculo(), r, ctx)
     st.image(png, use_container_width=True)

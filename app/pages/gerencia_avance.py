@@ -18,7 +18,8 @@ import streamlit as st
 
 from app.avance_comisiones import avance_mes, corte_con_datos, estado_datos
 from app.data import (get_comision_v1_parametros, get_objetivos, upsert_objetivo)
-from app.export_avance import (fuentes_ruta, subtitulo, tabla_tablero, tablero_png,
+from app.export_avance import (filas_extra, fuentes_ruta, subtitulo, tabla_tablero,
+                               tablero_png,
                                _COLS_TABLERO, _GRUPOS_TABLERO)
 from app.styles import fmt_clp, fmt_pct
 
@@ -70,8 +71,8 @@ def _usuario() -> str:
     return str(st.session_state.get("user_id", ""))
 
 
-def _tabla_html(d: pd.DataFrame, ctx: dict | None = None) -> str:
-    disp, texto, fondo = tabla_tablero(d, ctx)
+def _tabla_html(d: pd.DataFrame, extra: list | None = None) -> str:
+    disp, texto, fondo = tabla_tablero(d, extra)
     totales = set(disp.attrs.get("filas_total", []))
     info = set(disp.attrs.get("filas_info", []))
     cols = [k for k, _ in _COLS_TABLERO]
@@ -98,8 +99,6 @@ def _tabla_html(d: pd.DataFrame, ctx: dict | None = None) -> str:
                 estilo += f"border-bottom:2px solid {color_de[k]};"
             if (i, k) in fondo:
                 estilo += f"background:{fondo[(i, k)]};color:{texto[(i, k)]};font-weight:700;"
-            if i in info:
-                estilo += "color:#5A6072;font-style:italic;"
             tds += f"<td style='{estilo}'>{fila[k]}</td>"
         filas += f"<tr{' class=total-row' if i in totales else ''}>{tds}</tr>"
     return (f"<div class='tabla-container'><table class='kreems'><thead><tr>{g}</tr>"
@@ -160,17 +159,20 @@ def render_avance(client, anio: int, mes: int):
                     + "<br>".join(avisos) + "</div>", unsafe_allow_html=True)
 
     vp = d["venta_proy"].sum()
+    # Tasa del equipo solo sobre quienes comisionan (Fernando se mide solo por cuota)
+    dc = d[~d["solo_cuota"].fillna(False).astype(bool)] if "solo_cuota" in d else d
+    vp_c, vl_c = dc["venta_proy"].sum(), dc["cuota_llevas"].sum()
     st.markdown(f"""
     <div class="kpi-grid">
       <div class="kpi-card destacado">
         <div class="kpi-label">Comisión proyectada del equipo</div>
         <div class="kpi-value">{fmt_clp(d['comision_proy'].sum())}</div>
-        <div class="kpi-sub">tasa {fmt_pct(d['comision_proy'].sum() / vp if vp else None)} · al ritmo de hoy</div>
+        <div class="kpi-sub">tasa {fmt_pct(dc['comision_proy'].sum() / vp_c if vp_c else None)} · al ritmo de hoy</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Comisión que llevas</div>
         <div class="kpi-value">{fmt_clp(d['comision_hoy'].sum())}</div>
-        <div class="kpi-sub">tasa {fmt_pct(d['comision_hoy'].sum() / d['cuota_llevas'].sum() if d['cuota_llevas'].sum() else None)} · si el mes cerrara hoy</div>
+        <div class="kpi-sub">tasa {fmt_pct(dc['comision_hoy'].sum() / vl_c if vl_c else None)} · si el mes cerrara hoy</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Fact-NC que llevas</div>
@@ -185,7 +187,8 @@ def render_avance(client, anio: int, mes: int):
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown(_tabla_html(d, ctx), unsafe_allow_html=True)
+    extra = filas_extra(df, d, ctx)
+    st.markdown(_tabla_html(d, extra), unsafe_allow_html=True)
     st.caption("**Cuota:** % proy. = Fact-NC proyectada ÷ meta. **Resto (Llevas):** lo acumulado; "
                "el color dice si, al ritmo actual, ese indicador cobra al cierre (verde ≥ 100% "
                "· amarillo = cobra parcial desde el piso · rojo = no cobra). **Comisión que llevas** = "
@@ -196,7 +199,7 @@ def render_avance(client, anio: int, mes: int):
     # debe seguir ofreciéndose con el formato viejo.
     clave = f"{anio}_{mes:02d}_{corte.isoformat()}_{_version_calculo()[:8]}"
     if st.button("🖼️ Generar tablero del equipo en PNG", key=f"btn_tab_{clave}"):
-        st.session_state[f"_png_tab_{clave}"] = tablero_png(d, ctx, anio, mes)
+        st.session_state[f"_png_tab_{clave}"] = tablero_png(d, ctx, anio, mes, extra)
     png = st.session_state.get(f"_png_tab_{clave}")
     if png:
         st.download_button("⬇️ Descargar tablero (PNG)", png,

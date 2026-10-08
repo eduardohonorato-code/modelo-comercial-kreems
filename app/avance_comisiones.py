@@ -41,6 +41,11 @@ from app.data import (get_cartera_map, get_objetivos, get_todos_vendedores,
 
 _RE_RUTA = re.compile(r"^[A-Z]{2}\d\d(?:-([QM])\d)?$")
 
+# Vendedores que NO trabajan con este esquema de comisiones: en el panel solo se
+# muestra su cuota de venta, sin indicadores ni comisión (no suman al equipo).
+# 11 = Fernando Astorga (cuenta casa / distribuidores; decisión de gerencia 2026-10-08).
+VENDEDORES_SOLO_CUOTA = {11}
+
 # Orden y etiquetas de los indicadores en el panel (claves del motor v1).
 INDICADORES = [
     ("cuota", "Cuota de venta"),
@@ -357,6 +362,12 @@ def calcular_avance(client, anio: int, mes: int, corte: date,
         o["dejando"] = max(0.0, o["si_todo"] - o["comision_proy"])
         foco = max(PCT, key=lambda k: o[f"{k}_dejando"])
         o["foco"] = foco if o[f"{foco}_dejando"] > 0.5 else None
+        o["solo_cuota"] = o["vendedor_id"] in VENDEDORES_SOLO_CUOTA
+        if o["solo_cuota"]:
+            for c in ("tasa_hoy", "comision_hoy", "tasa_proy", "comision_proy",
+                      "si_todo", "dejando"):
+                o[c] = None
+            o["foco"] = None
         filas.append(o)
 
     out = pd.DataFrame(filas)
