@@ -51,7 +51,12 @@ TIPO_DCTO_MAP = {
 # aún no es DTE) y el 52 (guía de despacho), que inflarían el total. Validado:
 # filtrar a {33,34,61} reproduce exacto el Fact-NC del panel (Gran Natural mayo
 # 2026 = $47.554.337, idéntico a la carga Excel).
-DTE_VALIDOS = {"33", "34", "61"}
+#
+# La nota de débito (56) también cuenta, con signo positivo: es un cargo al
+# cliente (decisión de Eduardo, 08-oct-2026). El Excel ya las traía (ND 1–4 de
+# mar/abr 2026 están en la base), pero la API las dejaba fuera: la ND 5 del
+# 20-07-2026 ($66.484) era la única diferencia de 2026 contra el SaaS.
+DTE_VALIDOS = {"33", "34", "56", "61"}
 
 # Código de región (SII/INE) → nombre. La API entrega comuna/region como código;
 # el front usa el nombre de región para la geografía, así que lo resolvemos aquí.

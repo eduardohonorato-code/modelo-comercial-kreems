@@ -67,8 +67,8 @@ TIPO_MOV_MAP = {
 }
 
 # ── Tipos de documento Obuma: cuáles llevan signo negativo ──────────────────
-# "NOTA DE DEBITO" en rigor es positiva (cargo al cliente), pero si el negocio
-# la trata como corrección, cambiar aquí.
+# "NOTA DE DEBITO" es positiva: es un cargo al cliente y suma en Fact-NC
+# (confirmado por Eduardo, 08-oct-2026).
 TIPO_DCTO_NEGATIVO = {"NOTA DE CREDITO ELECTRONICA"}
 
 # ── Tamaño de lote para upserts a Supabase ──────────────────────────────────
