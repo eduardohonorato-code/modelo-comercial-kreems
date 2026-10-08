@@ -16,7 +16,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from app.avance_comisiones import avance_mes, corte_por_defecto
+from app.avance_comisiones import avance_mes, corte_con_datos, estado_datos
 from app.data import (get_comision_v1_parametros, get_objetivos, upsert_objetivo)
 from app.export_avance import (fuentes_ruta, subtitulo, tabla_tablero, tablero_png,
                                _COLS_TABLERO, _GRUPOS_TABLERO)
@@ -27,15 +27,15 @@ MESES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio"
          12: "Diciembre"}
 
 
-def firma_metas(client, anio: int, mes: int) -> str:
+def firma_metas(client, anio: int, mes: int, datos: tuple = ()) -> str:
     """Huella de las metas vigentes (parámetros + objetivos del mes). Entra en la
     llave del caché: si gerencia cambia una meta, el avance se recalcula solo."""
     try:
         p = get_comision_v1_parametros(client)
         o = get_objetivos(client, anio, mes)
         o = o.drop(columns=[c for c in o.columns if "actualizado" in c], errors="ignore")
-        return json.dumps([sorted(p.items()), o.to_dict("records")], default=str,
-                          sort_keys=True)
+        return json.dumps([sorted(p.items()), o.to_dict("records"), list(datos)],
+                          default=str, sort_keys=True)
     except Exception:
         return ""
 
@@ -103,19 +103,20 @@ def _tabla_html(d: pd.DataFrame) -> str:
 
 
 def render_avance(client, anio: int, mes: int):
-    corte_def = corte_por_defecto(anio, mes)
+    datos = estado_datos(client, anio, mes)
+    corte_def = corte_con_datos(anio, mes, datos[0])
     if corte_def is None:
         st.info(f"{MESES[mes]} {anio} todavía no empieza: no hay avance que mostrar.")
         return
     c1, c2 = st.columns([1, 3])
     corte = c1.date_input(
         "Fecha de corte", value=corte_def, min_value=date(anio, mes, 1),
-        max_value=corte_def, format="DD-MM-YYYY", key=f"corte_avance_{anio}_{mes}",
-        help="Último día con datos cargados. Por defecto, ayer: la carga diaria corre "
-             "de madrugada.")
+        max_value=corte_def, format="DD-MM-YYYY", key=f"corte_avance_{anio}_{mes}_{corte_def.isoformat()}",
+        help="Por defecto, el último día con ventas cargadas (si el ETL ya cargó las "
+             "facturas de hoy, entra hoy, igual que la Fact-NC de Inicio).")
 
     df, ctx, base = avance_cacheado(client, anio, mes, corte, _usuario(),
-                                    firma_metas(client, anio, mes))
+                                    firma_metas(client, anio, mes, datos))
     if df is None or df.empty:
         st.info("Sin datos de comisiones para el período.")
         return

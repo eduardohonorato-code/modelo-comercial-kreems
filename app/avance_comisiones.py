@@ -104,6 +104,40 @@ def corte_por_defecto(anio: int, mes: int, hoy: date | None = None) -> date | No
     return min(fin, hoy - timedelta(days=1))
 
 
+def estado_datos(client, anio: int, mes: int) -> tuple:
+    """(último día con ventas cargadas en el mes, n° de líneas de venta, n° de
+    visitas). Sirve de corte por defecto y de huella para el caché: si el ETL
+    carga datos nuevos —aunque sea del mismo día—, el avance se recalcula."""
+    ini = date(anio, mes, 1).isoformat()
+    fin = date(anio, mes, calendar.monthrange(anio, mes)[1]).isoformat()
+    try:
+        r = (client.table("fact_ventas").select("fecha", count="exact")
+             .gte("fecha", ini).lte("fecha", fin)
+             .order("fecha", desc=True).limit(1).execute())
+        ultima = date.fromisoformat(r.data[0]["fecha"][:10]) if r.data else None
+        n_v = r.count or 0
+    except Exception:
+        ultima, n_v = None, 0
+    try:
+        n_vis = (client.table("fact_visitas").select("id", count="exact")
+                 .gte("fecha", ini).lte("fecha", fin).limit(1).execute().count or 0)
+    except Exception:
+        n_vis = 0
+    return ultima, n_v, n_vis
+
+
+def corte_con_datos(anio: int, mes: int, ultima: date | None,
+                    hoy: date | None = None) -> date | None:
+    """Corte por defecto = último día con ventas cargadas (si el ETL ya cargó
+    hoy, entra hoy, igual que la Fact-NC de Inicio). Sin ventas aún en el mes,
+    el corte de siempre (ayer)."""
+    hoy = hoy or date.today()
+    fin = date(anio, mes, calendar.monthrange(anio, mes)[1])
+    if ultima is not None:
+        return min(ultima, fin, hoy)
+    return corte_por_defecto(anio, mes, hoy)
+
+
 def _num(v):
     try:
         f = float(v)

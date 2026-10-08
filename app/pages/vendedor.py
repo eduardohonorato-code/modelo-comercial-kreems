@@ -19,10 +19,11 @@ def _seccion_mi_avance(client, anio: int, mes: int, vendedor_id: int):
     """Ficha "Mi avance del mes": comisión proyectada, cada indicador con lo que
     lleva, su meta, qué le falta y su foco. Misma imagen que se manda por WhatsApp."""
     from app.pages.comisiones_v1 import _nuevos_por_maquinas
-    from app.avance_comisiones import corte_por_defecto
+    from app.avance_comisiones import corte_con_datos, estado_datos
     if not _nuevos_por_maquinas(anio, mes):
         return      # antes de oct-2026 se pagaba con el modelo de tramos
-    corte = corte_por_defecto(anio, mes)
+    datos = estado_datos(client, anio, mes)
+    corte = corte_con_datos(anio, mes, datos[0])
     if corte is None:
         return
     from app.pages.gerencia_avance import (avance_cacheado, firma_metas, _usuario,
@@ -31,7 +32,7 @@ def _seccion_mi_avance(client, anio: int, mes: int, vendedor_id: int):
     st.markdown('<div class="seccion-titulo">🎯 Mi avance de comisiones</div>',
                 unsafe_allow_html=True)
     try:
-        firma = firma_metas(client, anio, mes)
+        firma = firma_metas(client, anio, mes, datos)
         df, ctx, _ = avance_cacheado(client, anio, mes, corte, _usuario(), firma)
     except Exception as e:
         st.info(f"No se pudo calcular el avance de comisiones: {e}")
