@@ -7,4 +7,4 @@ cambio todavía no llegó". Con esto basta mirar el pie del login.
 
 Al hacer un cambio que el usuario deba ver, subir VERSION en el mismo commit.
 """
-VERSION = "2026-10-08 · avance: corte = último día con ventas cargadas"
+VERSION = "2026-10-08 · avance: fila Sin asignar y total Fact-NC del mes"

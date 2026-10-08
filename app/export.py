@@ -113,7 +113,8 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
               resaltar_ultima: bool = False, col_labels=None, grupos=None,
               dpi: int = 200, fondo_celdas: dict | None = None,
               notas: str = "", marcos: bool = False, logo: bool = False,
-              centrado: bool = False) -> bytes:
+              centrado: bool = False, filas_total: list | None = None,
+              filas_info: list | None = None) -> bytes:
     """
     Render de un DataFrame de STRINGS ya formateados a PNG.
 
@@ -216,7 +217,12 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
             txt.set_fontsize(8.5)
         else:
             i = r - 1
-            if resaltar_ultima and i == n_rows - 1:
+            es_total = (i in filas_total) if filas_total else (resaltar_ultima and i == n_rows - 1)
+            if filas_info and i in filas_info:
+                cell.set_facecolor("white")
+                txt.set_color("#5A6072")
+                txt.set_fontstyle("italic")
+            elif es_total:
                 cell.set_facecolor(PINK_TINT)
                 txt.set_fontweight("bold")
             else:

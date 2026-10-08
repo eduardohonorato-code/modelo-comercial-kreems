@@ -200,6 +200,7 @@ def avance_mes(client, anio: int, mes: int, corte: date):
     from app.pages.comisiones_v1 import _calcular, _nuevos_por_maquinas
     ini = date(anio, mes, 1)
     fin = date(anio, mes, calendar.monthrange(anio, mes)[1])
+    ventas = None
     if _nuevos_por_maquinas(anio, mes):
         ventas = get_ventas_rango(client, ini.isoformat(), min(fin, corte).isoformat())
         base = _calcular(client, anio, mes,
@@ -208,6 +209,14 @@ def avance_mes(client, anio: int, mes: int, corte: date):
     else:   # meses viejos: la definición de nuevos necesita la historia completa
         base = _calcular(client, anio, mes)[0]
     df, ctx = calcular_avance(client, anio, mes, corte, base)
+    # Totales del mes para cuadrar con Inicio: la Fact-NC de TODOS (incluida la
+    # que llega sin vendedor, "Sin asignar", que no comisiona).
+    if ventas is not None and not ventas.empty:
+        neto = pd.to_numeric(ventas["neto"], errors="coerce").fillna(0)
+        vend = get_todos_vendedores(client)
+        ids_sa = set(vend.loc[vend["nombre_canonico"] == "Sin asignar", "id"]) if not vend.empty else set()
+        ctx["fact_nc_total"] = float(neto.sum())
+        ctx["fact_nc_sin_asignar"] = float(neto[ventas["vendedor_id"].isin(ids_sa)].sum())
     return df, ctx, base
 
 

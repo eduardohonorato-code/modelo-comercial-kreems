@@ -70,8 +70,10 @@ def _usuario() -> str:
     return str(st.session_state.get("user_id", ""))
 
 
-def _tabla_html(d: pd.DataFrame) -> str:
-    disp, texto, fondo = tabla_tablero(d)
+def _tabla_html(d: pd.DataFrame, ctx: dict | None = None) -> str:
+    disp, texto, fondo = tabla_tablero(d, ctx)
+    totales = set(disp.attrs.get("filas_total", []))
+    info = set(disp.attrs.get("filas_info", []))
     cols = [k for k, _ in _COLS_TABLERO]
     g = "<th></th>"
     for titulo, color, c0, c1 in _GRUPOS_TABLERO:
@@ -96,8 +98,10 @@ def _tabla_html(d: pd.DataFrame) -> str:
                 estilo += f"border-bottom:2px solid {color_de[k]};"
             if (i, k) in fondo:
                 estilo += f"background:{fondo[(i, k)]};color:{texto[(i, k)]};font-weight:700;"
+            if i in info:
+                estilo += "color:#5A6072;font-style:italic;"
             tds += f"<td style='{estilo}'>{fila[k]}</td>"
-        filas += f"<tr{' class=total-row' if i == ult else ''}>{tds}</tr>"
+        filas += f"<tr{' class=total-row' if i in totales else ''}>{tds}</tr>"
     return (f"<div class='tabla-container'><table class='kreems'><thead><tr>{g}</tr>"
             f"<tr>{h}</tr></thead><tbody>{filas}</tbody></table></div>")
 
@@ -181,7 +185,7 @@ def render_avance(client, anio: int, mes: int):
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown(_tabla_html(d), unsafe_allow_html=True)
+    st.markdown(_tabla_html(d, ctx), unsafe_allow_html=True)
     st.caption("**Cuota:** % proy. = Fact-NC proyectada ÷ meta. **Resto (Llevas):** lo acumulado; "
                "el color dice si, al ritmo actual, ese indicador cobra al cierre (verde ≥ 100% "
                "· amarillo = cobra parcial desde el piso · rojo = no cobra). **Comisión que llevas** = "
