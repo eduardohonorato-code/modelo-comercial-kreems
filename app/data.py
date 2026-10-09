@@ -1080,11 +1080,10 @@ def get_visitas_mes(client: Client, anio: int, mes: int, hasta: date | None = No
     fin = (date(anio + 1, 1, 1) if mes == 12 else date(anio, mes + 1, 1)) - timedelta(days=1)
     if hasta is not None:
         fin = min(fin, hasta)
-    try:
+    def _leer(cols: str) -> pd.DataFrame:
         _PAGE, offset, rows = 1000, 0, []
         while True:
-            r = (client.table("fact_visitas")
-                 .select("id,fecha,vendedor_id,cliente_rut,con_pedido")
+            r = (client.table("fact_visitas").select(cols)
                  .gte("fecha", ini.isoformat()).lte("fecha", fin.isoformat())
                  .order("id")
                  .range(offset, offset + _PAGE - 1).execute())
@@ -1093,6 +1092,15 @@ def get_visitas_mes(client: Client, anio: int, mes: int, hasta: date | None = No
                 break
             offset += _PAGE
         return pd.DataFrame(rows)
+
+    base = "id,fecha,vendedor_id,cliente_rut,con_pedido"
+    try:
+        try:
+            return _leer(base + ",direccion_id")
+        except Exception as exc:     # sql/048 aún no corrido: sin dirección
+            if "direccion_id" not in str(exc):
+                raise
+            return _leer(base)
     except Exception as exc:
         txt = str(exc)
         if "42P01" in txt or "PGRST205" in txt or "does not exist" in txt:

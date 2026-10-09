@@ -83,6 +83,17 @@ def _id(row) -> str:
     return hashlib.md5(base.encode("utf-8")).hexdigest()
 
 
+def _direccion_id(row) -> str:
+    """Llave del local visitado = coordenadas de su dirección en Autoventa.
+    Autoventa agenda por dirección: las sucursales de una cadena (mismo RUT)
+    son visitas distintas, y las fichas duplicadas de un mismo local (p. ej.
+    "(Promo 6) SUPERMERCADO X") son una sola. Sin coordenadas: cliente + calle."""
+    lat, lon = row.get("address_latitude"), row.get("address_longitude")
+    if lat and lon:
+        return f"{lat},{lon}"
+    return f"{row.get('client_id')}|{str(row.get('address_street') or '').upper().strip()}"
+
+
 def transformar(filas: list[dict], client) -> pd.DataFrame:
     if not filas:
         return pd.DataFrame()
@@ -99,6 +110,8 @@ def transformar(filas: list[dict], client) -> pd.DataFrame:
         "client_id": pd.to_numeric(df.get("client_id"), errors="coerce").astype("Int64"),
         "request_id": df.get("request_id"),
         "comentario": df.get("comments"),
+        "direccion": df.get("address_street"),
+        "direccion_id": [_direccion_id(r) for r in filas],
     })
     out["request_id"] = out["request_id"].where(
         out["request_id"].notna() & (out["request_id"].astype(str) != "None"), None)
@@ -149,7 +162,15 @@ def run(periodo: tuple, dry_run: bool = False) -> int:
                 int(df["con_pedido"].sum()) if len(df) else 0)
     if dry_run or df.empty:
         return len(df)
-    n = upsert_tabla(client, "fact_visitas", df, on_conflict="id")
+    try:
+        n = upsert_tabla(client, "fact_visitas", df, on_conflict="id")
+    except Exception as exc:
+        if "direccion" not in str(exc):
+            raise
+        logger.warning("  [visitas] fact_visitas sin columnas de dirección: correr "
+                       "sql/048_fact_visitas_direccion.sql. Se carga sin dirección.")
+        n = upsert_tabla(client, "fact_visitas",
+                         df.drop(columns=["direccion", "direccion_id"]), on_conflict="id")
     logger.info("  [visitas] upsert OK: %d filas", n)
     return n
 

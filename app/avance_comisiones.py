@@ -19,8 +19,11 @@ calcula acá:
                             sucursales lo sube a 11%).
   · Visitas hechas        → reporte de Autoventa si tiene visitas cargadas; si
                             no, GPS de Autoventa (fact_visitas) contando UNA
-                            visita por cliente por semana. Validado contra el
-                            reporte: 6,8% de error en jul-2026 y 3,5% en sep-2026.
+                            visita por local (dirección) por semana: Autoventa
+                            agenda cada sucursal de una cadena por separado.
+                            Validado contra el reporte: 2,0% de error en
+                            sep-2026 y 3,5% en oct-2026 (por RUT era 3,7% y 5,0%;
+                            a Mauricio, con cadenas, le faltaban 16 visitas).
 
 Proyección al cierre: lineal por días hábiles (lo acumulado ÷ días hábiles
 transcurridos × días hábiles del mes). Amplitud de SKU es un promedio, así que
@@ -85,14 +88,17 @@ def agenda_estimada(cart_map: pd.DataFrame, anio: int, mes: int) -> pd.DataFrame
 
 
 def visitas_estimadas(vis: pd.DataFrame | None) -> pd.DataFrame:
-    """Visitas hechas por vendedor: una por cliente por semana (así agenda
-    Autoventa; una segunda visita en la misma semana no cubre otra agenda)."""
+    """Visitas hechas por vendedor: una por local por semana (así agenda
+    Autoventa: cada sucursal tiene su agenda y una segunda visita en la misma
+    semana no cubre otra). Sin la dirección (antes de sql/048), por RUT."""
     if vis is None or vis.empty:
         return pd.DataFrame(columns=["vendedor_id", "vis_est"])
     v = vis.dropna(subset=["vendedor_id", "cliente_rut"]).copy()
+    v["local"] = (v["direccion_id"].fillna(v["cliente_rut"])
+                  if "direccion_id" in v.columns else v["cliente_rut"])
     iso = pd.to_datetime(v["fecha"]).dt.isocalendar()
     v["semana"] = iso["year"].astype(str) + "-" + iso["week"].astype(str)
-    v = v.drop_duplicates(["vendedor_id", "cliente_rut", "semana"])
+    v = v.drop_duplicates(["vendedor_id", "local", "semana"])
     out = v.groupby("vendedor_id").size().rename("vis_est").reset_index()
     out["vendedor_id"] = out["vendedor_id"].astype(int)
     return out
