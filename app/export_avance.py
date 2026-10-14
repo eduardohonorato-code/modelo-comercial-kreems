@@ -183,7 +183,7 @@ def foco_texto(r, ctx: dict) -> str:
 FUENTE_AGENDA = {"reporte": "reporte de Autoventa",
                  "objetivo": "Obj. visitas del Panel Gerencia",
                  "estimado": "estimadas por la ruta de cada cliente"}
-FUENTE_VIS = {"reporte": "reporte de Autoventa", "gps": "GPS de Autoventa (1 por cliente por semana)"}
+FUENTE_VIS = {"reporte": "las de Autoventa (reporte Cobertura / Efectividad, ingresadas a mano)", "gps": "estimadas por GPS de Autoventa"}
 
 
 def fuentes_ruta(df: pd.DataFrame) -> str:

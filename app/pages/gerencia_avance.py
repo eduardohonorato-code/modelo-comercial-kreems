@@ -17,7 +17,8 @@ import pandas as pd
 import streamlit as st
 
 from app.avance_comisiones import avance_mes, corte_con_datos, estado_datos
-from app.data import (get_comision_v1_parametros, get_objetivos, upsert_objetivo)
+from app.data import (get_comision_ruta, get_comision_v1_parametros, get_objetivos,
+                      upsert_objetivo, upsert_visitas_autoventa)
 from app.export_avance import (filas_extra, fuentes_ruta, subtitulo, tabla_tablero,
                                tablero_png,
                                _COLS_TABLERO, _GRUPOS_TABLERO)
@@ -35,8 +36,10 @@ def firma_metas(client, anio: int, mes: int, datos: tuple = ()) -> str:
         p = get_comision_v1_parametros(client)
         o = get_objetivos(client, anio, mes)
         o = o.drop(columns=[c for c in o.columns if "actualizado" in c], errors="ignore")
-        return json.dumps([sorted(p.items()), o.to_dict("records"), list(datos)],
-                          default=str, sort_keys=True)
+        # Las visitas de Autoventa ingresadas a mano también recalculan el avance.
+        r = get_comision_ruta(client, anio, mes)
+        return json.dumps([sorted(p.items()), o.to_dict("records"), list(datos),
+                           r.to_dict("records")], default=str, sort_keys=True)
     except Exception:
         return ""
 
@@ -208,6 +211,8 @@ def render_avance(client, anio: int, mes: int):
     st.caption("La ficha individual de cada vendedor (\"Mi avance del mes\") está en el "
                "**Panel Vendedor**.")
 
+    _visitas_autoventa(client, anio, mes, d)
+
     _metas(client, anio, mes, df, base)
 
     with st.expander("ℹ️ Cómo se calcula cada número", expanded=False):
@@ -232,6 +237,56 @@ def render_avance(client, anio: int, mes: int):
               (3,5–6,8% de diferencia con el reporte). Para pagar manda el reporte oficial.</li>
         </ul></div>
         """, unsafe_allow_html=True)
+
+
+# ── Visitas de Autoventa (ingreso diario) ──────────────────────────────────
+def _visitas_autoventa(client, anio: int, mes: int, d: pd.DataFrame):
+    """Las visitas hechas según Autoventa, copiadas cada día de su reporte Cobertura /
+    Efectividad (no se exporta). Así el número del tablero es el que el vendedor ve en
+    Autoventa. Las programadas siguen automáticas (frecuencia de la ruta de la cartera).
+    En blanco = la app estima por GPS. Igual que el SaaS (Panel Gerencia → Avance)."""
+    with st.expander("📋 Visitas de Autoventa (copiar del reporte, cada día)", expanded=False):
+        st.caption("Abre en Autoventa **Cobertura / Efectividad** con el mes hasta hoy y "
+                   "copia la columna *Visitas* de cada vendedor. Las programadas no cambian. "
+                   "En blanco = se estima por GPS.")
+        prev = get_comision_ruta(client, anio, mes)
+        prev_idx = prev.set_index("vendedor_id") if not prev.empty else pd.DataFrame()
+        filas = []
+        for _, r in d.sort_values("vendedor").iterrows():
+            if bool(r.get("solo_cuota")):
+                continue
+            vid = int(r["vendedor_id"])
+            vi = None
+            if not prev_idx.empty and vid in prev_idx.index:
+                v = prev_idx.loc[vid, "visitas"]
+                vi = int(v) if pd.notna(v) and int(v) > 0 else None
+            filas.append({"Vendedor": r["vendedor"],
+                          "En el tablero": int(r.get("ruta_llevas") or 0),
+                          "Visitas Autoventa": vi, "_vid": vid})
+        if not filas:
+            return
+        ed = pd.DataFrame(filas)
+        edit = st.data_editor(
+            ed.drop(columns=["_vid"]), hide_index=True, use_container_width=True,
+            disabled=["Vendedor", "En el tablero"], key=f"ed_vis_av_{anio}_{mes}",
+            column_config={
+                "En el tablero": st.column_config.NumberColumn(
+                    "En el tablero hoy", help="Lo que usa hoy el tablero (Autoventa o GPS)."),
+                "Visitas Autoventa": st.column_config.NumberColumn(
+                    "Visitas Autoventa", min_value=0, step=1,
+                    help="Columna «Visitas» del reporte, del 1 del mes a hoy."),
+            })
+        if st.button("💾 Guardar visitas de Autoventa", type="primary",
+                     key=f"save_vis_av_{anio}_{mes}"):
+            regs = [{"vendedor_id": int(ed.iloc[i]["_vid"]), "visitas": int(row["Visitas Autoventa"])}
+                    for i, row in edit.iterrows() if pd.notna(row["Visitas Autoventa"])]
+            try:
+                upsert_visitas_autoventa(client, anio, mes, regs)
+                _avance_cache.clear()
+                st.success(f"✅ Visitas de {len(regs)} vendedor(es) guardadas.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al guardar: {e}")
 
 
 # ── Metas del mes (editables aquí mismo) ────────────────────────────────────
