@@ -88,9 +88,10 @@ def agenda_estimada(cart_map: pd.DataFrame, anio: int, mes: int) -> pd.DataFrame
 
 
 def visitas_estimadas(vis: pd.DataFrame | None) -> pd.DataFrame:
-    """Visitas hechas por vendedor: una por cliente y local por semana (así
-    agenda Autoventa: cada sucursal tiene su agenda y una segunda visita en la
-    misma semana no cubre otra). El local es RUT + dirección: la dirección son
+    """Visitas hechas por vendedor (estimación por GPS, mientras no se carga el
+    reporte de Autoventa): una por cliente y local por DÍA, la unidad del reporte
+    «Cobertura / Efectividad» de Autoventa (cuadre 14-oct; el reporte además solo
+    cuenta las agendadas, que la API no informa). El local es RUT + dirección: la dirección son
     las coordenadas GPS y se repiten entre clientes distintos (oct-2026: 25
     coordenadas compartidas por 51 clientes), así que sola juntaba clientes.
     Sin la dirección (antes de sql/048), por RUT."""
@@ -99,9 +100,8 @@ def visitas_estimadas(vis: pd.DataFrame | None) -> pd.DataFrame:
     v = vis.dropna(subset=["vendedor_id", "cliente_rut"]).copy()
     v["local"] = (v["cliente_rut"].astype(str) + "|" + v["direccion_id"].fillna("").astype(str)
                   if "direccion_id" in v.columns else v["cliente_rut"])
-    iso = pd.to_datetime(v["fecha"]).dt.isocalendar()
-    v["semana"] = iso["year"].astype(str) + "-" + iso["week"].astype(str)
-    v = v.drop_duplicates(["vendedor_id", "local", "semana"])
+    v["dia"] = pd.to_datetime(v["fecha"]).dt.date
+    v = v.drop_duplicates(["vendedor_id", "local", "dia"])
     out = v.groupby("vendedor_id").size().rename("vis_est").reset_index()
     out["vendedor_id"] = out["vendedor_id"].astype(int)
     return out
