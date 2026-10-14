@@ -1123,6 +1123,20 @@ def get_comision_ruta(client: Client, anio: int, mes: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def upsert_visitas_autoventa(client: Client, anio: int, mes: int, registros: list):
+    """Visitas hechas según Autoventa (columna «Visitas» del reporte Cobertura /
+    Efectividad, copiada a mano cada día). Solo toca `visitas`: los agendamientos
+    quedan como estaban (0 = la app los estima por la ruta).
+    registros: [{vendedor_id, visitas}]"""
+    from datetime import datetime, timezone
+    ahora = datetime.now(timezone.utc).isoformat()
+    regs = [{"vendedor_id": int(r["vendedor_id"]), "anio": int(anio), "mes": int(mes),
+             "visitas": int(r["visitas"]), "updated_at": ahora} for r in registros]
+    if regs:
+        client.table("comision_ruta_mensual").upsert(
+            regs, on_conflict="vendedor_id,anio,mes").execute()
+
+
 def upsert_comision_ruta(client: Client, registros: list):
     """Guarda agendamientos/visitas por vendedor.
     registros: [{vendedor_id, anio, mes, agendamientos, visitas, pedidos}]"""
