@@ -88,13 +88,16 @@ def agenda_estimada(cart_map: pd.DataFrame, anio: int, mes: int) -> pd.DataFrame
 
 
 def visitas_estimadas(vis: pd.DataFrame | None) -> pd.DataFrame:
-    """Visitas hechas por vendedor: una por local por semana (así agenda
-    Autoventa: cada sucursal tiene su agenda y una segunda visita en la misma
-    semana no cubre otra). Sin la dirección (antes de sql/048), por RUT."""
+    """Visitas hechas por vendedor: una por cliente y local por semana (así
+    agenda Autoventa: cada sucursal tiene su agenda y una segunda visita en la
+    misma semana no cubre otra). El local es RUT + dirección: la dirección son
+    las coordenadas GPS y se repiten entre clientes distintos (oct-2026: 25
+    coordenadas compartidas por 51 clientes), así que sola juntaba clientes.
+    Sin la dirección (antes de sql/048), por RUT."""
     if vis is None or vis.empty:
         return pd.DataFrame(columns=["vendedor_id", "vis_est"])
     v = vis.dropna(subset=["vendedor_id", "cliente_rut"]).copy()
-    v["local"] = (v["direccion_id"].fillna(v["cliente_rut"])
+    v["local"] = (v["cliente_rut"].astype(str) + "|" + v["direccion_id"].fillna("").astype(str)
                   if "direccion_id" in v.columns else v["cliente_rut"])
     iso = pd.to_datetime(v["fecha"]).dt.isocalendar()
     v["semana"] = iso["year"].astype(str) + "-" + iso["week"].astype(str)
