@@ -151,8 +151,16 @@ Destino: `G:\Mi unidad\Eduardo\Comercial\Control de Maquinas\Seguimiento_comerci
 3. Avisar a comercial que está actualizado (el archivo es el mismo link de siempre).
 4. Comercial trabaja las columnas amarillas durante la semana.
 
-> ⚠️ Si comercial abre el xlsx en Google Sheets, debe editarlo **en modo
-> Office** (Drive lo guarda como .xlsx). Si alguien hace "Guardar como Hojas de
+### Variante: hoja nativa de Google Sheets
+Si el `.env` tiene `SEGUIMIENTO_SHEET_ID`, el mismo `.bat` escribe en una hoja
+**nativa** de Google Sheets en vez del .xlsx: exporta la hoja como xlsx (esa es
+la «versión anterior»), arma el libro nuevo y lo sube **encima de la misma
+hoja** por la API de Drive (mismo link y permisos). Se autentica con una cuenta
+de servicio de Google Cloud. Código en `reportes/seguimiento_google_sheets.py`;
+configuración paso a paso en **`docs/seguimiento_google_sheets_pasos.md`**.
+
+> ⚠️ En modo Excel, si comercial abre el xlsx en Google Sheets, debe editarlo
+> **en modo Office** (Drive lo guarda como .xlsx). Si alguien hace "Guardar como Hojas de
 > cálculo de Google" crea OTRO archivo y el script no lo verá.
 > Marcar «Descartado» NO saca un caso de la lista: el sistema lo cierra cuando
 > el movimiento se resuelve o se anula en el ERP.

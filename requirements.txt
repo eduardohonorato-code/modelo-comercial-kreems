@@ -14,3 +14,5 @@ matplotlib>=3.8        # export PNG de tablas (reportes por WhatsApp)
 
 # Utilidades
 python-dateutil>=2.9
+google-auth>=2.0       # solo el script del seguimiento en Google Sheets (no la app)
+requests>=2.31

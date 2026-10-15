@@ -53,3 +53,6 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Llave de la cuenta de servicio de Google (seguimiento en Google Sheets)
+credenciales/
