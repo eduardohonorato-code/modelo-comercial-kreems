@@ -2,7 +2,9 @@
 Informes de máquinas sin las colas de logística (sep-2026).
 
 Las colas «pedidos esperando documento» y «facturados esperando despacho»
-salieron de la página y de los Excel porque gerencia ya no las usa. Los
+salieron de los Excel porque gerencia ya no las usa (la primera volvió a la
+página en oct-2026 como «Pedidos sin gestionar», y vive en el reporte para
+comercial: ver test_seguimiento_comercial.py). Los
 pedidos de flete se siguen leyendo, pero solo para reconocer un rechazo que el
 vendedor volvió a ingresar. Estas pruebas cuidan las dos cosas: que las hojas
 de cola no vuelvan y que el seguimiento de rechazos no pierda los pedidos.

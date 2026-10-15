@@ -107,6 +107,7 @@ def sidebar():
         nav_items.append(("clientes", "🧾", "Clientes"))
         if es_gerencia():
             nav_items.append(("control_maquinas", "🧊", "Control Máquinas"))
+            nav_items.append(("control_entregas", "🚚", "Control Entregas"))
             nav_items.append(("presupuesto", "🎯", "Presupuesto"))
             nav_items.append(("comisiones", "💰", "Comisiones"))
             nav_items.append(("carga",  "📤", "Carga de archivos"))
@@ -260,6 +261,21 @@ def main():
                 )
             else:
                 control_maquinas.render(client, anio, mes)
+
+        elif pagina == "control_entregas":
+            st.markdown("## 🚚 Control de Entregas")
+            # Mismo resguardo que Control de Máquinas: si el despliegue deja
+            # módulos viejos en memoria, que se caiga solo esta página.
+            try:
+                from app.pages import control_entregas
+            except ImportError:
+                st.error(
+                    "Esta sección no cargó porque la app quedó con una mezcla "
+                    "de versiones tras el último despliegue. Reinicia desde "
+                    "**Manage app → Reboot app** y vuelve a entrar."
+                )
+            else:
+                control_entregas.render(client, anio, mes)
 
         elif pagina == "presupuesto":
             if not es_gerencia():

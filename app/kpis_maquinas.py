@@ -19,6 +19,12 @@ import pandas as pd
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  preparar_movimientos, _prep_pedidos)
 
+# Primer despacho de Autoventa que hay en la base. Antes de esta fecha no hay
+# con qué confirmar si una máquina se entregó o volvió, así que tampoco existen
+# rechazos: es el límite real hacia atrás de todo el seguimiento. Acuña no pasa
+# por Autoventa y nunca tiene despacho, en ninguna fecha.
+PRIMER_DESPACHO = date(2026, 2, 20)
+
 
 def cargar_todo(client, f_ini, f_fin, soc_ids=None, dias_antes: int = 180,
                 dias_despues: int = 90):

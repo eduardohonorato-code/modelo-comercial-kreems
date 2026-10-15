@@ -21,10 +21,12 @@ no otro grupo. Por eso se sacaron de la vista los indicadores que miraban otra
 cosa (% concretado, mediana de días, cola vencida, parque neto): cada uno tenía
 su propio denominador y obligaba a explicar cuál era cuál.
 
-Lo demás —las entregas en pesos, el Excel y las metas— queda abajo, plegado.
-Las dos colas de logística (pedidos esperando documento y facturados esperando
-despacho) salieron en septiembre de 2026: gerencia ya no las usa. Los pedidos
-de flete se siguen leyendo, pero solo para reconocer un rechazo reingresado.
+Debajo del seguimiento de rechazos van los **pedidos sin gestionar** (pedidos
+de flete sin DTE: salieron en sep-2026 y volvieron en oct-2026 a pedido de
+gerencia) y el **reporte semanal para el área comercial**, el Excel que se sube a
+Drive después de la reunión de los lunes (`export_seguimiento_comercial`). El
+Excel de gerencia y las metas quedan abajo, plegados. El % de entrega por
+transportista se mudó a la sección Control Entregas.
 """
 import datetime
 
@@ -38,7 +40,8 @@ from app.data import (get_objetivos_maquinas, upsert_objetivos_maquinas,
                       get_dim_cliente_full)
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO)
-from app.kpis_maquinas import (ANULADA, DIAS_PARA_REINTENTAR, REINTENTO_OK,
+from app.kpis_maquinas import (ANULADA, DIAS_PARA_REINTENTAR, PRIMER_DESPACHO,
+                               REINTENTO_OK,
                                LECT_IGUAL, LECT_MENOS, LECT_NO, LECT_NUEVO,
                                LECT_RECIENTE, LECT_SIN_BASE, LECT_DEJO, cargar_todo, conteo_semana,
                                desde_ventas, mezcla_movimientos, mezcla_texto,
@@ -71,11 +74,8 @@ _RANGOS = {
     "Rango personalizado": ("pers", 0),
 }
 
-# Primer despacho de Autoventa que hay en la base. Antes de esta fecha no hay
-# con qué confirmar si una máquina se entregó o volvió, así que tampoco existen
-# rechazos: es el límite real hacia atrás de todo lo que mira esta página.
-# Acuña no pasa por Autoventa y nunca tiene despacho, en ninguna fecha.
-_PRIMER_DESPACHO = datetime.date(2026, 2, 20)
+# Límite real hacia atrás de todo lo que mira esta página (ver kpis_maquinas).
+_PRIMER_DESPACHO = PRIMER_DESPACHO
 # Desde dónde se cargan los movimientos: un mes antes del primer despacho,
 # porque una factura puede preceder a su ruta en varias semanas.
 _INI_HISTORIA = _PRIMER_DESPACHO - datetime.timedelta(days=31)
@@ -456,6 +456,8 @@ def render(client, anio: int, mes: int):
                 "confirmar nunca, y por eso quedan fuera del % de entrega.")
 
     ctx_seg = _seguimiento(client, seg_todo, desde_def)
+    _pedidos_sin_gestionar(client, ped, seg_todo)
+    _reporte_comercial(client, seg_todo, ped)
 
     # ── Tendencia ────────────────────────────────────────────────────────────
     st.divider()
@@ -806,6 +808,136 @@ def _tablas_seguimiento(client, seg: pd.DataFrame, res: dict, desde,
     return {"desde": desde, "hasta": hasta, "ventas": ventas}
 
 
+@st.cache_data(show_spinner=False, ttl=600)
+def _vendedores(_client) -> dict:
+    try:
+        from app.data import get_todos_vendedores
+        v = get_todos_vendedores(_client)
+        return dict(zip(v["id"], v["nombre_canonico"]))
+    except Exception:
+        return {}
+
+
+def _pedidos_sin_gestionar(client, ped: pd.DataFrame,
+                           seg_todo: pd.DataFrame) -> None:
+    """
+    Pedidos de flete que el vendedor ya ingresó y que todavía no tienen DTE.
+
+    Salieron de la página en sep-2026 y volvieron en oct-2026, a pedido de
+    gerencia: entran al reporte semanal para comercial y hay que poder verlos
+    aquí también. Siguen fuera de los números de arriba —todavía no son
+    gestiones: cuentan en la semana en que se emita su documento— y salen
+    todos los abiertos, sin importar el período elegido.
+
+    La lista sale de `export_seguimiento_comercial.casos_abiertos`, la misma
+    que va al Excel de Drive, para que la pantalla y el reporte no difieran.
+    """
+    from app.export_seguimiento_comercial import HOJA_PEDIDOS, casos_abiertos
+
+    st.divider()
+    try:
+        cli = get_dim_cliente_full(client)
+    except Exception:
+        cli = None
+    # Con el seguimiento completo, para marcar los que son reingreso de un
+    # rechazo.
+    lista = casos_abiertos(seg_todo, ped, vendedores=_vendedores(client),
+                           clientes=cli)[HOJA_PEDIDOS]
+    _sec(f"Pedidos sin gestionar · {len(lista)}")
+    if lista.empty:
+        st.success("No hay pedidos de flete esperando documento.")
+        return
+    cuenta = lista["Movimiento"].value_counts()
+    k = st.columns(4)
+    for col, (etq, mv) in zip(k, (("Instalaciones", "Instalación"),
+                                  ("Cambios", "Cambio"),
+                                  ("Retiros", "Retiro"))):
+        col.metric(etq, int(cuenta.get(mv, 0)))
+    viejos = int((lista["Días esperando"] > DIAS_PARA_REINTENTAR).sum())
+    k[3].metric(f"Más de {DIAS_PARA_REINTENTAR} días", viejos,
+                help="Pedidos que llevan más de una semana sin documento.")
+    st.dataframe(lista[["Días esperando", "Fecha pedido", "N° pedido",
+                        "Movimiento", "Vendedor", "Cliente", "Comuna",
+                        "Es reingreso de un rechazo"]],
+                 use_container_width=True, hide_index=True)
+    st.caption(
+        "Pedidos de flete que el vendedor ya ingresó en Autoventa y que "
+        "todavía no tienen DTE. **Todavía no son gestiones**: cuando se emita "
+        "el documento pasan a contar arriba, en esa semana. Emitir el DTE es "
+        "de logística. Quedan fuera los facturados en la otra serie (Obuma) y "
+        "los que Autoventa ya no tiene (anulados o reingresados con otro "
+        "número).")
+    st.download_button("⬇️ Descargar en CSV",
+                       lista.to_csv(index=False).encode("utf-8-sig"),
+                       f"pedidos_sin_gestionar_{datetime.date.today():%Y%m%d}.csv",
+                       "text/csv", key="dl_cola")
+
+
+def _reporte_comercial(client, seg_todo: pd.DataFrame, ped: pd.DataFrame):
+    """
+    El Excel que se sube a Drive después de la reunión de los lunes.
+
+    Lo normal es actualizarlo con `Actualizar seguimiento maquinas.bat`, que
+    escribe directo en la carpeta de Drive. Este botón es la alternativa desde
+    cualquier computador: se sube la versión de la semana pasada (para
+    conservar lo que comercial escribió) y se descarga la nueva.
+    """
+    from app.export_seguimiento_comercial import libro_seguimiento
+
+    with st.expander("📤 Reporte semanal para el área comercial (Drive)"):
+        st.caption(
+            "Tres listas para derivar a comercial después de la reunión: "
+            "**rechazos sin retomar**, **reingresos sin cerrar** y **pedidos "
+            "sin gestionar**, con columnas amarillas para que comercial anote "
+            "qué hizo. Desde el PC de la oficina se actualiza con doble clic "
+            "en «Actualizar seguimiento maquinas.bat» (escribe directo en "
+            "Drive). Aquí: sube el archivo de la semana pasada para conservar "
+            "sus comentarios y descarga el nuevo.")
+        previo = st.file_uploader("Versión anterior (opcional)", type=["xlsx"],
+                                  key="cm_rep_previo")
+        if st.button("Generar reporte para comercial", key="btn_rep_com"):
+            from app.kpis_maquinas import desde_ventas
+            vp = None
+            sin = (seg_todo[seg_todo["_abierto"]]
+                   if seg_todo is not None and not seg_todo.empty
+                   else pd.DataFrame())
+            with st.spinner("Armando el reporte…"):
+                if not sin.empty:
+                    try:
+                        ventas = _ventas_clientes(
+                            client, tuple(sorted(set(sin["RUT"]))),
+                            desde_ventas(sin))
+                        vp = ventas_post_rechazo(sin, ventas)
+                    except Exception:
+                        vp = None
+                try:
+                    cli = get_dim_cliente_full(client)
+                except Exception:
+                    cli = None
+                data, res = libro_seguimiento(
+                    seg_todo, ped, previo=previo.getvalue() if previo else None,
+                    ventas_post=vp, vendedores=_vendedores(client),
+                    clientes=cli)
+            if not res["previo_leido"]:
+                st.error("No se pudo leer el archivo anterior: el reporte nuevo "
+                         "sale SIN los comentarios de comercial. Revisa que sea "
+                         "el Excel de este reporte.")
+            st.session_state["_cm_rep_com"] = (data, res)
+        g = st.session_state.get("_cm_rep_com")
+        if g:
+            data, res = g
+            st.markdown(
+                f"**{res['sin_retomar']}** sin retomar · "
+                f"**{res['sin_cerrar']}** reingresos sin cerrar · "
+                f"**{res['pedidos_sin_gestionar']}** pedidos sin gestionar · "
+                f"**{res['cerrados_semana']}** cerrados desde el anterior")
+            st.download_button(
+                "⬇️ Descargar reporte para comercial", data,
+                "Seguimiento_comercial_maquinas.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, key="dl_rep_com")
+
+
 def _grafico_tendencia(mov: pd.DataFrame, f_fin, meta_g):
     """Barras apiladas por estado, semana a semana, con la meta y el % encima."""
     m = mov.copy()
@@ -855,9 +987,11 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None,
                      ctx_seg: dict | None = None):
     """Todo lo que no es la pregunta de la semana, fuera de la vista."""
     st.divider()
-
-    with st.expander("🚚 Entregas en pesos por transportista (helados y máquinas)"):
-        _entregas_pesos(client, f_ini, f_fin, mov, desp)
+    # El % de entrega por transportista (helados en pesos y máquinas en
+    # unidades) se mudó a «Control Entregas» en oct-2026, junto con los
+    # tiempos de entrega: aquí era una tabla plegada que nadie encontraba.
+    st.caption("🚚 El % de entrega por transportista y los tiempos de entrega "
+               "(pedido → DTE → ruta) están en la sección **Control Entregas**.")
 
     with st.expander("📘 Informes Excel"):
         st.caption("Mismos números que esta página, con el detalle de cada "
@@ -893,96 +1027,6 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None,
 
     with st.expander(f"🎯 Metas de {f_ini.month:02d}/{f_ini.year}"):
         _form_metas(client, f_ini.year, f_ini.month, metas)
-
-
-def _entregas_pesos(client, f_ini, f_fin, mov, desp):
-    """Efectividad del despacho en pesos (productos) y unidades (máquinas)."""
-    if desp is None or desp.empty:
-        st.caption("Sin despachos cargados en el período.")
-        return
-    from app.data import get_ventas_rango
-    from app.export_entregas import (preparar_entregas, _tabla_por,
-                                     maquinas_despachadas)
-    try:
-        ventas = get_ventas_rango(client, f_ini, f_fin)
-    except Exception:
-        st.warning("No se pudieron leer las ventas del período.")
-        return
-    # Un período sin ventas (la próxima semana, casi siempre) llega como un
-    # DataFrame sin columnas y `preparar_entregas` se caía buscando n_dcto.
-    if ventas is None or ventas.empty:
-        st.caption("Sin ventas facturadas en el período.")
-        return
-    d = preparar_entregas(ventas, desp, mov)
-    d = d[d["fecha_ruta"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))]
-    if d.empty:
-        st.caption("Sin despachos en el período.")
-        return
-    prods = d[~d["Es máquina"]]
-    ent = float(prods.loc[prods["_est"] == "Entregada", "Monto facturado"].sum())
-    tot = float(prods["Monto facturado"].sum())
-    rech = float(prods.loc[prods["_est"] == "Rechazada", "Monto facturado"].sum())
-    st.markdown("**Helados · en pesos**")
-    k1, k2 = st.columns(2)
-    k1.metric("% de entrega · helados", f"{ent / tot * 100:.1f}%" if tot else "—",
-              help="Plata entregada sobre la plata que salió a ruta en el período.")
-    k2.metric("Rechazado · helados", fmt_clp(rech))
-    t = _tabla_por(prods, "Transportista", "monto", "Transportista")
-    if not t.empty:
-        v = t.copy()
-        for col in [x for x in v.columns if x not in ("Transportista", "% de entrega")]:
-            v[col] = v[col].apply(lambda x: fmt_clp(x) if pd.notna(x) and x != "" else "")
-        v["% de entrega"] = v["% de entrega"].apply(
-            lambda x: f"{x * 100:.1f}%" if pd.notna(x) and x != "" else "")
-        st.dataframe(v, use_container_width=True, hide_index=True)
-    _entregas_maquinas(d, maquinas_despachadas, _tabla_por)
-    st.caption("Todo se mide sobre lo que salió a ruta en el período elegido "
-               "arriba (fecha de ruta), no sobre lo facturado: para un mes, "
-               "elige «Mes en curso» o un rango personalizado.")
-
-
-def _entregas_maquinas(d: pd.DataFrame, maquinas_despachadas, _tabla_por):
-    """
-    El % de entrega de máquinas, en unidades y por transportista.
-
-    En unidades porque el flete de una máquina se factura a $1: en pesos no
-    dice nada. Cuadra con la planilla de logística, que cuenta por camión:
-    julio de 2026, Máquinas Kreems 1, 11 entregadas y 1 rechazada = 92%.
-    """
-    st.markdown("**Máquinas · en unidades**")
-    maqs = maquinas_despachadas(d)
-    if maqs.empty:
-        st.caption("Sin máquinas despachadas en el período.")
-        return
-    est = maqs["_est"]
-    n_ent, n_rech = int((est == "Entregada").sum()), int((est == "Rechazada").sum())
-    n_pend, n_tot = int((est == "Pendiente").sum()), len(maqs)
-    k1, k2, k3 = st.columns(3)
-    k1.metric("% de entrega · máquinas", f"{n_ent / n_tot * 100:.0f}%",
-              help="Máquinas entregadas sobre las que salieron a ruta en el "
-                   "período. Las que siguen en ruta cuentan en el total, igual "
-                   "que en helados: el mes en curso sube a medida que se "
-                   "confirman.")
-    k2.metric("Entregadas", f"{n_ent} de {n_tot}")
-    k3.metric("Rechazadas", n_rech,
-              f"{n_pend} en ruta" if n_pend else None, delta_color="off")
-    t = _tabla_por(maqs, "Transportista", "docs", "Transportista")
-    if not t.empty:
-        v = t.copy()
-        for col in [x for x in v.columns if x not in ("Transportista", "% de entrega")]:
-            v[col] = v[col].apply(lambda x: f"{int(x)}" if pd.notna(x) and x != "" else "")
-        v["% de entrega"] = v["% de entrega"].apply(
-            lambda x: f"{x * 100:.0f}%" if pd.notna(x) and x != "" else "")
-        st.dataframe(v, use_container_width=True, hide_index=True)
-    n_anul = int((d["Es máquina"] & d["Es anulación"]).sum())
-    st.caption(
-        "Cuenta cada documento despachado: todo flete de máquina (FL) y todo lo "
-        "de $0 que llevó un camión de máquinas, porque ese camión hace retiros "
-        "que no pasan por factura FL. Las máquinas que viajan en camión de "
-        "helados también cuentan."
-        + (f" Quedan fuera {n_anul} de la ruta «Nulas mes en curso»: son "
-           "anulaciones de logística, no entregas ni rechazos."
-           if n_anul else ""))
 
 
 def _form_metas(client, anio: int, mes: int, metas: dict):

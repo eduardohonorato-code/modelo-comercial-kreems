@@ -250,6 +250,48 @@ def get_pedidos_fl_todos(client: Client, sociedad_ids=None) -> pd.DataFrame:
     return df
 
 
+def get_pedidos_rango(client: Client, fecha_ini, fecha_fin,
+                      sociedad_ids=None) -> pd.DataFrame:
+    """
+    Líneas de fact_pedidos (helados y fletes) INGRESADAS entre dos fechas
+    —por `fecha_pedido`, el created_at de la línea en Autoventa—, paginado y
+    ordenado por id. Es la base de Control Entregas, que mide el tiempo desde
+    el ingreso del pedido hasta la ruta. ~3.500 líneas por mes.
+    """
+    fi = fecha_ini.isoformat() if hasattr(fecha_ini, "isoformat") else str(fecha_ini)
+    ff = fecha_fin.isoformat() if hasattr(fecha_fin, "isoformat") else str(fecha_fin)
+    cols = ("n_pedido,num_documento,doc_venta,fecha,fecha_pedido,estado_pedido,"
+            "vendedor_id,cliente_rut,producto_codigo,sociedad_id,neto")
+    _PAGE, offset, rows = 1000, 0, []
+    while True:
+        q = (client.table("fact_pedidos").select(cols)
+             .gte("fecha_pedido", fi).lte("fecha_pedido", ff)
+             .order("id").range(offset, offset + _PAGE - 1))
+        if sociedad_ids:
+            q = q.in_("sociedad_id", sociedad_ids)
+        r = q.execute()
+        if not r.data:
+            break
+        rows.extend(r.data)
+        if len(r.data) < _PAGE:
+            break
+        offset += _PAGE
+    df = pd.DataFrame(rows, columns=cols.split(","))
+    for c in ("fecha", "fecha_pedido"):
+        df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df
+
+
+def get_feriados(client: Client) -> list:
+    """Fechas de la tabla `feriados` (sql/016) como 'AAAA-MM-DD'. Fail-soft:
+    sin la tabla, los días hábiles se cuentan solo sin fines de semana."""
+    try:
+        r = client.table("feriados").select("fecha").execute()
+        return [f["fecha"] for f in (r.data or []) if f.get("fecha")]
+    except Exception:
+        return []
+
+
 # Metas por defecto del control de máquinas: las 22 gestiones semanales las fijó
 # gerencia (ago-2026); el 85% de entrega sale de la línea base de marzo-agosto
 # 2026. Se usan solo si la tabla no tiene ninguna fila todavía. La tabla tiene
