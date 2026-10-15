@@ -7,4 +7,4 @@ cambio todavía no llegó". Con esto basta mirar el pie del login.
 
 Al hacer un cambio que el usuario deba ver, subir VERSION en el mismo commit.
 """
-VERSION = "2026-10-15c · Control Máquinas: pendientes sin DTE visibles + recarga tras deploy"
+VERSION = "2026-10-15d · Control Máquinas: arreglo del import roto"

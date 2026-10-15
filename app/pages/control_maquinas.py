@@ -45,8 +45,8 @@ refrescar({"app.data": ("get_pedidos_rango",),
 
 from app.auth import es_gerencia  # noqa: E402
 from app.styles import fmt_clp  # noqa: E402
-from app.data import (  # noqa: E402get_objetivos_maquinas, upsert_objetivos_maquinas,
-                      get_dim_cliente_full)
+from app.data import (get_objetivos_maquinas,  # noqa: E402
+                      upsert_objetivos_maquinas, get_dim_cliente_full)
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO)
 from app.kpis_maquinas import (ANULADA, DIAS_PARA_REINTENTAR, PRIMER_DESPACHO,
