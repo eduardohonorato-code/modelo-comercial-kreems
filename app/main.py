@@ -19,14 +19,19 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-from app.auth import (login, logout, is_authenticated, es_gerencia,
-                      get_rol, MESES, get_client_auth, cambiar_password)
-from app.styles import CSS, logo_img
 import importlib  # noqa: E402
 import app.version  # noqa: E402
+from app.frescos import al_cambiar_version  # noqa: E402
 # Recargar siempre: es un archivo de una línea y, sin esto, tras un deploy el
 # sello seguía mostrando la versión anterior aunque el código ya fuera nuevo.
 VERSION = importlib.reload(app.version).VERSION
+# Si el sello cambió (deploy sin Reboot), recargar todos los módulos app.*,
+# páginas incluidas, ANTES de importar nada de ellos. Ver app/frescos.py.
+al_cambiar_version(VERSION)
+
+from app.auth import (login, logout, is_authenticated, es_gerencia,  # noqa: E402
+                      get_rol, MESES, get_client_auth, cambiar_password)
+from app.styles import CSS, logo_img  # noqa: E402
 # Los módulos de páginas (app.pages) NO se importan aquí: cargan plotly/data y
 # enlentecen la pantalla de login. Se importan dentro de main() tras autenticar.
 

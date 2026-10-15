@@ -464,8 +464,10 @@ def render(client, anio: int, mes: int):
                 "un mes sin despachos cargados — esas no se van a poder "
                 "confirmar nunca, y por eso quedan fuera del % de entrega.")
 
-    ctx_seg = _seguimiento(client, seg_todo, desde_def)
+    # Los pendientes sin DTE van antes del seguimiento: es lo primero que
+    # gerencia busca después de la semana (oct-2026: abajo no los encontraba).
     _pedidos_sin_gestionar(client, ped, seg_todo)
+    ctx_seg = _seguimiento(client, seg_todo, desde_def)
     _reporte_comercial(client, seg_todo, ped)
 
     # ── Tendencia ────────────────────────────────────────────────────────────
@@ -852,7 +854,7 @@ def _pedidos_sin_gestionar(client, ped: pd.DataFrame,
     # rechazo.
     lista = casos_abiertos(seg_todo, ped, vendedores=_vendedores(client),
                            clientes=cli)[HOJA_PEDIDOS]
-    _sec(f"Pedidos sin gestionar · {len(lista)}")
+    _sec(f"Pendientes sin DTE (pedidos sin gestionar) · {len(lista)}")
     if lista.empty:
         st.success("No hay pedidos de flete esperando documento.")
         return
