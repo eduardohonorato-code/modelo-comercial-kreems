@@ -22,7 +22,11 @@ st.set_page_config(
 from app.auth import (login, logout, is_authenticated, es_gerencia,
                       get_rol, MESES, get_client_auth, cambiar_password)
 from app.styles import CSS, logo_img
-from app.version import VERSION
+import importlib  # noqa: E402
+import app.version  # noqa: E402
+# Recargar siempre: es un archivo de una línea y, sin esto, tras un deploy el
+# sello seguía mostrando la versión anterior aunque el código ya fuera nuevo.
+VERSION = importlib.reload(app.version).VERSION
 # Los módulos de páginas (app.pages) NO se importan aquí: cargan plotly/data y
 # enlentecen la pantalla de login. Se importan dentro de main() tras autenticar.
 

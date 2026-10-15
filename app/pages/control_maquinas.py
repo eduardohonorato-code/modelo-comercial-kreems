@@ -34,9 +34,18 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app.auth import es_gerencia
-from app.styles import fmt_clp
-from app.data import (get_objetivos_maquinas, upsert_objetivos_maquinas,
+from app.frescos import refrescar
+
+# Tras un deploy, Streamlit Cloud puede seguir con módulos viejos en memoria y
+# esta página revienta con ImportError. Ver app/frescos.py. El orden importa:
+# export_seguimiento_comercial importa de kpis_maquinas.
+refrescar({"app.data": ("get_pedidos_rango",),
+           "app.kpis_maquinas": ("PRIMER_DESPACHO",),
+           "app.export_seguimiento_comercial": ("datos_seguimiento",)})
+
+from app.auth import es_gerencia  # noqa: E402
+from app.styles import fmt_clp  # noqa: E402
+from app.data import (  # noqa: E402get_objetivos_maquinas, upsert_objetivos_maquinas,
                       get_dim_cliente_full)
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO)

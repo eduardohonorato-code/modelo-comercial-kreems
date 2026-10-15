@@ -25,10 +25,17 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app.auth import es_gerencia
-from app.styles import fmt_clp
-from app.kpis_maquinas import etiqueta_mov
-from app.kpis_entregas import (ABIERTOS, CERRADOS, DIAS_ALERTA_NC, EN_RUTA, ENTREGADO,
+from app.frescos import refrescar
+
+# Tras un deploy, Streamlit Cloud puede seguir con app.data viejo en memoria
+# (ImportError de get_pedidos_rango el 15-10-2026). Ver app/frescos.py.
+refrescar({"app.data": ("get_pedidos_rango", "get_feriados"),
+           "app.kpis_entregas": ("SLA_MAQ_DEFAULT",)})
+
+from app.auth import es_gerencia  # noqa: E402
+from app.styles import fmt_clp  # noqa: E402
+from app.kpis_maquinas import etiqueta_mov  # noqa: E402
+from app.kpis_entregas import (ABIERTOS, CERRADOS, DIAS_ALERTA_NC, EN_RUTA, ENTREGADO,  # noqa: E402
                                NC_EXACTA, RECHAZADO, SIN_DTE, SIN_NC, SIN_RUTA,
                                SLA_DIAS_DEFAULT, SLA_MAQ_DEFAULT, distribucion,
                                preparar_pedidos, resumen, semanal,
