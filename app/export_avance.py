@@ -210,11 +210,24 @@ _COLS_TABLERO = [
     ("vend", "Vendedor"),
     ("c_v", "Fact-NC"), ("c_m", "Meta"), ("c_vp", "Fact-NC proy."), ("c_p", "% proy."),
     ("n_l", "Máquinas"), ("n_h", "Llevas"), ("n_m", "Meta"),
-    ("r_l", "Visitas / Programadas"), ("r_h", "Llevas"), ("r_m", "Meta"),
+    # "Prog." y no "Programadas": el encabezado era lo que ensanchaba la columna.
+    ("r_l", "Visitas / Prog."), ("r_h", "Llevas"), ("r_m", "Meta"),
     ("e_l", "Compraron / Cartera"), ("e_h", "Llevas"), ("e_m", "Meta"),
     ("s_l", "SKU/cliente"), ("s_m", "Meta"),
     ("t_hoy", "Tasa llevas"), ("com_hoy", "Llevas"), ("t_proy", "Tasa proy."), ("com", "Proyectada"),
 ]
+
+
+def _nombre_corto(nombre) -> str:
+    """Primer nombre y primer apellido («Mauricio Andres Figueroa Holtmann» → «Mauricio
+    Figueroa»), como el SaaS: con el nombre completo la columna Vendedor ocupaba un
+    tercio del ancho. Con tres palabras se asume nombre + apellido + apellido."""
+    p = str(nombre or "").split()
+    if len(p) >= 4:
+        return f"{p[0]} {p[2]}"
+    if len(p) == 3:
+        return f"{p[0]} {p[1]}"
+    return " ".join(p)
 
 
 def _labels_tablero(df: pd.DataFrame) -> list:
@@ -242,7 +255,7 @@ def tabla_tablero(df: pd.DataFrame, extra: list | None = None) -> tuple[pd.DataF
     for i, (_, r) in enumerate(df.iterrows()):
         ag, cart = r.get("ruta_agend"), r.get("cobertura_cartera")
         fila = {
-            "vend": r["vendedor"],
+            "vend": _nombre_corto(r["vendedor"]),
             "c_v": clp(r["cuota_llevas"]), "c_m": clp(r["cuota_meta"]),
             "c_vp": clp(r["venta_proy"]), "c_p": pct(r["cuota_cumpl"]),
             "n_l": num(r["nuevos_llevas"]), "n_m": num(r["nuevos_meta"]),
@@ -300,7 +313,8 @@ def filas_extra(df_todos: pd.DataFrame, df_panel: pd.DataFrame, ctx: dict) -> li
     for _, r in fuera.iterrows():
         m = float(r.get("cuota_llevas") or 0)
         if abs(m) >= 1:
-            extra.append((f"{r['vendedor']} (nota de crédito)" if m < 0 else r["vendedor"], m))
+            nombre = _nombre_corto(r["vendedor"])
+            extra.append((f"{nombre} (NC)" if m < 0 else nombre, m))
     return extra
 
 
@@ -317,12 +331,14 @@ def tablero_png(df: pd.DataFrame, ctx: dict, anio: int, mes: int,
         "Llevas = lo acumulado a la fecha de corte. El color dice si, a este ritmo, el indicador cobra al cierre:  Verde ≥ 100%  ·  "
         "Amarillo = cobra parcial (desde el piso)  ·  Rojo = bajo el piso, no cobra ese "
         "indicador.\nComisión que llevas = si el mes cerrara en la fecha de corte · Proyectada = a este ritmo "
-        "hasta fin de mes.  " + fuentes_ruta(df))
+        "hasta fin de mes.  " + fuentes_ruta(df)
+        + ("\n(NC) = la venta del mes de ese vendedor es una nota de crédito."
+           if any(str(e).endswith("(NC)") for e, _ in (extra or [])) else ""))
     return tabla_png(disp, f"AVANCE DE OBJETIVOS · {MESES[mes].upper()} {anio}",
                      subtitulo(ctx), color_celdas=texto, fondo_celdas=fondo,
                      resaltar_ultima=True, col_labels=_labels_tablero(df),
                      grupos=_GRUPOS_TABLERO, notas=notas, dpi=220, marcos=True,
-                     logo=True, centrado=True,
+                     logo=True, centrado=True, nombres_izquierda=True,
                      filas_total=disp.attrs.get("filas_total"))
 
 

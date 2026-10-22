@@ -114,7 +114,7 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
               dpi: int = 200, fondo_celdas: dict | None = None,
               notas: str = "", marcos: bool = False, logo: bool = False,
               centrado: bool = False, filas_total: list | None = None,
-              filas_info: list | None = None) -> bytes:
+              filas_info: list | None = None, nombres_izquierda: bool = False) -> bytes:
     """
     Render de un DataFrame de STRINGS ya formateados a PNG.
 
@@ -131,6 +131,8 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
     - `notas`: texto chico al pie de la tabla (leyenda de colores, fuentes).
     - `marcos`: con `grupos`, dibuja un marco del color de cada grupo alrededor de
       sus columnas (encabezado + filas), para separar las categorías hacia abajo.
+    - `nombres_izquierda`: con `centrado`, la primera columna (los nombres) igual va
+      alineada a la izquierda: los nombres se leen mejor así que centrados.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -233,7 +235,7 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
             if (i, col) in color_celdas:
                 txt.set_color(color_celdas[(i, col)])
                 txt.set_fontweight("bold")
-        if c == 0 and not centrado:
+        if c == 0 and (not centrado or nombres_izquierda):
             txt.set_ha("left")
 
     # Banda de grupos sobre los encabezados
