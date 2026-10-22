@@ -149,6 +149,13 @@ def tabla_png(df, titulo: str, subtitulo: str = "", color_celdas: dict | None = 
               for j in range(n_cols)]
     total_w = sum(widths)
     fig_w = min(max(total_w * 0.102 + 0.6, 6.0), 32.0)
+    # La nota al pie se parte al ancho de la tabla: una línea más larga que la tabla
+    # ensanchaba la imagen (se guarda con bbox «tight») y dejaba un espacio a la derecha.
+    if notas:
+        import textwrap
+        por_linea = max(40, int(fig_w * 0.988 * 16))
+        notas = "\n".join(textwrap.fill(linea, por_linea) if linea else ""
+                          for linea in notas.split("\n"))
     banda_in = 0.42 if grupos else 0.0
     # Encabezado: título navy a la izquierda + subtítulo (sin barra ni subrayado).
     L, R = 0.006, 0.994

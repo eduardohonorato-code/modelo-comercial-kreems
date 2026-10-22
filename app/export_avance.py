@@ -219,14 +219,12 @@ _COLS_TABLERO = [
 
 
 def _nombre_corto(nombre) -> str:
-    """Primer nombre y primer apellido («Mauricio Andres Figueroa Holtmann» → «Mauricio
-    Figueroa»), como el SaaS: con el nombre completo la columna Vendedor ocupaba un
-    tercio del ancho. Con tres palabras se asume nombre + apellido + apellido."""
+    """Primer nombre y los dos apellidos («Mauricio Andres Figueroa Holtmann» →
+    «Mauricio Figueroa Holtmann»), sin el segundo nombre: con el nombre completo la
+    columna Vendedor ocupaba un tercio del ancho. Con tres palabras o menos, tal cual."""
     p = str(nombre or "").split()
     if len(p) >= 4:
-        return f"{p[0]} {p[2]}"
-    if len(p) == 3:
-        return f"{p[0]} {p[1]}"
+        return " ".join([p[0], *p[-2:]])
     return " ".join(p)
 
 
