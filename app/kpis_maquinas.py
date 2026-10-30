@@ -173,6 +173,11 @@ SIN_REINTENTO = "Sin reintento"
 # como «Sin reintento» y disparaba la advertencia.
 ANULADA = "Anulada por logística"
 _RUTA_ANULACION = "nula"
+# Cerrado con una factura de producto MQ («máquinas regularizadas», desde el
+# 29-oct-2026) del mismo cliente, emitida el día del rechazo o después: el
+# reingreso ya no aplicaba o no iba a cerrar por el cruce. No pisa lo que ya
+# terminó por su cuenta (entregado o anulado). Ver data.get_regularizaciones_mq.
+REGULARIZADA = "Regularizada (MQ)"
 
 # Los que siguen pidiendo que alguien haga algo. Solo «Sin reintento»: el
 # entregado está cerrado, el pedido reingresado es de logística (falta el DTE), y
@@ -186,15 +191,16 @@ _COLS_SEG = ["Fecha rechazo", "Fecha documento", "Documento", "Cliente", "RUT",
              "Comuna", "Vendedor", "Movimiento", "Motivo",
              "Lo que dijo el repartidor", "Transportista",
              "Estado post-rechazo", "Reintento", "Días desde el rechazo",
-             "_abierto"]
+             "Estado antes de regularizar", "Factura MQ", "Fecha factura MQ",
+             "Comentario del despacho MQ", "_abierto"]
 
 _POST = {ENTREGADA: REINTENTO_OK, RECHAZADA: REINTENTO_RECHAZO,
          EN_RUTA: REINTENTO_RUTA, SIN_DESPACHO: REINTENTO_RUTA}
 
 
 def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
-                         ped: pd.DataFrame, hoy: date | None = None
-                         ) -> pd.DataFrame:
+                         ped: pd.DataFrame, hoy: date | None = None,
+                         mq: pd.DataFrame | None = None) -> pd.DataFrame:
     """
     Qué pasó DESPUÉS de cada rechazo: si se volvió a ingresar y cómo terminó
     esa segunda vuelta.
@@ -228,6 +234,11 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
 
     `mov` tiene que venir hasta hoy, no hasta el fin del período mirado: el
     reintento de un rechazo de hace tres semanas ocurre después de esa semana.
+
+    `mq` (opcional) son las facturas de máquinas regularizadas
+    (`data.get_regularizaciones_mq`): si el cliente tiene una desde la fecha del
+    rechazo, el caso queda «Regularizada (MQ)» —ni abierto ni en curso— con el
+    estado que tenía y la factura que lo cerró.
     """
     hoy_ts = pd.Timestamp(hoy or date.today())
     if rech is None or rech.empty:
@@ -236,6 +247,7 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
     otros = mov if mov is not None and not mov.empty else pd.DataFrame()
     cola = (ped[ped["_sin_dte"] & ~ped["_fantasma"]]
             if ped is not None and not ped.empty else pd.DataFrame())
+    regs = mq if mq is not None and not mq.empty else pd.DataFrame()
 
     filas = []
     for _, r in rech.iterrows():
@@ -278,6 +290,14 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
         dias = int((hoy_ts - ref).days)
         if estado == SIN_REINTENTO:
             detalle = f"{dias} días sin volver a ingresarlo"
+        previo, f_mq = None, None
+        if not regs.empty and estado not in (REINTENTO_OK, ANULADA):
+            rut = "".join(ch for ch in str(r["cliente_rut"]) if ch.isalnum()).upper()
+            cerr = regs[(regs["_rutn"] == rut) & (regs["fecha"] >= ref)]
+            if not cerr.empty:
+                f_mq = cerr.sort_values(["fecha", "documento"]).iloc[0]
+                previo, estado = estado, REGULARIZADA
+                detalle = f"MQ {f_mq['documento']} del {f_mq['fecha']:%d/%m}"
         # Cuando dim_cliente no se pudo leer, `preparar_movimientos` deja
         # "(sin dato)" en todas las filas: ahí el RUT es más útil que nada.
         cliente = str(r.get("Cliente") or "").strip()
@@ -298,6 +318,13 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
             "Estado post-rechazo": estado,
             "Reintento": detalle,
             "Días desde el rechazo": dias,
+            "Estado antes de regularizar": previo,
+            "Factura MQ": f_mq["documento"] if f_mq is not None else None,
+            "Fecha factura MQ": (f_mq["fecha"].date()
+                                 if f_mq is not None and pd.notna(f_mq["fecha"])
+                                 else None),
+            "Comentario del despacho MQ": (f_mq["comentario_mq"]
+                                           if f_mq is not None else None),
             "_abierto": estado in ABIERTOS,
         })
     return (pd.DataFrame(filas, columns=_COLS_SEG)
@@ -308,22 +335,26 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
 
 def resumen_rechazos(seg: pd.DataFrame) -> dict:
     """
-    Los números del seguimiento. `ok + en_curso + abiertos + anuladas = n`,
-    siempre: en_curso es todo lo que se reingresó y todavía no cerró, incluido
-    lo que se volvió a rechazar; anuladas son las que logística dio de baja.
+    Los números del seguimiento.
+    `ok + en_curso + abiertos + anuladas + regularizadas = n`, siempre: en_curso
+    es todo lo que se reingresó y todavía no cerró, incluido lo que se volvió a
+    rechazar; anuladas son las que logística dio de baja; regularizadas, las
+    cerradas con una factura MQ.
     """
     if seg is None or seg.empty:
-        return dict(n=0, ok=0, en_curso=0, abiertos=0, anuladas=0, vencidos=0,
-                    pct=None)
+        return dict(n=0, ok=0, en_curso=0, abiertos=0, anuladas=0,
+                    regularizadas=0, vencidos=0, pct=None)
     est = seg["Estado post-rechazo"]
     ok = int((est == REINTENTO_OK).sum())
     anuladas = int((est == ANULADA).sum())
+    regularizadas = int((est == REGULARIZADA).sum())
     abiertos = int(seg["_abierto"].sum())
     vencidos = int((seg["_abierto"]
                     & (seg["Días desde el rechazo"] > DIAS_PARA_REINTENTAR)).sum())
-    return dict(n=len(seg), ok=ok, en_curso=len(seg) - ok - abiertos - anuladas,
-                abiertos=abiertos, anuladas=anuladas, vencidos=vencidos,
-                pct=ok / len(seg))
+    return dict(n=len(seg), ok=ok,
+                en_curso=len(seg) - ok - abiertos - anuladas - regularizadas,
+                abiertos=abiertos, anuladas=anuladas, regularizadas=regularizadas,
+                vencidos=vencidos, pct=ok / len(seg))
 
 
 def texto_sin_confirmar(c: dict) -> str:

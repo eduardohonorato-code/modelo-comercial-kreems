@@ -17,9 +17,9 @@ from openpyxl import load_workbook
 
 from app.export_maquinas import RECHAZADA, _prep_pedidos, preparar_movimientos
 from app.export_seguimiento_comercial import (
-    COL_ESTADO, HOJA_CERRADOS, HOJA_HISTORIAL, HOJA_PEDIDOS, HOJA_SIN_CERRAR,
-    HOJA_SIN_RETOMAR, ID, id_rechazo, libro_seguimiento)
-from app.kpis_maquinas import seguimiento_rechazos
+    COL_ESTADO, HOJA_CERRADOS, HOJA_HISTORIAL, HOJA_PEDIDOS, HOJA_REGULARIZADAS,
+    HOJA_SIN_CERRAR, HOJA_SIN_RETOMAR, ID, id_rechazo, libro_seguimiento)
+from app.kpis_maquinas import REGULARIZADA, resumen_rechazos, seguimiento_rechazos
 
 GN = 2
 RUT_A = "11.111.111-1"   # retiro rechazado, después reingresado
@@ -56,11 +56,19 @@ def _ped(facturado: bool):
         "cliente_rut": RUT_B, "vendedor_id": 7}]))
 
 
-def _generar(con_reintento, facturado, hoy, previo=None):
+def _mq(fecha="2026-10-10"):
+    """Una factura MQ («máquinas regularizadas») del cliente del rechazo."""
+    return pd.DataFrame([{
+        "cliente_rut": RUT_A, "_rutn": "111111111", "documento": "6667",
+        "fecha": pd.Timestamp(fecha), "comentario_mq": "máquina retirada, mal cerrada",
+        "estado_despacho_mq": "Entregada"}])
+
+
+def _generar(con_reintento, facturado, hoy, previo=None, mq=None):
     mov = _mov(con_reintento, hoy)
     ped = _ped(facturado)
     seg = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov,
-                               ped, hoy=hoy)
+                               ped, hoy=hoy, mq=mq)
     return libro_seguimiento(seg, ped, previo=previo, vendedores={7: "Ana"},
                              hoy=hoy)
 
@@ -131,6 +139,34 @@ class TestSeguimientoComercial(unittest.TestCase):
         x3, res = _generar(True, True, date(2026, 10, 12), previo=x2)
         self.assertEqual([c[ID] for c in _tabla(x3, HOJA_CERRADOS)], ["P-6001"])
         self.assertEqual(len(_tabla(x3, HOJA_HISTORIAL)), 2)
+
+    def test_mq_cierra_el_rechazo_y_queda_trazado(self):
+        rid = id_rechazo("5002", "2026-09-23")
+        x1, _ = _generar(False, False, date(2026, 10, 5))
+        # Semana 2: nadie lo reingresó, pero se emitió una factura MQ.
+        x2, res = _generar(False, False, date(2026, 10, 12), previo=x1, mq=_mq())
+        self.assertEqual(res["sin_retomar"], 0)
+        self.assertEqual(res["sin_cerrar"], 0)
+        self.assertEqual(res["regularizadas"], 1)
+        cerr = [c for c in _tabla(x2, HOJA_CERRADOS) if c[ID] == rid]
+        self.assertEqual(len(cerr), 1)
+        self.assertIn("Regularizada con MQ 6667 del 10/10", cerr[0]["Cómo se cerró"])
+        self.assertIn("«máquina retirada, mal cerrada»", cerr[0]["Cómo se cerró"])
+        self.assertIn("«local cerrado»", cerr[0]["Cómo se cerró"])
+        reg = _tabla(x2, HOJA_REGULARIZADAS)[0]
+        self.assertEqual(reg[ID], rid)
+        self.assertEqual(reg["Estado antes de regularizar"], "Sin reintento")
+        self.assertEqual(reg["Factura MQ"], "6667")
+        self.assertEqual(reg["Comentario del rechazo"], "local cerrado")
+        self.assertEqual(reg["Comentario del despacho MQ"], "máquina retirada, mal cerrada")
+
+    def test_mq_anterior_al_rechazo_no_cierra(self):
+        hoy = date(2026, 10, 12)
+        mov = _mov(False, hoy)
+        seg = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov,
+                                   _ped(False), hoy=hoy, mq=_mq("2026-09-01"))
+        self.assertNotIn(REGULARIZADA, set(seg["Estado post-rechazo"]))
+        self.assertEqual(resumen_rechazos(seg)["regularizadas"], 0)
 
     def test_previo_ilegible_se_informa(self):
         _, res = _generar(False, False, date(2026, 10, 5), previo=b"no es xlsx")

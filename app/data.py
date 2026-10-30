@@ -250,6 +250,77 @@ def get_pedidos_fl_todos(client: Client, sociedad_ids=None) -> pd.DataFrame:
     return df
 
 
+def _rut_norm(s: pd.Series) -> pd.Series:
+    """RUT sin puntos ni guion y en mayúsculas, para cruzar fuentes distintas."""
+    return s.astype(str).str.replace(r"[^0-9kK]", "", regex=True).str.upper()
+
+
+def get_regularizaciones_mq(client: Client) -> pd.DataFrame:
+    """
+    Las facturas de «máquinas regularizadas» (producto MQ, desde el 29-oct-2026):
+    cierran los rechazos que el cruce no puede cerrar solo —reingresos que
+    nunca cierran, o rechazos que ya no aplicaban—.
+
+    Se leen de los dos lados, porque el MQ se creó primero en Autoventa y las
+    primeras facturas llegaron a Obuma como ítem libre:
+      · fact_pedidos: líneas MQ de Autoventa ya facturadas (el folio es la factura);
+      · fact_ventas: líneas MQ de Obuma, sin notas de crédito.
+    La misma factura por los dos lados queda una sola vez. Cada una trae el
+    comentario y el estado de su despacho (fact_despachos), que es lo que
+    explica la regularización.
+
+    Devuelve `cliente_rut`, `_rutn`, `documento`, `fecha`, `comentario_mq`,
+    `estado_despacho_mq`. Vacío si no hay ninguna o si la consulta falla.
+    """
+    cols = ["cliente_rut", "_rutn", "documento", "fecha", "comentario_mq",
+            "estado_despacho_mq"]
+    filas = []
+    try:
+        p = (client.table("fact_pedidos")
+             .select("num_documento,fecha,cliente_rut,doc_venta")
+             .ilike("producto_codigo", "MQ%").execute().data) or []
+        filas += [{"cliente_rut": x["cliente_rut"], "documento": x["num_documento"],
+                   "fecha": x["fecha"]}
+                  for x in p if x.get("num_documento")
+                  and str(x.get("doc_venta") or "").strip().lower() != "sin dte"]
+        v = (client.table("fact_ventas")
+             .select("n_dcto,fecha,cliente_rut,tipo_dcto")
+             .ilike("producto_codigo", "MQ%").execute().data) or []
+        filas += [{"cliente_rut": x["cliente_rut"], "documento": x["n_dcto"],
+                   "fecha": x["fecha"]}
+                  for x in v if "CREDITO" not in str(x.get("tipo_dcto") or "").upper()]
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    if not filas:
+        return pd.DataFrame(columns=cols)
+    df = pd.DataFrame(filas)
+    df["documento"] = df["documento"].astype(str).str.strip()
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df["_rutn"] = _rut_norm(df["cliente_rut"])
+    df = (df.sort_values("fecha").drop_duplicates(["_rutn", "documento"])
+          .reset_index(drop=True))
+
+    df["comentario_mq"] = None
+    df["estado_despacho_mq"] = None
+    try:
+        d = (client.table("fact_despachos")
+             .select("documento,cliente_rut,fecha_ruta,estado,comentario_entrega")
+             .in_("documento", sorted(set(df["documento"]))).execute().data) or []
+    except Exception:
+        d = []
+    if d:
+        dd = pd.DataFrame(d)
+        dd["documento"] = dd["documento"].astype(str).str.strip()
+        dd["_rutn"] = _rut_norm(dd["cliente_rut"])
+        dd = (dd.sort_values("fecha_ruta", ascending=False)
+              .drop_duplicates(["_rutn", "documento"]))
+        m = df.merge(dd[["_rutn", "documento", "estado", "comentario_entrega"]],
+                     on=["_rutn", "documento"], how="left")
+        df["comentario_mq"] = m["comentario_entrega"].values
+        df["estado_despacho_mq"] = m["estado"].values
+    return df[cols]
+
+
 def get_pedidos_rango(client: Client, fecha_ini, fecha_fin,
                       sociedad_ids=None) -> pd.DataFrame:
     """
