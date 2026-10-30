@@ -51,7 +51,8 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                    clientes: pd.DataFrame | None = None,
                    hoy: date | None = None, seg_desde: date | None = None,
                    seg_hasta: date | None = None,
-                   ventas_cli: pd.DataFrame | None = None) -> bytes:
+                   ventas_cli: pd.DataFrame | None = None,
+                   mq: pd.DataFrame | None = None) -> bytes:
     """
     `mov` puede traer semanas anteriores al período —se usan para la hoja de
     tendencia— y también posteriores: el seguimiento de rechazos necesita ver lo
@@ -102,7 +103,7 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
     # un rechazo de hace tres semanas sin retomar sigue siendo un pedido perdido,
     # y su reintento cae después del período. Igual que en la página.
     seg = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov, ped,
-                               hoy=hoy)
+                               hoy=hoy, mq=mq)
     if not seg.empty:
         f_r = pd.to_datetime(seg["Fecha rechazo"])
         if seg_desde is not None:
@@ -157,6 +158,9 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
         ("   Anuladas por logística", res_seg["anuladas"],
          "Ruta «Nulas mes en curso»: pedido duplicado, cliente que desiste. "
          "No se persiguen"),
+        ("   Regularizadas (MQ)", res_seg.get("regularizadas", 0),
+         "Cerradas con una factura de producto MQ («máquinas regularizadas») "
+         "del mismo cliente"),
         ("   Sin retomar", res_seg["abiertos"],
          f"Nadie los volvió a ingresar · {res_seg['vencidos']} llevan más de "
          f"{DIAS_PARA_REINTENTAR} días"),

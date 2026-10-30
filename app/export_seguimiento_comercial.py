@@ -38,7 +38,7 @@ from app.kpis_maquinas import (ANULADA, DIAS_PARA_REINTENTAR, LECT_DEJO,
                                LECT_RECIENTE, LECT_SIN_BASE, REINTENTO_OK,
                                REINTENTO_OTRO, REINTENTO_PEDIDO,
                                REINTENTO_RECHAZO, REINTENTO_RUTA,
-                               REINTENTO_SININFO)
+                               REINTENTO_SININFO, REGULARIZADA)
 
 _MOV = {"nueva": "Instalación", "cambio": "Cambio", "retiro": "Retiro"}
 
@@ -47,6 +47,7 @@ HOJA_SIN_RETOMAR = "1 · Rechazos sin retomar"
 HOJA_SIN_CERRAR = "2 · Reingresos sin cerrar"
 HOJA_PEDIDOS = "3 · Pedidos sin gestionar"
 HOJA_CERRADOS = "4 · Casos cerrados"
+HOJA_REGULARIZADAS = "5 · Regularizadas (MQ)"
 HOJA_HISTORIAL = "Historial semanal"
 HOJAS_CASOS = (HOJA_SIN_RETOMAR, HOJA_SIN_CERRAR, HOJA_PEDIDOS)
 
@@ -174,7 +175,8 @@ def casos_abiertos(seg: pd.DataFrame, ped: pd.DataFrame,
         sc = pd.DataFrame()
     else:
         est = s["Estado post-rechazo"]
-        g = s[~s["_abierto"] & ~est.isin([REINTENTO_OK, ANULADA])].copy()
+        g = s[~s["_abierto"]
+              & ~est.isin([REINTENTO_OK, ANULADA, REGULARIZADA])].copy()
         sc = pd.DataFrame({
             ID: [id_rechazo(d, f) for d, f in zip(g["Documento"],
                                                   g["Fecha documento"])],
@@ -249,6 +251,8 @@ def como_se_cerro(id_caso: str, seg: pd.DataFrame, ped: pd.DataFrame) -> str:
         m = seg[[i == id_caso for i in ids]]
         if not m.empty:
             r = m.iloc[0]
+            if r["Estado post-rechazo"] == REGULARIZADA:
+                return texto_regularizacion(r)
             return f"{r['Estado post-rechazo']} ({r['Reintento']})"
         return "Ya no aparece en el seguimiento (fuera de la ventana cargada)"
     if id_caso.startswith("P-") and ped is not None and not ped.empty:
@@ -268,6 +272,51 @@ def como_se_cerro(id_caso: str, seg: pd.DataFrame, ped: pd.DataFrame) -> str:
     return "Cerrado"
 
 
+def _texto(v) -> str:
+    return "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip()
+
+
+def texto_regularizacion(r) -> str:
+    """«Regularizada con MQ 6667 del 29/10 · en el despacho MQ: «…» · en el
+    rechazo: «…»». Los dos comentarios del repartidor: el del despacho MQ
+    explica la regularización; el del rechazo, qué pasó la primera vez."""
+    partes = [f"Regularizada con {r['Reintento']}"]
+    c_mq = _texto(r.get("Comentario del despacho MQ"))
+    c_re = _texto(r.get("Lo que dijo el repartidor"))
+    partes.append(f"en el despacho MQ: «{c_mq}»" if c_mq
+                  else "despacho MQ sin comentario cargado")
+    if c_re:
+        partes.append(f"en el rechazo: «{c_re}»")
+    return " · ".join(partes)
+
+
+def regularizadas(seg: pd.DataFrame) -> pd.DataFrame:
+    """La hoja «5 · Regularizadas (MQ)»: cada rechazo cerrado con una factura
+    MQ, con el estado que tenía y los dos comentarios del repartidor. Se
+    recalcula entera cada vez (no tiene columnas manuales)."""
+    if seg is None or seg.empty:
+        return pd.DataFrame()
+    g = seg[seg["Estado post-rechazo"] == REGULARIZADA]
+    if g.empty:
+        return pd.DataFrame()
+    return pd.DataFrame({
+        ID: [id_rechazo(d, f) for d, f in zip(g["Documento"], g["Fecha documento"])],
+        "Vendedor": g["Vendedor"].values,
+        "Cliente": g["Cliente"].values,
+        "RUT": g["RUT"].values,
+        "Comuna": g["Comuna"].values,
+        "Movimiento": g["Movimiento"].values,
+        "Fecha rechazo": g["Fecha rechazo"].values,
+        "Motivo": g["Motivo"].values,
+        "Comentario del rechazo": g["Lo que dijo el repartidor"].values,
+        "Estado antes de regularizar": g["Estado antes de regularizar"].values,
+        "Factura MQ": g["Factura MQ"].values,
+        "Fecha factura MQ": g["Fecha factura MQ"].values,
+        "Comentario del despacho MQ": g["Comentario del despacho MQ"].values,
+        "Documento rechazado": g["Documento"].values,
+    }).sort_values(["Fecha factura MQ", "Fecha rechazo"], ascending=[False, True])
+
+
 def datos_seguimiento(client, hoy: date | None = None) -> dict:
     """
     Todo lo que necesita el libro, leído de la base. Lo usa el script de los
@@ -281,7 +330,7 @@ def datos_seguimiento(client, hoy: date | None = None) -> dict:
     from datetime import timedelta
 
     from app.data import get_todos_vendedores, get_dim_cliente_full, \
-        get_ventas_clientes
+        get_ventas_clientes, get_regularizaciones_mq
     from app.export_maquinas import RECHAZADA
     from app.kpis_maquinas import (PRIMER_DESPACHO, cargar_todo, desde_ventas,
                                    seguimiento_rechazos, ventas_post_rechazo)
@@ -292,7 +341,7 @@ def datos_seguimiento(client, hoy: date | None = None) -> dict:
     if mov is not None and not mov.empty and "_nc" in mov.columns:
         mov = mov[~mov["_nc"]]
     seg = (seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov,
-                                ped, hoy=hoy)
+                                ped, hoy=hoy, mq=get_regularizaciones_mq(client))
            if mov is not None and not mov.empty else pd.DataFrame())
     vp = None
     if not seg.empty and seg["_abierto"].any():
@@ -452,10 +501,12 @@ def libro_seguimiento(seg: pd.DataFrame, ped: pd.DataFrame,
                   listas[HOJA_PEDIDOS])
     venc = (int((sr["Días desde el rechazo"] > DIAS_PARA_REINTENTAR).sum())
             if not sr.empty else 0)
+    regs = regularizadas(seg)
     resumen = {
         "sin_retomar": len(sr), "sin_retomar_vencidos": venc,
         "sin_cerrar": len(sc), "pedidos_sin_gestionar": len(pg),
         "cerrados_semana": len(nuevos_cerrados),
+        "regularizadas": len(regs),
         "previo_leido": previo_leido,
     }
 
@@ -490,6 +541,13 @@ def libro_seguimiento(seg: pd.DataFrame, ped: pd.DataFrame,
                 "Casos que estaban abiertos en un reporte anterior y ya no lo "
                 "están. Se acumulan: es el historial de lo que se resolvió.",
                 validar=False)
+    _hoja_casos(wb, HOJA_REGULARIZADAS, regs,
+                "Rechazos cerrados con una factura de producto MQ («máquinas "
+                "regularizadas») del mismo cliente, emitida el día del rechazo o "
+                "después. Trae los dos comentarios del repartidor: el del rechazo "
+                "original y el del despacho de la factura MQ, que explica la "
+                "regularización. Se recalcula entera cada vez.",
+                manuales=False, validar=False)
     _hoja_casos(wb, HOJA_HISTORIAL, historial,
                 "Conteo de cada reporte. Si los números no bajan, los casos no "
                 "se están moviendo.", manuales=False, clave="Fecha")
@@ -520,6 +578,8 @@ def _hoja_resumen(wb, listas: dict, res: dict, hoy: date) -> None:
          "pedidos de flete sin documento"),
         ("Cerrados desde el reporte anterior", res["cerrados_semana"],
          "ver «4 · Casos cerrados»"),
+        ("Regularizadas con factura MQ", res.get("regularizadas", 0),
+         "ver «5 · Regularizadas (MQ)»"),
     ]
     for k, (a, b, c) in enumerate(filas, 4):
         ws.cell(row=k, column=1, value=a).font = Font(bold=True)
@@ -558,7 +618,9 @@ def _hoja_resumen(wb, listas: dict, res: dict, hoy: date) -> None:
         "caso cambie de lista (ej.: un rechazo que se reingresó pasa de la 1 a la 2).",
         "4. El resto de las columnas se recalcula desde el sistema: no editarlas.",
         "5. Un caso desaparece de las listas cuando el sistema lo ve resuelto "
-        "(entregado, DTE emitido, anulado) y pasa a «4 · Casos cerrados».",
+        "(entregado, DTE emitido, anulado o regularizado con una factura MQ) y "
+        "pasa a «4 · Casos cerrados». Las regularizadas quedan además en «5 · "
+        "Regularizadas (MQ)».",
         "6. Marcar «Descartado» NO lo saca de la lista: para que salga, el "
         "movimiento tiene que resolverse en Autoventa/Obuma o anularse.",
     ]

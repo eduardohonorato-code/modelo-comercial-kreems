@@ -50,7 +50,7 @@ from app.data import (get_objetivos_maquinas,  # noqa: E402
 from app.export_maquinas import (ENTREGADA, RECHAZADA, EN_RUTA, SIN_DESPACHO,
                                  SIN_INFO)
 from app.kpis_maquinas import (ANULADA, DIAS_PARA_REINTENTAR, PRIMER_DESPACHO,
-                               REINTENTO_OK,
+                               REINTENTO_OK, REGULARIZADA,
                                LECT_IGUAL, LECT_MENOS, LECT_NO, LECT_NUEVO,
                                LECT_RECIENTE, LECT_SIN_BASE, LECT_DEJO, cargar_todo, conteo_semana,
                                desde_ventas, mezcla_movimientos, mezcla_texto,
@@ -197,6 +197,13 @@ def _cargar(_client, ini, fin):
     «Recargar» la limpia cuando se acaba de correr el ETL.
     """
     return cargar_todo(_client, ini, fin)
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def _regularizaciones_mq(_client):
+    """Las facturas MQ («máquinas regularizadas») con su despacho, en caché."""
+    from app.data import get_regularizaciones_mq
+    return get_regularizaciones_mq(_client)
 
 
 @st.cache_data(show_spinner=False, ttl=300)
@@ -347,7 +354,7 @@ def render(client, anio: int, mes: int):
     #   · las últimas 8 semanas (la advertencia y el filtro por defecto)
     #   · lo que se elija en el filtro de fechas de la sección
     seg_todo = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA],
-                                    mov, ped)
+                                    mov, ped, mq=_regularizaciones_mq(client))
     # Por documento Y fecha: el número de documento se reutiliza entre meses, y
     # con la historia completa cargada un 5424 de marzo calzaría con uno de hoy.
     llave_w = set(zip(rech["_doc"], rech["fecha"].dt.date))
@@ -677,8 +684,13 @@ _VISTAS_SEG = {
     "sin_cerrar": "🟡 Reingresados sin cerrar",
     "sin_retomar": "🔴 Sin retomar",
     "entregados": "🟢 Ya entregados",
+    "regularizadas": "⚪ Regularizadas (MQ)",
     "anuladas": "⚪ Anuladas por logística",
 }
+_COLS_REGULARIZADAS = ["Fecha rechazo", "Reintento", "Estado antes de regularizar",
+                       "Comentario del despacho MQ", "Lo que dijo el repartidor",
+                       "Vendedor", "Cliente", "Comuna", "Movimiento", "Motivo",
+                       "Documento"]
 _COLS_SIN_CERRAR = ["Días desde el rechazo", "Fecha rechazo",
                     "Estado post-rechazo", "Reintento", "Vendedor", "Cliente",
                     "Comuna", "Movimiento", "Motivo", "Documento"]
@@ -715,12 +727,15 @@ def _tablas_seguimiento(client, seg: pd.DataFrame, res: dict, desde,
     """
     est = seg["Estado post-rechazo"]
     grupos = {
-        "sin_cerrar": seg[~seg["_abierto"] & ~est.isin([REINTENTO_OK, ANULADA])],
+        "sin_cerrar": seg[~seg["_abierto"]
+                          & ~est.isin([REINTENTO_OK, ANULADA, REGULARIZADA])],
         "sin_retomar": seg[seg["_abierto"]],
         "entregados": seg[est == REINTENTO_OK],
+        "regularizadas": seg[est == REGULARIZADA],
         "anuladas": seg[est == ANULADA],
     }
-    opciones = [k for k in _VISTAS_SEG if k != "anuladas" or len(grupos[k])]
+    opciones = [k for k in _VISTAS_SEG
+                if k not in ("anuladas", "regularizadas") or len(grupos[k])]
 
     # Las ventas se piden solo para los sin retomar: es donde falta saber por
     # qué nadie los reingresó. Si la consulta falla, la tabla sale igual.
@@ -802,6 +817,17 @@ def _tablas_seguimiento(client, seg: pd.DataFrame, res: dict, desde,
                          hide_index=True)
             st.caption("Se volvieron a ingresar y el segundo intento llegó. "
                        "«Reintento» dice con qué documento.")
+
+    elif vista == "regularizadas":
+        v = g[_COLS_REGULARIZADAS].rename(columns={
+            "Reintento": "Factura MQ",
+            "Lo que dijo el repartidor": "Comentario del rechazo"})
+        st.dataframe(v, use_container_width=True, hide_index=True)
+        st.caption("Se cerraron con una factura de producto MQ («máquinas "
+                   "regularizadas») del mismo cliente, emitida el día del rechazo "
+                   "o después. Cada fila trae los dos comentarios del repartidor: "
+                   "el del despacho MQ, que explica la regularización, y el del "
+                   "rechazo original.")
 
     else:
         st.dataframe(g[_COLS_ANULADAS], use_container_width=True,
@@ -1026,7 +1052,8 @@ def _seccion_plegada(client, mov, ped, desp, f_ini, f_fin, metas, w=None,
                     mov, ped, f_ini, f_fin, metas, "Ambas", cli_dim,
                     seg_desde=cs.get("desde", datetime.date.today()
                                      - datetime.timedelta(weeks=_SEMANAS_TENDENCIA)),
-                    seg_hasta=cs.get("hasta"), ventas_cli=cs.get("ventas"))
+                    seg_hasta=cs.get("hasta"), ventas_cli=cs.get("ventas"),
+                    mq=_regularizaciones_mq(client))
             st.session_state["_cm_libro"] = (firma, data)
         g = st.session_state.get("_cm_libro")
         if g and g[0] == firma:
