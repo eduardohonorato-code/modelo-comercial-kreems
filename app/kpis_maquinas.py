@@ -161,6 +161,11 @@ DIAS_PARA_REINTENTAR = 7
 
 REINTENTO_OK = "Reingresado y entregado"
 REINTENTO_RUTA = "Reingresado, va en camino"
+# El reintento tiene factura pero no aparece en ningún despacho (en un mes con
+# despachos cargados): no está en una ruta. Ej.: el retiro 3410, facturado el
+# 11/06, llevaba cinco meses «en camino». Lo mueve logística: programarlo,
+# anularlo o regularizarlo. Igual que el SaaS (migración 20261102205748).
+REINTENTO_SIN_RUTA = "Reingresado, facturado sin ruta"
 REINTENTO_SININFO = "Reingresado, sin información"
 REINTENTO_RECHAZO = "Se volvió a rechazar"
 REINTENTO_PEDIDO = "Pedido reingresado, esperando DTE"
@@ -201,7 +206,7 @@ _COLS_SEG = ["Fecha rechazo", "Fecha documento", "Documento", "Cliente", "RUT",
 _COLS_CADENA = ["_base", "_sig", "_tipo"]
 
 _POST = {ENTREGADA: REINTENTO_OK, RECHAZADA: REINTENTO_RECHAZO,
-         EN_RUTA: REINTENTO_RUTA, SIN_DESPACHO: REINTENTO_RUTA}
+         EN_RUTA: REINTENTO_RUTA, SIN_DESPACHO: REINTENTO_SIN_RUTA}
 
 
 def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
@@ -284,6 +289,9 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
             detalle = f"doc {n['_doc']} del {n['fecha']:%d/%m}"
             if pd.notna(n["Fecha ruta"]):
                 detalle += f", ruta {n['Fecha ruta']:%d/%m}"
+            if estado == REINTENTO_SIN_RUTA:
+                detalle += (f", sin ruta hace "
+                            f"{max((hoy_ts - n['fecha']).days, 0)} días")
         else:
             pv = (cola[(cola["cliente_rut"] == r["cliente_rut"])
                        & (cola["_mov"] == r["tipo_mov"])

@@ -38,6 +38,7 @@ from app.kpis_maquinas import (ANULADA, DIAS_PARA_REINTENTAR, LECT_DEJO,
                                LECT_RECIENTE, LECT_SIN_BASE, REINTENTO_OK,
                                REINTENTO_OTRO, REINTENTO_PEDIDO,
                                REINTENTO_RECHAZO, REINTENTO_RUTA,
+                               REINTENTO_SIN_RUTA,
                                REINTENTO_SININFO, REGULARIZADA)
 
 _MOV = {"nueva": "Instalación", "cambio": "Cambio", "retiro": "Retiro"}
@@ -77,6 +78,7 @@ _FMT_CLP = '"$"#,##0;[Red]-"$"#,##0'
 # y despachar son de logística» (decisión de gerencia, sep-2026).
 _RESPONSABLE = {
     REINTENTO_RUTA: "Logística (confirmar entrega)",
+    REINTENTO_SIN_RUTA: "Logística (programar ruta)",
     REINTENTO_SININFO: "Logística (confirmar entrega)",
     REINTENTO_PEDIDO: "Logística (emitir DTE)",
     REINTENTO_RECHAZO: "Vendedor",
@@ -84,6 +86,9 @@ _RESPONSABLE = {
 }
 _ACCION = {
     REINTENTO_RUTA: "Confirmar con logística que se entregó.",
+    REINTENTO_SIN_RUTA: "Está facturado y no aparece en ninguna ruta: "
+                        "programarlo, anularlo con nota de crédito o "
+                        "regularizarlo con MQ.",
     REINTENTO_SININFO: "Confirmar con logística que se entregó.",
     REINTENTO_PEDIDO: "Logística debe emitir el DTE del pedido reingresado.",
     REINTENTO_RECHAZO: "Segundo rechazo: hablar con el cliente antes de "
