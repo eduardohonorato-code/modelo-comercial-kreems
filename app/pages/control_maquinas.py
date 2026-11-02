@@ -771,8 +771,11 @@ def _tablas_seguimiento(client, seg: pd.DataFrame, res: dict, desde,
             st.dataframe(g[_COLS_SIN_CERRAR], use_container_width=True,
                          hide_index=True)
             st.caption(
-                "Se volvieron a ingresar y todavía no cierran. «Va en camino» y "
-                "«esperando DTE» son de logística; «otro movimiento del cliente» "
+                "Se volvieron a ingresar y todavía no cierran. «Facturado sin "
+                "ruta» tiene factura pero no aparece en ningún despacho: "
+                "logística lo programa, lo anula o lo regulariza (si lleva "
+                "semanas, no va a cerrar solo). «Va en camino» está en una ruta "
+                "y «esperando DTE» también es de logística; «otro movimiento del cliente» "
                 "es un rechazo que se resolvió con un movimiento de otro tipo (un "
                 "retiro que terminó en cambio, por ejemplo). Si un reingreso se "
                 "vuelve a rechazar, la máquina pasa a su último rechazo "
