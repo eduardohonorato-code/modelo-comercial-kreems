@@ -153,8 +153,8 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
         ("   Ya entregados", res_seg["ok"],
          "Se volvieron a ingresar y el segundo intento llegó"),
         ("   Reingresados sin cerrar", res_seg["en_curso"],
-         "Van en camino, esperan documento, o el segundo intento también se "
-         "rechazó"),
+         "Van en camino o esperan documento. Si el segundo intento también se "
+         "rechazó, la máquina cuenta una vez, en su último rechazo"),
         ("   Anuladas por logística", res_seg["anuladas"],
          "Ruta «Nulas mes en curso»: pedido duplicado, cliente que desiste. "
          "No se persiguen"),
@@ -279,7 +279,7 @@ def libro_gerencia(mov: pd.DataFrame, ped: pd.DataFrame, f_ini, f_fin,
                   nota="Sin rechazos en la ventana cargada.")
     else:
         _escribir(wb, "Rechazos · seguimiento",
-                  seg.drop(columns=["_abierto"]),
+                  seg.drop(columns=["_abierto", "_previos"]),
                   {"Fecha rechazo": _FMT_FECHA, "Fecha documento": _FMT_FECHA,
                    "Días desde el rechazo": _FMT_NUM},
                   nota=("QUÉ PASÓ DESPUÉS DE CADA RECHAZO. Ordenada con los que "

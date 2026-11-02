@@ -180,19 +180,25 @@ _RUTA_ANULACION = "nula"
 REGULARIZADA = "Regularizada (MQ)"
 
 # Los que siguen pidiendo que alguien haga algo. Solo «Sin reintento»: el
-# entregado está cerrado, el pedido reingresado es de logística (falta el DTE), y
-# «Se volvió a rechazar» NO va aquí aunque suene urgente, porque ese segundo
-# documento rechazado tiene su propia fila en esta misma tabla y aparecería como
-# «Sin reintento» si nadie lo retomó. Contar los dos pondría el mismo caso dos
-# veces en la lista que se le manda al vendedor.
+# entregado está cerrado y el pedido reingresado es de logística (falta el DTE).
+# «Se volvió a rechazar» tampoco: ese segundo documento rechazado es la misma
+# máquina y queda como una sola fila, la de su último rechazo (ver
+# `_una_por_maquina`).
 ABIERTOS = (SIN_REINTENTO,)
+
+# Tope de la cadena de reintentos rechazados, por si dos documentos del mismo
+# día se emparejan entre sí.
+_TOPE_CADENA = 20
 
 _COLS_SEG = ["Fecha rechazo", "Fecha documento", "Documento", "Cliente", "RUT",
              "Comuna", "Vendedor", "Movimiento", "Motivo",
              "Lo que dijo el repartidor", "Transportista",
              "Estado post-rechazo", "Reintento", "Días desde el rechazo",
              "Estado antes de regularizar", "Factura MQ", "Fecha factura MQ",
-             "Comentario del despacho MQ", "_abierto"]
+             "Comentario del despacho MQ", "Rechazos anteriores", "_abierto",
+             "_previos"]
+# Solo para armar la cadena; no salen de `seguimiento_rechazos`.
+_COLS_CADENA = ["_base", "_sig", "_tipo"]
 
 _POST = {ENTREGADA: REINTENTO_OK, RECHAZADA: REINTENTO_RECHAZO,
          EN_RUTA: REINTENTO_RUTA, SIN_DESPACHO: REINTENTO_RUTA}
@@ -239,10 +245,17 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
     (`data.get_regularizaciones_mq`): si el cliente tiene una desde la fecha del
     rechazo, el caso queda «Regularizada (MQ)» —ni abierto ni en curso— con el
     estado que tenía y la factura que lo cerró.
+
+    **Una fila por máquina.** Si el reintento también se rechazó, es la misma
+    máquina: se cuenta una vez, en su último rechazo, y los anteriores van en
+    «Rechazos anteriores» (y en `_previos`, como `(documento, fecha documento)`,
+    para no perder el seguimiento comercial que tenían). Igual que
+    get_control_maquinas en el SaaS (migración 20261102202006).
     """
     hoy_ts = pd.Timestamp(hoy or date.today())
     if rech is None or rech.empty:
         return pd.DataFrame(columns=_COLS_SEG)
+    sig = None
 
     otros = mov if mov is not None and not mov.empty else pd.DataFrame()
     cola = (ped[ped["_sin_dte"] & ~ped["_fantasma"]]
@@ -267,6 +280,7 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
         elif not mismo.empty:
             n = mismo.sort_values("fecha").iloc[0]
             estado = _POST.get(n["Estado entrega"], REINTENTO_SININFO)
+            sig = n["_doc"]
             detalle = f"doc {n['_doc']} del {n['fecha']:%d/%m}"
             if pd.notna(n["Fecha ruta"]):
                 detalle += f", ruta {n['Fecha ruta']:%d/%m}"
@@ -288,6 +302,7 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
                            f"({n['Estado entrega']})")
 
         dias = int((hoy_ts - ref).days)
+        base = estado
         if estado == SIN_REINTENTO:
             detalle = f"{dias} días sin volver a ingresarlo"
         previo, f_mq = None, None
@@ -325,21 +340,76 @@ def seguimiento_rechazos(rech: pd.DataFrame, mov: pd.DataFrame,
                                  else None),
             "Comentario del despacho MQ": (f_mq["comentario_mq"]
                                            if f_mq is not None else None),
+            "Rechazos anteriores": None,
             "_abierto": estado in ABIERTOS,
+            "_previos": [],
+            "_base": base,
+            "_sig": sig if base == REINTENTO_RECHAZO else None,
+            "_tipo": r["tipo_mov"],
         })
-    return (pd.DataFrame(filas, columns=_COLS_SEG)
+        sig = None
+    seg = _una_por_maquina(pd.DataFrame(filas, columns=_COLS_SEG + _COLS_CADENA))
+    return (seg.drop(columns=_COLS_CADENA)
             .sort_values(["_abierto", "Días desde el rechazo"],
                          ascending=[False, False])
             .reset_index(drop=True))
 
 
+def _texto_previos(previos: list) -> str | None:
+    """«16/06 (doc 3522) y 22/08 (doc 4705)», o None si no hay."""
+    if not previos:
+        return None
+    orden = sorted(previos, key=lambda x: (str(x[0] or ""), str(x[1])))
+    partes = [f"{pd.Timestamp(f):%d/%m} (doc {d})" if pd.notna(f) else f"doc {d}"
+              for f, d, _ in orden]
+    return partes[0] if len(partes) == 1 else f"{', '.join(partes[:-1])} y {partes[-1]}"
+
+
+def _una_por_maquina(seg: pd.DataFrame) -> pd.DataFrame:
+    """
+    Cada rechazo «Se volvió a rechazar» sigue a su reintento (que también es un
+    rechazo, con su propia fila) hasta el que ya no lo es: ese es el último de
+    la máquina. Los anteriores salen de la tabla y quedan como su historia. Si
+    la cadena no llega a un rechazo que no sea «Se volvió a rechazar» (el
+    reintento no está en la tabla), el rechazo se queda como está.
+    """
+    if seg.empty:
+        return seg
+    pos = {}
+    for i, r in seg.iterrows():
+        pos.setdefault((r["RUT"], r["_tipo"], str(r["Documento"])), i)
+    ocultos = set()
+    previos = {}
+    for i, r in seg.iterrows():
+        if r["_base"] != REINTENTO_RECHAZO:
+            continue
+        j, pasos = i, 0
+        while (seg.at[j, "_base"] == REINTENTO_RECHAZO and pasos < _TOPE_CADENA):
+            k = pos.get((r["RUT"], r["_tipo"], str(seg.at[j, "_sig"])))
+            if k is None or k == j:
+                break
+            j, pasos = k, pasos + 1
+        if j == i or seg.at[j, "_base"] == REINTENTO_RECHAZO:
+            continue
+        ocultos.add(i)
+        previos.setdefault(j, []).append(
+            (r["Fecha rechazo"], r["Documento"], r["Fecha documento"]))
+    seg = seg.copy()
+    seg["_previos"] = [[(d, fd) for _, d, fd in previos.get(i, [])]
+                       for i in seg.index]
+    seg["Rechazos anteriores"] = [_texto_previos(previos.get(i))
+                                  for i in seg.index]
+    return seg.drop(index=list(ocultos))
+
+
 def resumen_rechazos(seg: pd.DataFrame) -> dict:
     """
-    Los números del seguimiento.
+    Los números del seguimiento, una máquina por fila (ver `_una_por_maquina`).
     `ok + en_curso + abiertos + anuladas + regularizadas = n`, siempre: en_curso
-    es todo lo que se reingresó y todavía no cerró, incluido lo que se volvió a
-    rechazar; anuladas son las que logística dio de baja; regularizadas, las
-    cerradas con una factura MQ.
+    es todo lo que se reingresó y todavía no cerró (va en camino, espera
+    documento u otro movimiento; lo que se volvió a rechazar cuenta en su
+    último rechazo); anuladas son las que logística dio de baja; regularizadas,
+    las cerradas con una factura MQ.
     """
     if seg is None or seg.empty:
         return dict(n=0, ok=0, en_curso=0, abiertos=0, anuladas=0,
