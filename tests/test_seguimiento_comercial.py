@@ -26,7 +26,7 @@ RUT_A = "11.111.111-1"   # retiro rechazado, después reingresado
 RUT_B = "22.222.222-2"   # pedido de instalación sin DTE
 
 
-def _mov(con_reintento: bool, hoy):
+def _mov(con_reintento: bool, hoy, estado_reintento="Pendiente"):
     filas = [("5002", "2026-09-23", RUT_A, "retiro")]
     if con_reintento:
         filas.append(("5100", "2026-10-08", RUT_A, "retiro"))
@@ -38,7 +38,7 @@ def _mov(con_reintento: bool, hoy):
              fecha_ruta="2026-09-24", transportista="Máquinas Kreems 1",
              comentario_entrega="local cerrado", sociedad_id=GN, vendedor_id=7,
              devolucion=False, peso=0, motivo_rechazo=None),
-        dict(documento="5100", cliente_rut=RUT_A, estado="Pendiente",
+        dict(documento="5100", cliente_rut=RUT_A, estado=estado_reintento,
              fecha_ruta="2026-10-09", transportista="Máquinas Kreems 1",
              comentario_entrega="", sociedad_id=GN, vendedor_id=7,
              devolucion=False, peso=0, motivo_rechazo=None),
@@ -64,8 +64,9 @@ def _mq(fecha="2026-10-10"):
         "estado_despacho_mq": "Entregada"}])
 
 
-def _generar(con_reintento, facturado, hoy, previo=None, mq=None):
-    mov = _mov(con_reintento, hoy)
+def _generar(con_reintento, facturado, hoy, previo=None, mq=None,
+             estado_reintento="Pendiente"):
+    mov = _mov(con_reintento, hoy, estado_reintento)
     ped = _ped(facturado)
     seg = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov,
                                ped, hoy=hoy, mq=mq)
@@ -167,6 +168,39 @@ class TestSeguimientoComercial(unittest.TestCase):
                                    _ped(False), hoy=hoy, mq=_mq("2026-09-01"))
         self.assertNotIn(REGULARIZADA, set(seg["Estado post-rechazo"]))
         self.assertEqual(resumen_rechazos(seg)["regularizadas"], 0)
+
+    def test_reingreso_rechazado_es_la_misma_maquina(self):
+        """El reintento 5100 también se rechazó: una sola fila (la del último
+        rechazo), con el anterior como historia, y lo que comercial escribió en
+        el caso de 5002 pasa al de 5100 en vez de quedar como cerrado."""
+        hoy = date(2026, 10, 12)
+        mov = _mov(True, hoy, "Rechazada")
+        seg = seguimiento_rechazos(mov[mov["Estado entrega"] == RECHAZADA], mov,
+                                   _ped(False), hoy=hoy)
+        self.assertEqual(list(seg["Documento"]), ["5100"])
+        self.assertEqual(seg.iloc[0]["Estado post-rechazo"], "Sin reintento")
+        self.assertEqual(seg.iloc[0]["Rechazos anteriores"], "24/09 (doc 5002)")
+        res = resumen_rechazos(seg)
+        self.assertEqual((res["n"], res["abiertos"], res["en_curso"]), (1, 1, 0))
+
+        rid_viejo = id_rechazo("5002", "2026-09-23")
+        rid_nuevo = id_rechazo("5100", "2026-10-08")
+        x1, _ = _generar(False, False, date(2026, 10, 5))
+        x1 = _escribir_comentario(x1, HOJA_SIN_RETOMAR, rid_viejo,
+                                  "Comentario / situación del cliente",
+                                  "Ana lo reingresa el jueves")
+        x2, res = _generar(True, False, hoy, previo=x1,
+                           estado_reintento="Rechazada")
+        self.assertEqual((res["sin_retomar"], res["sin_cerrar"]), (1, 0))
+        fila = _tabla(x2, HOJA_SIN_RETOMAR)[0]
+        self.assertEqual(fila[ID], rid_nuevo)
+        self.assertEqual(fila["Rechazos anteriores"], "24/09 (doc 5002)")
+        self.assertEqual(fila["Comentario / situación del cliente"],
+                         "Ana lo reingresa el jueves")
+        self.assertEqual(fila["Semanas en el reporte"], 1)
+        ws = load_workbook(io.BytesIO(x2))[HOJA_CERRADOS]
+        celdas = {v for f in ws.iter_rows(values_only=True) for v in f}
+        self.assertNotIn(rid_viejo, celdas)
 
     def test_previo_ilegible_se_informa(self):
         _, res = _generar(False, False, date(2026, 10, 5), previo=b"no es xlsx")

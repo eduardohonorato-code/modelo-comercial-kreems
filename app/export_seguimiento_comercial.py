@@ -157,6 +157,7 @@ def casos_abiertos(seg: pd.DataFrame, ped: pd.DataFrame,
             "Comuna": g["Comuna"].values,
             "Movimiento": g["Movimiento"].values,
             "Fecha rechazo": g["Fecha rechazo"].values,
+            "Rechazos anteriores": g["Rechazos anteriores"].values,
             "Días desde el rechazo": g["Días desde el rechazo"].values,
             "Motivo": g["Motivo"].values,
             "Lo que dijo el repartidor": g["Lo que dijo el repartidor"].values,
@@ -186,6 +187,7 @@ def casos_abiertos(seg: pd.DataFrame, ped: pd.DataFrame,
             "Comuna": g["Comuna"].values,
             "Movimiento": g["Movimiento"].values,
             "Fecha rechazo": g["Fecha rechazo"].values,
+            "Rechazos anteriores": g["Rechazos anteriores"].values,
             "Días desde el rechazo": g["Días desde el rechazo"].values,
             "Motivo": g["Motivo"].values,
             "Estado post-rechazo": g["Estado post-rechazo"].values,
@@ -243,9 +245,28 @@ def _nombres(clientes: pd.DataFrame | None, col: str = "razon_social") -> dict:
     return dict(zip(c["rut"], c[col].astype(str).str.strip()))
 
 
+def ids_anteriores(seg: pd.DataFrame | None) -> dict:
+    """
+    ID de cada rechazo anterior de una máquina → ID de su último rechazo.
+    Desde que la máquina se cuenta una vez (`kpis_maquinas._una_por_maquina`),
+    el rechazo original ya no tiene fila propia: su seguimiento comercial pasa
+    al caso del último rechazo, en vez de quedar como cerrado.
+    """
+    if seg is None or seg.empty or "_previos" not in seg.columns:
+        return {}
+    alias = {}
+    for d, f, previos in zip(seg["Documento"], seg["Fecha documento"],
+                             seg["_previos"]):
+        for dp, fp in previos or []:
+            alias[id_rechazo(dp, fp)] = id_rechazo(d, f)
+    return alias
+
+
 def como_se_cerro(id_caso: str, seg: pd.DataFrame, ped: pd.DataFrame) -> str:
     """Por qué un caso que estaba abierto la semana pasada ya no lo está."""
     if id_caso.startswith("R-") and seg is not None and not seg.empty:
+        # Un rechazo anterior se cerró como se cerró su máquina.
+        id_caso = ids_anteriores(seg).get(id_caso, id_caso)
         ids = [id_rechazo(d, f) for d, f in zip(seg["Documento"],
                                                seg["Fecha documento"])]
         m = seg[[i == id_caso for i in ids]]
@@ -459,6 +480,26 @@ def libro_seguimiento(seg: pd.DataFrame, ped: pd.DataFrame,
                                           or prev["cerrados"])
     listas = casos_abiertos(seg, ped, ventas_post, vendedores, clientes, hoy)
 
+    # Un rechazo anterior de la misma máquina le pasa al caso de su último
+    # rechazo lo que comercial había escrito (si ese caso no tiene lo suyo) y
+    # desde cuándo está en el reporte.
+    alias = ids_anteriores(seg)
+    heredado = {}
+    for viejo, nuevo in alias.items():
+        heredado.setdefault(nuevo, []).append(viejo)
+
+    def _manual(i):
+        for x in [i, *heredado.get(i, [])]:
+            m = prev["manual"].get(x)
+            if m and any(_texto(v) for v in m.values()):
+                return m
+        return {}
+
+    def _desde(i):
+        fechas = [prev["desde"].get(x) for x in [i, *heredado.get(i, [])]]
+        fechas = [f for f in fechas if f]
+        return min(fechas) if fechas else None
+
     # Antigüedad en el reporte + columnas manuales rescatadas por ID
     abiertos_hoy = set()
     for hoja, df in listas.items():
@@ -466,17 +507,19 @@ def libro_seguimiento(seg: pd.DataFrame, ped: pd.DataFrame,
             continue
         ids = df[ID].astype(str)
         abiertos_hoy |= set(ids)
-        desde = [prev["desde"].get(i) or hoy for i in ids]
+        desde = [_desde(i) or hoy for i in ids]
         df[DESDE] = desde
         df[SEMANAS] = [(hoy - d).days // 7 for d in desde]
         for c in COLS_MANUALES:
-            df[c] = [prev["manual"].get(i, {}).get(c) for i in ids]
+            df[c] = [_manual(i).get(c) for i in ids]
         df[COL_ESTADO] = df[COL_ESTADO].fillna("Pendiente")
 
-    # Lo que estaba abierto y ya no está → cerrado esta semana
+    # Lo que estaba abierto y ya no está → cerrado esta semana. Un rechazo
+    # anterior cuya máquina sigue abierta en su último rechazo no se cerró:
+    # sigue en ese caso.
     nuevos_cerrados = []
     for i, fila in prev["abiertos"].items():
-        if i in abiertos_hoy:
+        if i in abiertos_hoy or alias.get(i) in abiertos_hoy:
             continue
         nuevos_cerrados.append({
             ID: i, "Tipo de caso": fila.get("Tipo de caso"),
@@ -530,7 +573,10 @@ def libro_seguimiento(seg: pd.DataFrame, ped: pd.DataFrame,
                           "a ingresar. El vendedor debe reingresar el pedido o "
                           "informar por qué no (descartarlo con el motivo).",
         HOJA_SIN_CERRAR: "Rechazos que SÍ se volvieron a ingresar pero todavía "
-                         "no terminan. «Responsable» dice quién tiene la pelota.",
+                         "no terminan. «Responsable» dice quién tiene la pelota. "
+                         "Si el reingreso se volvió a rechazar, la máquina pasa "
+                         "a su último rechazo (normalmente en la hoja 1), con "
+                         "los anteriores en «Rechazos anteriores».",
         HOJA_PEDIDOS: "Pedidos de flete de máquina que el vendedor ya ingresó "
                       "en Autoventa y que todavía no tienen documento (DTE). "
                       "Todavía no son gestiones.",

@@ -652,8 +652,9 @@ def _seguimiento(client, seg_todo: pd.DataFrame, desde_def) -> dict:
                 help="Se volvieron a ingresar y el segundo intento llegó.")
     k[2].metric("Reingresados sin cerrar", res["en_curso"],
                 help="Volvieron a ingresarse y todavía no hay resultado: van en "
-                     "camino, esperan documento, o el segundo intento también "
-                     "se rechazó (ese segundo documento tiene su propia fila).")
+                     "camino o esperan documento. Si el segundo intento también "
+                     "se rechazó, la máquina cuenta una vez, en su último "
+                     "rechazo.")
     k[3].metric("Sin retomar", res["abiertos"],
                 f"{res['vencidos']} sobre {DIAS_PARA_REINTENTAR} días"
                 if res["vencidos"] else None, delta_color="inverse",
@@ -687,19 +688,22 @@ _VISTAS_SEG = {
     "regularizadas": "⚪ Regularizadas (MQ)",
     "anuladas": "⚪ Anuladas por logística",
 }
-_COLS_REGULARIZADAS = ["Fecha rechazo", "Reintento", "Estado antes de regularizar",
+_COLS_REGULARIZADAS = ["Fecha rechazo", "Rechazos anteriores", "Reintento",
+                       "Estado antes de regularizar",
                        "Comentario del despacho MQ", "Lo que dijo el repartidor",
                        "Vendedor", "Cliente", "Comuna", "Movimiento", "Motivo",
                        "Documento"]
 _COLS_SIN_CERRAR = ["Días desde el rechazo", "Fecha rechazo",
-                    "Estado post-rechazo", "Reintento", "Vendedor", "Cliente",
+                    "Rechazos anteriores", "Estado post-rechazo", "Reintento", "Vendedor", "Cliente",
                     "Comuna", "Movimiento", "Motivo", "Documento"]
-_COLS_ENTREGADOS = ["Fecha rechazo", "Reintento", "Días desde el rechazo",
+_COLS_ENTREGADOS = ["Fecha rechazo", "Rechazos anteriores", "Reintento",
+                    "Días desde el rechazo",
                     "Vendedor", "Cliente", "Comuna", "Movimiento", "Motivo",
                     "Documento"]
 _COLS_ANULADAS = ["Fecha rechazo", "Reintento", "Vendedor", "Cliente", "Comuna",
                   "Movimiento", "Documento"]
-_COLS_SIN_RETOMAR = ["Días desde el rechazo", "Fecha rechazo", "Vendedor",
+_COLS_SIN_RETOMAR = ["Días desde el rechazo", "Fecha rechazo",
+                     "Rechazos anteriores", "Vendedor",
                      "Cliente", "Comuna", "Movimiento", "Motivo",
                      "Lectura de la venta", "Última compra",
                      "Compras después del rechazo", "Promedio mensual antes",
@@ -768,11 +772,12 @@ def _tablas_seguimiento(client, seg: pd.DataFrame, res: dict, desde,
                          hide_index=True)
             st.caption(
                 "Se volvieron a ingresar y todavía no cierran. «Va en camino» y "
-                "«esperando DTE» son de logística; «se volvió a rechazar» tiene "
-                "su segundo documento como fila propia en «Sin retomar» si nadie "
-                "lo retomó; «otro movimiento del cliente» es un rechazo que se "
-                "resolvió con un movimiento de otro tipo (un retiro que terminó "
-                "en cambio, por ejemplo).")
+                "«esperando DTE» son de logística; «otro movimiento del cliente» "
+                "es un rechazo que se resolvió con un movimiento de otro tipo (un "
+                "retiro que terminó en cambio, por ejemplo). Si un reingreso se "
+                "vuelve a rechazar, la máquina pasa a su último rechazo "
+                "(normalmente en «Sin retomar») y este queda en «Rechazos "
+                "anteriores».")
 
     elif vista == "sin_retomar":
         if g.empty:
@@ -838,7 +843,7 @@ def _tablas_seguimiento(client, seg: pd.DataFrame, res: dict, desde,
     completo = seg.join(vp) if not vp.empty else seg
     st.download_button(
         "⬇️ Descargar el seguimiento en CSV",
-        completo.drop(columns=["_abierto"]).to_csv(index=False)
+        completo.drop(columns=["_abierto", "_previos"]).to_csv(index=False)
         .encode("utf-8-sig"),
         f"rechazos_seguimiento_{datetime.date.today():%Y%m%d}.csv",
         "text/csv", key="dl_seg")
